@@ -89,7 +89,7 @@ func (s *State) Children(name string) []*Branch {
 func (s *State) Descendants(name string) []string {
 	index := s.ChildIndex()
 	var result []string
-	visited := map[string]bool{}
+	visited := map[string]bool{name: true}
 	var walk func(parent string)
 	walk = func(parent string) {
 		for _, child := range index[parent] {

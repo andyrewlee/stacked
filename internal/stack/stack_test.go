@@ -76,6 +76,16 @@ func TestDescendantsTopological(t *testing.T) {
 	}
 }
 
+func TestDescendantsDoesNotReturnRootInCycle(t *testing.T) {
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	s.Track("a", "b", "sha-b")
+	s.Track("b", "a", "sha-a")
+
+	if got := s.Descendants("a"); !reflect.DeepEqual(got, []string{"b"}) {
+		t.Errorf("Descendants(a) in cycle = %v, want [b]", got)
+	}
+}
+
 func TestAncestors(t *testing.T) {
 	s := newTestState()
 
