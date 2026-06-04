@@ -1,0 +1,156 @@
+package stack
+
+import (
+	"reflect"
+	"testing"
+)
+
+// newTestState builds an in-memory multi-level stack (no git involved):
+//
+//	main (trunk)
+//	└── a
+//	    ├── b
+//	    │   └── d
+//	    └── c
+func newTestState() *State {
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	s.Track("a", "main", "sha-main")
+	s.Track("b", "a", "sha-a")
+	s.Track("c", "a", "sha-a")
+	s.Track("d", "b", "sha-b")
+	return s
+}
+
+func branchNames(branches []*Branch) []string {
+	names := make([]string, 0, len(branches))
+	for _, b := range branches {
+		names = append(names, b.Name)
+	}
+	return names
+}
+
+func TestChildren(t *testing.T) {
+	s := newTestState()
+
+	if got := branchNames(s.Children("main")); !reflect.DeepEqual(got, []string{"a"}) {
+		t.Errorf("Children(main) = %v, want [a]", got)
+	}
+	// b and c must come back sorted by name.
+	if got := branchNames(s.Children("a")); !reflect.DeepEqual(got, []string{"b", "c"}) {
+		t.Errorf("Children(a) = %v, want [b c]", got)
+	}
+	if got := branchNames(s.Children("b")); !reflect.DeepEqual(got, []string{"d"}) {
+		t.Errorf("Children(b) = %v, want [d]", got)
+	}
+	if got := s.Children("d"); len(got) != 0 {
+		t.Errorf("Children(d) = %v, want empty", branchNames(got))
+	}
+}
+
+func TestDescendantsTopological(t *testing.T) {
+	s := newTestState()
+
+	got := s.Descendants("a")
+	want := []string{"b", "d", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Descendants(a) = %v, want %v", got, want)
+	}
+
+	// Every parent must appear before each of its children.
+	pos := make(map[string]int, len(got))
+	for i, name := range got {
+		pos[name] = i
+	}
+	for _, name := range got {
+		b, _ := s.Get(name)
+		if pIdx, ok := pos[b.Parent]; ok && pIdx > pos[name] {
+			t.Errorf("topological violation: parent %q appears after child %q", b.Parent, name)
+		}
+	}
+
+	if got := s.Descendants("main"); !reflect.DeepEqual(got, []string{"a", "b", "d", "c"}) {
+		t.Errorf("Descendants(main) = %v, want [a b d c]", got)
+	}
+	if got := s.Descendants("d"); len(got) != 0 {
+		t.Errorf("Descendants(d) = %v, want empty", got)
+	}
+}
+
+func TestAncestors(t *testing.T) {
+	s := newTestState()
+
+	if got := s.Ancestors("d"); !reflect.DeepEqual(got, []string{"b", "a", "main"}) {
+		t.Errorf("Ancestors(d) = %v, want [b a main]", got)
+	}
+	if got := s.Ancestors("a"); !reflect.DeepEqual(got, []string{"main"}) {
+		t.Errorf("Ancestors(a) = %v, want [main]", got)
+	}
+	if got := s.Ancestors("unknown"); len(got) != 0 {
+		t.Errorf("Ancestors(unknown) = %v, want empty", got)
+	}
+}
+
+func TestBottomOf(t *testing.T) {
+	s := newTestState()
+
+	for _, name := range []string{"a", "b", "c", "d"} {
+		if got := s.BottomOf(name); got != "a" {
+			t.Errorf("BottomOf(%q) = %q, want a", name, got)
+		}
+	}
+	// Trunk and unknown branches are returned unchanged.
+	if got := s.BottomOf("main"); got != "main" {
+		t.Errorf("BottomOf(main) = %q, want main", got)
+	}
+	if got := s.BottomOf("unknown"); got != "unknown" {
+		t.Errorf("BottomOf(unknown) = %q, want unknown", got)
+	}
+}
+
+func TestTrackUpsertAndIsTracked(t *testing.T) {
+	s := newTestState()
+
+	if !s.IsTracked("b") {
+		t.Fatal("IsTracked(b) = false, want true")
+	}
+	if s.IsTracked("main") {
+		t.Fatal("IsTracked(main) = true, want false (trunk is not tracked)")
+	}
+	if s.IsTracked("nope") {
+		t.Fatal("IsTracked(nope) = true, want false")
+	}
+
+	// Track on an existing name must upsert (re-parent), not duplicate.
+	before := len(s.Branches)
+	s.Track("b", "c", "sha-c")
+	if len(s.Branches) != before {
+		t.Errorf("Track upsert changed branch count to %d, want %d", len(s.Branches), before)
+	}
+	b, ok := s.Get("b")
+	if !ok {
+		t.Fatal("Get(b) missing after upsert")
+	}
+	if b.Parent != "c" || b.ParentSHA != "sha-c" {
+		t.Errorf("after upsert b = {Parent:%q ParentSHA:%q}, want {c sha-c}", b.Parent, b.ParentSHA)
+	}
+
+	// Re-parenting b under c moves d's subtree along with it.
+	if got := s.Descendants("c"); !reflect.DeepEqual(got, []string{"b", "d"}) {
+		t.Errorf("Descendants(c) after re-parent = %v, want [b d]", got)
+	}
+}
+
+func TestUntrack(t *testing.T) {
+	s := newTestState()
+
+	s.Untrack("c")
+	if _, ok := s.Get("c"); ok {
+		t.Error("Get(c) still present after Untrack")
+	}
+	if s.IsTracked("c") {
+		t.Error("IsTracked(c) = true after Untrack")
+	}
+	if got := branchNames(s.Children("a")); !reflect.DeepEqual(got, []string{"b"}) {
+		t.Errorf("Children(a) after untracking c = %v, want [b]", got)
+	}
+}
