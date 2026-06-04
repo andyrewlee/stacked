@@ -1,0 +1,8 @@
+{
+  "branch": "feat-a",
+  "role": "tracked",
+  "parent": "main",
+  "children": [],
+  "needsRestack": false,
+  "worktreeClean": true
+}

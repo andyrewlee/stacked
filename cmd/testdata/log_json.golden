@@ -1,0 +1,25 @@
+{
+  "name": "main",
+  "current": false,
+  "needsRestack": false,
+  "children": [
+    {
+      "name": "feat-a",
+      "parent": "main",
+      "parentSHA": "<sha>",
+      "current": false,
+      "needsRestack": false,
+      "topCommit": "add a",
+      "children": [
+        {
+          "name": "feat-b",
+          "parent": "feat-a",
+          "parentSHA": "<sha>",
+          "current": true,
+          "needsRestack": false,
+          "topCommit": "add b"
+        }
+      ]
+    }
+  ]
+}

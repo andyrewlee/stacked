@@ -1,0 +1,147 @@
+package cmd
+
+import (
+	"flag"
+	"fmt"
+	"sort"
+	"strings"
+
+	"stacked/internal/git"
+	"stacked/internal/stack"
+)
+
+func init() {
+	register(&Command{
+		Name:    "validate",
+		Aliases: []string{"doctor"},
+		Summary: "Check the stack state for drift or inconsistencies",
+		Usage:   "st validate",
+		Run:     runValidate,
+	})
+}
+
+// runValidate checks the recorded stack state against the actual git repository
+// and reports problems (a missing trunk, tracked branches whose git branch is
+// gone, parents that are neither the trunk nor a tracked branch, and parent
+// cycles) as well as warnings (branches that have drifted and need a restack).
+// It exits non-zero when any problem is found so it is usable in scripts.
+func runValidate(args []string) error {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	var asJSON bool
+	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: st validate [--json]")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+
+	var problems, warnings []string
+
+	if !git.BranchExists(s.Trunk) {
+		problems = append(problems, fmt.Sprintf("trunk branch %q does not exist", s.Trunk))
+	}
+
+	names := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		b, _ := s.Get(name)
+
+		branchOK := git.BranchExists(name)
+		if !branchOK {
+			problems = append(problems, fmt.Sprintf("%s is tracked but its git branch is missing (run: st untrack %s)", name, name))
+		}
+
+		parentOK := true
+		switch {
+		case b.Parent == s.Trunk:
+			// fine
+		case !s.IsTracked(b.Parent):
+			parentOK = false
+			problems = append(problems, fmt.Sprintf("%s has parent %q which is not the trunk or a tracked branch", name, b.Parent))
+		case !git.BranchExists(b.Parent):
+			parentOK = false
+			problems = append(problems, fmt.Sprintf("%s has parent %q whose git branch is missing", name, b.Parent))
+		}
+
+		if path := cyclePath(s, name); path != "" {
+			problems = append(problems, fmt.Sprintf("%s is part of a parent cycle: %s", name, path))
+			continue // NeedsRestack would be unreliable on a cycle
+		}
+
+		if branchOK && parentOK {
+			if needs, err := s.NeedsRestack(gitShell, name); err == nil && needs {
+				warnings = append(warnings, fmt.Sprintf("%s needs restack (run: st restack)", name))
+			}
+		}
+	}
+
+	if problems == nil {
+		problems = []string{}
+	}
+	if warnings == nil {
+		warnings = []string{}
+	}
+	payload := struct {
+		OK       bool     `json:"ok"`
+		Tracked  int      `json:"tracked"`
+		Problems []string `json:"problems"`
+		Warnings []string `json:"warnings"`
+	}{OK: len(problems) == 0, Tracked: len(names), Problems: problems, Warnings: warnings}
+
+	if err := emit(asJSON, payload, func() {
+		if len(problems) == 0 && len(warnings) == 0 {
+			out("ok: %d tracked branch(es), no problems found\n", len(names))
+			return
+		}
+		if len(problems) > 0 {
+			out("problems:\n")
+			for _, p := range problems {
+				out("  - %s\n", p)
+			}
+		}
+		if len(warnings) > 0 {
+			out("warnings:\n")
+			for _, w := range warnings {
+				out("  - %s\n", w)
+			}
+		}
+	}); err != nil {
+		return err
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("validate found %d problem(s)", len(problems))
+	}
+	return nil
+}
+
+// cyclePath walks the parent chain from name and returns a human-readable path
+// (e.g. "a -> b -> a") if a cycle is reached before the trunk, or "" if the
+// chain is sound or ends at an untracked parent (reported separately).
+func cyclePath(s *stack.State, name string) string {
+	seen := map[string]bool{name: true}
+	path := []string{name}
+	cur := name
+	for {
+		b, ok := s.Get(cur)
+		if !ok || b.Parent == s.Trunk {
+			return ""
+		}
+		path = append(path, b.Parent)
+		if seen[b.Parent] {
+			return strings.Join(path, " -> ")
+		}
+		seen[b.Parent] = true
+		cur = b.Parent
+	}
+}
