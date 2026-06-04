@@ -188,6 +188,43 @@ func TestEngineModifyRestacksDescendants(t *testing.T) {
 	}
 }
 
+func TestModifyRejectsUntrackedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.RevParse("scratch")
+
+	if _, err := Modify(env, s, "change", true, true); err == nil {
+		t.Fatal("modify on untracked branch should error")
+	}
+	after, _ := f.RevParse("scratch")
+	if after != before {
+		t.Fatalf("scratch tip changed to %s, want %s", after, before)
+	}
+}
+
+func TestOntoRollsBackMetadataWhenRebaseDoesNotStart(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("b")
+	oldParent, oldParentSHA := b.Parent, b.ParentSHA
+	errBoom := errors.New("pre-rebase hook rejected")
+	f.rebaseErr["b"] = errBoom
+
+	if _, err := Onto(env, s, "c"); !errors.Is(err, errBoom) {
+		t.Fatalf("Onto error = %v, want %v", err, errBoom)
+	}
+	if b.Parent != oldParent || b.ParentSHA != oldParentSHA {
+		t.Fatalf("b metadata = (%s, %s), want (%s, %s)", b.Parent, b.ParentSHA, oldParent, oldParentSHA)
+	}
+}
+
 func TestEngineGuards(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

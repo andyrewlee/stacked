@@ -120,6 +120,9 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 	if cur == s.Trunk {
 		return nil, fmt.Errorf("refusing to modify the trunk branch %q", cur)
 	}
+	if !s.IsTracked(cur) {
+		return nil, fmt.Errorf("branch %q is not tracked", cur)
+	}
 	if all {
 		if err := g.Add(); err != nil {
 			return nil, fmt.Errorf("staging changes on %q: %w", cur, err)
@@ -357,19 +360,32 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 	}
 
 	oldBase := b.ParentSHA
+	oldParent := b.Parent
 	newParentTip, err := g.RevParse(branchTipRef(target))
 	if err != nil {
 		return nil, err
 	}
-	// Record the new parent before rebasing so a conflict + `st continue` records
-	// the correct base for cur.
 	b.Parent = target
 	b.ParentSHA = newParentTip
 	if err := env.save(); err != nil {
+		b.Parent = oldParent
+		b.ParentSHA = oldBase
 		return nil, err
 	}
 	if err := g.RebaseOnto(newParentTip, oldBase, cur); err != nil {
-		return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
+		inProgress, progressErr := g.RebaseInProgress()
+		if progressErr == nil && inProgress {
+			return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
+		}
+		b.Parent = oldParent
+		b.ParentSHA = oldBase
+		if saveErr := env.save(); saveErr != nil {
+			return nil, fmt.Errorf("moving %q onto %q: %w; additionally failed to restore metadata: %v", cur, target, err, saveErr)
+		}
+		if progressErr != nil {
+			return nil, fmt.Errorf("checking rebase state after moving %q onto %q failed: %v (original error: %w)", cur, target, progressErr, err)
+		}
+		return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, err)
 	}
 
 	rebased, err := s.RestackUpstack(env, cur)

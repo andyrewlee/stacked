@@ -36,6 +36,7 @@ type fakeGit struct {
 	staged        bool
 	clean         bool
 	deleteErr     map[string]error
+	rebaseErr     map[string]error
 }
 
 func newFakeGit() *fakeGit {
@@ -44,6 +45,7 @@ func newFakeGit() *fakeGit {
 		branches:     map[string]string{},
 		conflictNext: map[string]bool{},
 		deleteErr:    map[string]error{},
+		rebaseErr:    map[string]error{},
 		clean:        true,
 	}
 	id := f.newID()
@@ -200,6 +202,9 @@ func (f *fakeGit) ResetSoft(ref string) error {
 // "git rebase --onto". If the branch is marked to conflict, it stops mid-rebase
 // (leaving a rebase in progress) until RebaseContinue is called.
 func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
+	if err := f.rebaseErr[branch]; err != nil {
+		return err
+	}
 	if f.conflictNext[branch] {
 		f.rebaseActive = true
 		f.rebaseBranch = branch
