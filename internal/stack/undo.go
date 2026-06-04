@@ -73,11 +73,11 @@ func (s *State) RecordUndo(label string) error {
 		return fmt.Errorf("encode state for undo: %w", err)
 	}
 	refs := map[string]string{}
-	if sha, err := git.RevParse(s.Trunk); err == nil {
+	if sha, err := git.RevParse("refs/heads/" + s.Trunk); err == nil {
 		refs[s.Trunk] = sha
 	}
 	for name := range s.Branches {
-		if sha, err := git.RevParse(name); err == nil {
+		if sha, err := git.RevParse("refs/heads/" + name); err == nil {
 			refs[name] = sha
 		}
 	}

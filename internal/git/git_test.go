@@ -263,6 +263,30 @@ func TestDirsAndRemote(t *testing.T) {
 	}
 }
 
+func TestAbsPathFromGitOutputResolvesFromCurrentDirectory(t *testing.T) {
+	newRepo(t)
+	root, err := RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	subdir := filepath.Join(root, "subdir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatalf("chdir subdir: %v", err)
+	}
+
+	got, err := absPathFromGitOutput("../.git")
+	if err != nil {
+		t.Fatalf("absPathFromGitOutput: %v", err)
+	}
+	want := filepath.Join(root, ".git")
+	if filepath.Clean(got) != filepath.Clean(want) {
+		t.Fatalf("absPathFromGitOutput = %q, want %q", got, want)
+	}
+}
+
 func TestFetchAndPush(t *testing.T) {
 	newRepo(t)
 	bare := t.TempDir()

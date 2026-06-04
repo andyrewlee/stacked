@@ -111,6 +111,15 @@ func RevParse(ref string) (string, error) {
 	return Run("rev-parse", ref)
 }
 
+func absPathFromGitOutput(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	// Git emits relative repository paths from the process working directory,
+	// not from the repository root.
+	return filepath.Abs(path)
+}
+
 // IsClean reports whether the working tree has no staged or unstaged changes,
 // i.e. "git status --porcelain" produces no output.
 func IsClean() (bool, error) {
@@ -297,14 +306,15 @@ func GitCommonDir() (string, error) {
 		return dir, nil
 	}
 	// Fall back for git versions without --path-format: resolve a possibly
-	// relative --git-common-dir against the working-tree root.
+	// relative --git-common-dir from the current working directory.
 	dir, err = Run("rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(dir) {
-		if root, rerr := RepoRoot(); rerr == nil {
-			dir = filepath.Join(root, dir)
+		dir, err = absPathFromGitOutput(dir)
+		if err != nil {
+			return "", err
 		}
 	}
 	return dir, nil
