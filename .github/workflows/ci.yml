@@ -4,16 +4,42 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  ci:
+    name: ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so `git describe` can produce a version
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - name: gofmt
-        run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go build ./...
-      - run: go test ./... -count=1
+
+      # Dev tooling is installed as an external binary only; it is never added to
+      # go.mod (the shipped tool stays standard-library only). golangci-lint v2
+      # is required because .golangci.yml uses the v2 schema; its gofumpt
+      # formatter is compiled in, so no separate gofumpt install is needed.
+      - name: Install golangci-lint (binary)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          install-mode: binary
+          # The Makefile drives the lint step itself; this action only installs.
+          args: --help
+
+      # `make ci` is the single source of truth: fmt-check + strict lint + vet +
+      # build + race tests + black-box e2e + coverage gate. Local and CI run the
+      # exact same command.
+      - name: make ci
+        run: make ci

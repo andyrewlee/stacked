@@ -1,0 +1,25 @@
+version: 2
+
+builds:
+  - id: st
+    main: ./cmd/st
+    binary: st
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X stacked/cmd.version={{.Version}}
+
+archives:
+  - id: st
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
