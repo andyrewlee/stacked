@@ -163,6 +163,7 @@ func TestMergeBaseAndAncestor(t *testing.T) {
 	writeFile(t, "f.txt", "f\n")
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "f")
+	mustGit(t, "tag", "main", "HEAD")
 
 	mb, err := MergeBase("main", "feat")
 	if err != nil {
@@ -171,9 +172,16 @@ func TestMergeBaseAndAncestor(t *testing.T) {
 	if mb != base {
 		t.Fatalf("MergeBase = %q, want %s", mb, base)
 	}
+	if mb, err := MergeBase(base, "refs/heads/feat"); err != nil || mb != base {
+		t.Fatalf("MergeBase with generic refs = %q, %v; want %s, nil", mb, err, base)
+	}
 	ok, err := IsAncestor("main", "feat")
 	if err != nil || !ok {
 		t.Fatalf("IsAncestor(main, feat) = %v, %v; want true, nil", ok, err)
+	}
+	ok, err = IsAncestor(base, "refs/heads/feat")
+	if err != nil || !ok {
+		t.Fatalf("IsAncestor(base, refs/heads/feat) = %v, %v; want true, nil", ok, err)
 	}
 	ok, err = IsAncestor("feat", "main")
 	if err != nil || ok {
@@ -228,6 +236,10 @@ func TestCommitSubjects(t *testing.T) {
 	empty, err := CommitSubjects("main", "main")
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty CommitSubjects = %v err=%v", empty, err)
+	}
+	mustGit(t, "tag", "missing-branch", "main")
+	if _, err := CommitSubjects("main", "missing-branch"); err == nil {
+		t.Fatalf("CommitSubjects accepted a tag in place of a missing local branch")
 	}
 }
 

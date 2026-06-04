@@ -111,6 +111,20 @@ func RevParse(ref string) (string, error) {
 	return Run("rev-parse", ref)
 }
 
+func localBranchRef(ref string) string {
+	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") {
+		return ref
+	}
+	if BranchExists(ref) {
+		return "refs/heads/" + ref
+	}
+	return ref
+}
+
+func localBranchNameRef(name string) string {
+	return "refs/heads/" + name
+}
+
 func absPathFromGitOutput(path string) (string, error) {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path), nil
@@ -279,14 +293,16 @@ func RemoteExists(name string) bool {
 
 // MergeBase returns the best common ancestor commit of the two given refs.
 func MergeBase(a, b string) (string, error) {
-	return Run("merge-base", a, b)
+	return Run("merge-base", localBranchRef(a), localBranchRef(b))
 }
 
 // IsAncestor reports whether ancestor is an ancestor of descendant. A valid
 // negative answer returns false, nil; invalid refs and other git failures return
 // an error.
 func IsAncestor(ancestor, descendant string) (bool, error) {
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	ancestorRef := localBranchRef(ancestor)
+	descendantRef := localBranchRef(descendant)
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestorRef, descendantRef)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return true, nil
@@ -297,9 +313,9 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	}
 	msg := strings.TrimSpace(string(out))
 	if msg != "" {
-		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s: %w", ancestor, descendant, msg, err)
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s: %w", ancestorRef, descendantRef, msg, err)
 	}
-	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestor, descendant, err)
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestorRef, descendantRef, err)
 }
 
 // GitDir returns the absolute path to the repository's .git directory.
@@ -377,7 +393,7 @@ func RemoteURL(remote string) (string, error) {
 // CommitSubjects returns the subject lines of the commits in the local branch
 // range base..branch, newest first.
 func CommitSubjects(base, branch string) ([]string, error) {
-	out, err := Run("log", "--format=%s", "refs/heads/"+base+".."+"refs/heads/"+branch)
+	out, err := Run("log", "--format=%s", localBranchNameRef(base)+".."+localBranchNameRef(branch))
 	if err != nil {
 		return nil, err
 	}
