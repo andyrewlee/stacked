@@ -72,6 +72,9 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	if err != nil {
 		return nil, err
 	}
+	if cur != s.Trunk && !s.IsTracked(cur) {
+		return nil, fmt.Errorf("current branch %q is not the trunk or a tracked branch", cur)
+	}
 	parentSHA, err := g.RevParse(cur)
 	if err != nil {
 		return nil, fmt.Errorf("resolving parent %q: %w", cur, err)
@@ -85,6 +88,12 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	if err != nil {
 		return nil, fmt.Errorf("checking staged changes: %w", err)
 	}
+	if message == "" && staged {
+		return nil, errors.New("staged changes present; provide a commit message with -m")
+	}
+	if message != "" && !staged {
+		return nil, errors.New("no staged changes to commit; stage changes or pass -a")
+	}
 	if err := g.CreateBranch(name); err != nil {
 		return nil, fmt.Errorf("creating branch %q: %w", name, err)
 	}
@@ -92,8 +101,6 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 		if err := g.Commit(message, all); err != nil {
 			return nil, fmt.Errorf("committing on %q: %w", name, err)
 		}
-	} else if staged {
-		return nil, errors.New("staged changes present; provide a commit message with -m")
 	}
 	s.Track(name, cur, parentSHA)
 	if err := env.save(); err != nil {
@@ -390,6 +397,9 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if !ok {
 		return nil, fmt.Errorf("branch %q is not tracked", name)
 	}
+	if err := requireClean(g); err != nil {
+		return nil, err
+	}
 	parent := b.Parent
 
 	start, err := g.CurrentBranch()
@@ -465,6 +475,9 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 
 	var deleted []string
 	if !noDelete {
+		if err := g.Checkout(s.Trunk); err != nil {
+			return nil, fmt.Errorf("checkout trunk %q before pruning: %w", s.Trunk, err)
+		}
 		if deleted, err = PruneMerged(env, s); err != nil {
 			return nil, err
 		}

@@ -1,6 +1,9 @@
 package stack
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func newEnvState() (*fakeGit, *State, Env) {
 	f := newFakeGit()
@@ -13,7 +16,7 @@ func mkBranch(t *testing.T, env Env, s *State, f *fakeGit, parent, name string) 
 	if err := f.Checkout(parent); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(env, s, name, "c-"+name, false); err != nil {
+	if _, err := Create(env, s, name, "c-"+name, true); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
 }
@@ -206,5 +209,55 @@ func TestEngineGuards(t *testing.T) {
 	}
 	if _, err := Delete(env, s, "main", true); err == nil {
 		t.Fatal("delete trunk should error")
+	}
+}
+
+func TestCreateRejectsUntrackedParentBeforeBranchCreation(t *testing.T) {
+	f, s, env := newEnvState()
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	f.staged = true
+
+	if _, err := Create(env, s, "child", "child", false); err == nil {
+		t.Fatal("create on untracked parent should error")
+	}
+	if f.BranchExists("child") {
+		t.Fatal("create left child branch behind")
+	}
+}
+
+func TestCreateValidatesStagedStateBeforeBranchCreation(t *testing.T) {
+	f, s, env := newEnvState()
+	f.staged = true
+	if _, err := Create(env, s, "no-message", "", false); err == nil {
+		t.Fatal("create with staged changes and no message should error")
+	}
+	if f.BranchExists("no-message") {
+		t.Fatal("create left no-message branch behind")
+	}
+
+	f.staged = false
+	if _, err := Create(env, s, "no-staged", "msg", false); err == nil {
+		t.Fatal("create with message and no staged changes should error")
+	}
+	if f.BranchExists("no-staged") {
+		t.Fatal("create left no-staged branch behind")
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main", f.head)
+	}
+}
+
+func TestDeleteRequiresCleanTreeBeforeMutation(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.clean = false
+
+	if _, err := Delete(env, s, "a", true); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Delete dirty tree error = %v, want ErrDirty", err)
+	}
+	if !s.IsTracked("a") || !f.BranchExists("a") {
+		t.Fatal("Delete mutated branch or metadata despite dirty tree")
 	}
 }

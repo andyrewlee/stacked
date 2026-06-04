@@ -34,7 +34,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			mustCheckout(t, f, parent)
 			nameSeq++
-			if _, err := Create(env, s, fmt.Sprintf("b%d", nameSeq), "subj", false); err != nil {
+			if _, err := Create(env, s, fmt.Sprintf("b%d", nameSeq), "subj", true); err != nil {
 				t.Fatalf("create: %v", err)
 			}
 		case 1: // amend a random branch

@@ -32,6 +32,8 @@ type fakeGit struct {
 	rebaseBranch  string
 	rebaseNewBase string
 	rebaseOldBase string
+	staged        bool
+	clean         bool
 }
 
 func newFakeGit() *fakeGit {
@@ -39,6 +41,7 @@ func newFakeGit() *fakeGit {
 		commits:      map[string]*fakeCommit{},
 		branches:     map[string]string{},
 		conflictNext: map[string]bool{},
+		clean:        true,
 	}
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, subject: "init"}
@@ -145,7 +148,12 @@ func (f *fakeGit) commit(subject string) {
 }
 
 func (f *fakeGit) Commit(message string, _ bool) error {
+	if !f.staged {
+		return fmt.Errorf("no staged changes")
+	}
 	f.commit(message)
+	f.staged = false
+	f.clean = true
 	return nil
 }
 
@@ -158,11 +166,15 @@ func (f *fakeGit) amend(subject string) {
 
 func (f *fakeGit) AmendNoEdit(_ bool) error {
 	f.amend(f.commits[f.branches[f.head]].subject)
+	f.staged = false
+	f.clean = true
 	return nil
 }
 
 func (f *fakeGit) AmendMessage(message string, _ bool) error {
 	f.amend(message)
+	f.staged = false
+	f.clean = true
 	return nil
 }
 
@@ -172,6 +184,8 @@ func (f *fakeGit) ResetSoft(ref string) error {
 		return fmt.Errorf("unknown revision %q", ref)
 	}
 	f.branches[f.head] = id
+	f.staged = true
+	f.clean = false
 	return nil
 }
 
@@ -270,8 +284,11 @@ func (f *fakeGit) CommitSubjects(base, branch string) ([]string, error) {
 	return subs, nil
 }
 
-// The working tree is always clean in the fake; content does not affect the
-// topology invariants under test.
-func (f *fakeGit) Add(_ ...string) error           { return nil }
-func (f *fakeGit) HasStagedChanges() (bool, error) { return false, nil }
-func (f *fakeGit) IsClean() (bool, error)          { return true, nil }
+func (f *fakeGit) Add(_ ...string) error {
+	f.staged = true
+	f.clean = false
+	return nil
+}
+
+func (f *fakeGit) HasStagedChanges() (bool, error) { return f.staged, nil }
+func (f *fakeGit) IsClean() (bool, error)          { return f.clean && !f.staged, nil }

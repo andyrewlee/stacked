@@ -89,6 +89,32 @@ func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 	}
 }
 
+func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if s.IsTracked("feat-a") || f.BranchExists("feat-a") {
+		t.Fatal("feat-a should have been pruned as merged")
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main after pruning current branch", f.head)
+	}
+	if got := res.Deleted; len(got) != 1 || got[0] != "feat-a" {
+		t.Fatalf("deleted = %v, want [feat-a]", got)
+	}
+}
+
 func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
