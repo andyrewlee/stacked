@@ -111,7 +111,7 @@ func (f *fakeGit) CreateBranch(name string) error {
 	return nil
 }
 
-func (f *fakeGit) DeleteBranch(name string, _ bool) error {
+func (f *fakeGit) DeleteBranch(name string, force bool) error {
 	if name == f.head {
 		return fmt.Errorf("cannot delete the current branch %q", name)
 	}
@@ -120,6 +120,15 @@ func (f *fakeGit) DeleteBranch(name string, _ bool) error {
 	}
 	if err := f.deleteErr[name]; err != nil {
 		return err
+	}
+	if !force {
+		merged, err := f.IsAncestor(name, f.head)
+		if err != nil {
+			return err
+		}
+		if !merged {
+			return fmt.Errorf("branch %q is not fully merged", name)
+		}
 	}
 	delete(f.branches, name)
 	return nil

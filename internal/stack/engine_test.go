@@ -305,3 +305,19 @@ func TestDeleteRequiresCleanTreeBeforeMutation(t *testing.T) {
 		t.Fatal("Delete mutated branch or metadata despite dirty tree")
 	}
 }
+
+func TestDeleteNonForceChecksMergedIntoParent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if _, err := Delete(env, s, "a", false); err == nil {
+		t.Fatal("non-forced delete should fail when a is not merged into parent")
+	}
+	if !s.IsTracked("a") || !f.BranchExists("a") {
+		t.Fatal("non-forced delete mutated branch or metadata")
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b restored", f.head)
+	}
+}

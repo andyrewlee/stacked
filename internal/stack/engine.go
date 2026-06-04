@@ -425,6 +425,15 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !force {
+		mergedIntoParent, err := g.IsAncestor(name, parent)
+		if err != nil {
+			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, parent, err)
+		}
+		if !mergedIntoParent {
+			return nil, fmt.Errorf("branch %q is not merged into its stack parent %q (use --force to delete anyway)", name, parent)
+		}
+	}
 	if start == name {
 		if err := g.Checkout(parent); err != nil {
 			return nil, fmt.Errorf("checking out parent %q: %w", parent, err)
@@ -437,13 +446,18 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	children := s.Children(name)
 	formerChildren := make([]string, 0, len(children))
 	for _, child := range children {
-		child.Parent = parent
 		formerChildren = append(formerChildren, child.Name)
 	}
-	s.Untrack(name)
-	if err := g.DeleteBranch(name, force); err != nil {
+	if err := g.DeleteBranch(name, true); err != nil {
+		if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
+			return nil, fmt.Errorf("deleting branch %q: %w; additionally failed to restore %q: %v", name, err, start, restoreErr)
+		}
 		return nil, fmt.Errorf("deleting branch %q: %w", name, err)
 	}
+	for _, child := range children {
+		child.Parent = parent
+	}
+	s.Untrack(name)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
