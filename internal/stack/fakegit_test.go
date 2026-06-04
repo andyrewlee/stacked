@@ -34,6 +34,7 @@ type fakeGit struct {
 	rebaseOldBase string
 	staged        bool
 	clean         bool
+	deleteErr     map[string]error
 }
 
 func newFakeGit() *fakeGit {
@@ -41,6 +42,7 @@ func newFakeGit() *fakeGit {
 		commits:      map[string]*fakeCommit{},
 		branches:     map[string]string{},
 		conflictNext: map[string]bool{},
+		deleteErr:    map[string]error{},
 		clean:        true,
 	}
 	id := f.newID()
@@ -111,6 +113,9 @@ func (f *fakeGit) DeleteBranch(name string, _ bool) error {
 	}
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
+	}
+	if err := f.deleteErr[name]; err != nil {
+		return err
 	}
 	delete(f.branches, name)
 	return nil

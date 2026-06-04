@@ -8,13 +8,25 @@ import (
 // fakeRemote is an in-memory Remote port for exercising Sync without a real
 // remote. The trunk fast-forward is whatever ff is set to.
 type fakeRemote struct {
-	exists bool
-	ff     string
+	exists   bool
+	ff       string
+	err      error
+	checkout *fakeGit
 }
 
-func (r *fakeRemote) Exists(string) bool                      { return r.exists }
-func (r *fakeRemote) Fetch(string) error                      { return nil }
-func (r *fakeRemote) FastForward(_, _ string) (string, error) { return r.ff, nil }
+func (r *fakeRemote) Exists(string) bool { return r.exists }
+func (r *fakeRemote) Fetch(string) error { return nil }
+func (r *fakeRemote) FastForward(trunk, _ string) (string, error) {
+	if r.checkout != nil {
+		if err := r.checkout.Checkout(trunk); err != nil {
+			return "", err
+		}
+	}
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.ff, nil
+}
 
 func TestContinueResolvesConflict(t *testing.T) {
 	f, s, env := newEnvState()
@@ -112,6 +124,71 @@ func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
 	}
 	if got := res.Deleted; len(got) != 1 || got[0] != "feat-a" {
 		t.Fatalf("deleted = %v, want [feat-a]", got)
+	}
+}
+
+func TestSyncPersistsEachSuccessfulPrune(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b")
+	aTip, _ := f.RevParse("a")
+	bTip, _ := f.RevParse("b")
+	if err := f.ForceBranch("main", bTip); err != nil {
+		t.Fatal(err)
+	}
+	// Make both branches ancestors of trunk while keeping the branch names sorted
+	// so a prunes successfully before b fails deletion.
+	f.commits[f.branches["main"]].parent = aTip
+	f.deleteErr["b"] = errors.New("branch checked out elsewhere")
+
+	var savedAfterA bool
+	env.Save = func() error {
+		savedAfterA = savedAfterA || (!s.IsTracked("a") && s.IsTracked("b"))
+		return nil
+	}
+
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false); err == nil {
+		t.Fatal("sync should fail when pruning b fails")
+	}
+	if !savedAfterA {
+		t.Fatal("sync did not persist after successfully pruning a")
+	}
+}
+
+func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+
+	errBoom := errors.New("fast-forward failed")
+	if _, err := Sync(env, &fakeRemote{exists: true, err: errBoom, checkout: f}, s, "origin", false); !errors.Is(err, errBoom) {
+		t.Fatalf("Sync error = %v, want %v", err, errBoom)
+	}
+	if f.head != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a restored", f.head)
+	}
+}
+
+func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := SyncPlan(env, s, false)
+	if err != nil {
+		t.Fatalf("SyncPlan: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("Deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if len(res.Restacked) != 0 {
+		t.Fatalf("Restacked = %v, want empty after simulated prune", res.Restacked)
+	}
+	if b, _ := s.Get("feat-b"); b.Parent != "feat-a" {
+		t.Fatalf("SyncPlan mutated state parent to %q", b.Parent)
 	}
 }
 

@@ -469,6 +469,9 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		}
 		ffResult, err = r.FastForward(s.Trunk, remote)
 		if err != nil {
+			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
+				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+			}
 			return nil, err
 		}
 	}
@@ -512,21 +515,28 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 // mutate anything.
 func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 	g := env.Git
+	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
-		for _, name := range sortedBranchNames(s) {
+		for _, name := range sortedBranchNames(planState) {
 			merged, err := g.IsAncestor(name, s.Trunk)
 			if err != nil {
 				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, s.Trunk, err)
 			}
 			if merged {
+				if b, ok := planState.Get(name); ok {
+					for _, child := range planState.Children(name) {
+						child.Parent = b.Parent
+					}
+				}
+				planState.Untrack(name)
 				deleted[name] = true
 				deletedList = append(deletedList, name)
 			}
 		}
 	}
-	full, err := s.restackPlan(g, s.Trunk)
+	full, err := planState.restackPlan(g, planState.Trunk)
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +547,15 @@ func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 		}
 	}
 	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, DryRun: true}, nil
+}
+
+func cloneState(s *State) *State {
+	cp := &State{Trunk: s.Trunk, Branches: make(map[string]*Branch, len(s.Branches))}
+	for name, branch := range s.Branches {
+		b := *branch
+		cp.Branches[name] = &b
+	}
+	return cp
 }
 
 // Continue resumes a restack interrupted by a conflict: it completes the
@@ -644,6 +663,9 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)
 		}
 		deleted = append(deleted, name)
+		if err := env.save(); err != nil {
+			return deleted, fmt.Errorf("save state after pruning %q: %w", name, err)
+		}
 	}
 	return deleted, nil
 }
