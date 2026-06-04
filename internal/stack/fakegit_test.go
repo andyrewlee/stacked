@@ -203,6 +203,7 @@ func (f *fakeGit) ResetSoft(ref string) error {
 // (leaving a rebase in progress) until RebaseContinue is called.
 func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
 	if err := f.rebaseErr[branch]; err != nil {
+		f.head = branch
 		return err
 	}
 	if f.conflictNext[branch] {

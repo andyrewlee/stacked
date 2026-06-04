@@ -266,6 +266,13 @@ func TestCreateRejectsUntrackedParentBeforeBranchCreation(t *testing.T) {
 
 func TestCreateValidatesStagedStateBeforeBranchCreation(t *testing.T) {
 	f, s, env := newEnvState()
+	if _, err := Create(env, s, "all-no-message", "", true); err == nil {
+		t.Fatal("create -a without message should error")
+	}
+	if f.BranchExists("all-no-message") || f.staged {
+		t.Fatal("create -a without message mutated branch or staged state")
+	}
+
 	f.staged = true
 	if _, err := Create(env, s, "no-message", "", false); err == nil {
 		t.Fatal("create with staged changes and no message should error")

@@ -38,8 +38,21 @@ func (s *State) RestackBranch(env Env, name string) error {
 	if parentTip == b.ParentSHA {
 		return nil
 	}
+	start, startErr := env.Git.CurrentBranch()
 	if err := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); err != nil {
-		return fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, ErrConflict)
+		inProgress, progressErr := env.Git.RebaseInProgress()
+		if progressErr == nil && inProgress {
+			return fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, ErrConflict)
+		}
+		if startErr == nil {
+			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
+				return fmt.Errorf("rebasing %q onto %q: %w; additionally failed to restore %q: %v", name, b.Parent, err, start, restoreErr)
+			}
+		}
+		if progressErr != nil {
+			return fmt.Errorf("checking rebase state after rebasing %q onto %q failed: %v (original error: %w)", name, b.Parent, progressErr, err)
+		}
+		return fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err)
 	}
 	b.ParentSHA = parentTip
 	if err := env.save(); err != nil {

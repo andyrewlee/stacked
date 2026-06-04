@@ -75,6 +75,9 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	if cur != s.Trunk && !s.IsTracked(cur) {
 		return nil, fmt.Errorf("current branch %q is not the trunk or a tracked branch", cur)
 	}
+	if all && message == "" {
+		return nil, errors.New("-a requires a commit message (-m <msg>)")
+	}
 	parentSHA, err := g.RevParse(branchTipRef(cur))
 	if err != nil {
 		return nil, fmt.Errorf("resolving parent %q: %w", cur, err)

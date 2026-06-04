@@ -74,6 +74,32 @@ func TestContinueWithoutRebase(t *testing.T) {
 	}
 }
 
+func TestRestackBranchReturnsNonConflictRebaseErrors(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("new-a")
+	errBoom := errors.New("pre-rebase hook rejected")
+	f.rebaseErr["feat-b"] = errBoom
+
+	err := s.RestackBranch(env, "feat-b")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("RestackBranch error = %v, want %v", err, errBoom)
+	}
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("RestackBranch returned ErrConflict for non-started rebase: %v", err)
+	}
+	if f.head != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a restored", f.head)
+	}
+	if inProgress, _ := f.RebaseInProgress(); inProgress {
+		t.Fatal("rebase should not be in progress")
+	}
+}
+
 func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
