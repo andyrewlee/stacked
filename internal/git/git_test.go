@@ -306,6 +306,18 @@ func TestAbsPathFromGitOutputResolvesFromCurrentDirectory(t *testing.T) {
 	}
 }
 
+func TestIsSingleAbsolutePathRejectsEchoedUnknownRevParseOption(t *testing.T) {
+	if isSingleAbsolutePath("--path-format=absolute\n.git") {
+		t.Fatalf("isSingleAbsolutePath accepted echoed rev-parse option output")
+	}
+	if isSingleAbsolutePath(".git") {
+		t.Fatalf("isSingleAbsolutePath accepted a relative path")
+	}
+	if !isSingleAbsolutePath(t.TempDir()) {
+		t.Fatalf("isSingleAbsolutePath rejected a single absolute path")
+	}
+}
+
 func TestFetchAndPush(t *testing.T) {
 	newRepo(t)
 	bare := t.TempDir()

@@ -134,6 +134,10 @@ func absPathFromGitOutput(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
+func isSingleAbsolutePath(path string) bool {
+	return filepath.IsAbs(path) && !strings.Contains(path, "\n")
+}
+
 // IsClean reports whether the working tree has no staged or unstaged changes,
 // i.e. "git status --porcelain" produces no output.
 func IsClean() (bool, error) {
@@ -333,7 +337,7 @@ func RepoRoot() (string, error) {
 // worktree, so stack metadata is shared across all worktrees of a repository.
 func GitCommonDir() (string, error) {
 	dir, err := Run("rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err == nil {
+	if err == nil && isSingleAbsolutePath(dir) {
 		return dir, nil
 	}
 	// Fall back for git versions without --path-format: resolve a possibly
