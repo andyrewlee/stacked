@@ -3,6 +3,7 @@ package stack
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,7 @@ func (f *fakeGit) newID() string {
 
 // resolve turns a ref (branch name or commit id) into a commit id.
 func (f *fakeGit) resolve(ref string) string {
+	ref = strings.TrimPrefix(ref, "refs/heads/")
 	if tip, ok := f.branches[ref]; ok {
 		return tip
 	}

@@ -75,7 +75,7 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	if cur != s.Trunk && !s.IsTracked(cur) {
 		return nil, fmt.Errorf("current branch %q is not the trunk or a tracked branch", cur)
 	}
-	parentSHA, err := g.RevParse(cur)
+	parentSHA, err := g.RevParse(branchTipRef(cur))
 	if err != nil {
 		return nil, fmt.Errorf("resolving parent %q: %w", cur, err)
 	}
@@ -228,7 +228,7 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
 	}
 
-	curTip, err := g.RevParse(cur)
+	curTip, err := g.RevParse(branchTipRef(cur))
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +357,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 	}
 
 	oldBase := b.ParentSHA
-	newParentTip, err := g.RevParse(target)
+	newParentTip, err := g.RevParse(branchTipRef(target))
 	if err != nil {
 		return nil, err
 	}
@@ -482,6 +482,9 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 			return nil, fmt.Errorf("checkout trunk %q before pruning: %w", s.Trunk, err)
 		}
 		if deleted, err = PruneMerged(env, s); err != nil {
+			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
+				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+			}
 			return nil, err
 		}
 	}
@@ -581,7 +584,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	// The just-finished branch now sits on its parent's current tip.
 	if conflicted != "" {
 		if b, ok := s.Get(conflicted); ok {
-			tip, err := g.RevParse(b.Parent)
+			tip, err := g.RevParse(branchTipRef(b.Parent))
 			if err != nil {
 				return nil, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 			}
@@ -760,7 +763,7 @@ func UntrackBranch(env Env, s *State, name string) (*OpResult, error) {
 		return nil, fmt.Errorf("branch %q is not tracked", name)
 	}
 	for _, child := range s.Children(name) {
-		sha, err := g.RevParse(b.Parent)
+		sha, err := g.RevParse(branchTipRef(b.Parent))
 		if err != nil {
 			return nil, fmt.Errorf("resolving new parent %q for %q: %w", b.Parent, child.Name, err)
 		}

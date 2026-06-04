@@ -153,6 +153,9 @@ func TestSyncPersistsEachSuccessfulPrune(t *testing.T) {
 	if !savedAfterA {
 		t.Fatal("sync did not persist after successfully pruning a")
 	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b restored after prune failure", f.head)
+	}
 }
 
 func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {

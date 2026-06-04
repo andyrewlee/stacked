@@ -2,6 +2,10 @@ package stack
 
 import "fmt"
 
+func branchTipRef(name string) string {
+	return "refs/heads/" + name
+}
+
 // NeedsRestack reports whether the named branch is out of date relative to its
 // parent, i.e. the parent's current tip differs from the SHA this branch was
 // last based onto.
@@ -10,7 +14,7 @@ func (s *State) NeedsRestack(g Git, name string) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("branch %q is not tracked", name)
 	}
-	parentTip, err := g.RevParse(b.Parent)
+	parentTip, err := g.RevParse(branchTipRef(b.Parent))
 	if err != nil {
 		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
@@ -27,7 +31,7 @@ func (s *State) RestackBranch(env Env, name string) error {
 	if !ok {
 		return fmt.Errorf("branch %q is not tracked", name)
 	}
-	parentTip, err := env.Git.RevParse(b.Parent)
+	parentTip, err := env.Git.RevParse(branchTipRef(b.Parent))
 	if err != nil {
 		return fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
