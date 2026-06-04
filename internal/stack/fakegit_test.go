@@ -37,6 +37,7 @@ type fakeGit struct {
 	clean         bool
 	deleteErr     map[string]error
 	rebaseErr     map[string]error
+	commitErr     error
 }
 
 func newFakeGit() *fakeGit {
@@ -168,6 +169,9 @@ func (f *fakeGit) commit(subject string) {
 func (f *fakeGit) Commit(message string, _ bool) error {
 	if !f.staged {
 		return fmt.Errorf("no staged changes")
+	}
+	if f.commitErr != nil {
+		return f.commitErr
 	}
 	f.commit(message)
 	f.staged = false

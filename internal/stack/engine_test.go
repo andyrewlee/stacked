@@ -66,6 +66,28 @@ func TestEngineSquashCollapses(t *testing.T) {
 	}
 }
 
+func TestSquashRestoresBranchTipWhenCommitFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "c2", true, true); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.RevParse("a")
+	errBoom := errors.New("commit hook rejected")
+	f.commitErr = errBoom
+
+	if _, err := Squash(env, s, "squashed"); !errors.Is(err, errBoom) {
+		t.Fatalf("Squash error = %v, want %v", err, errBoom)
+	}
+	after, _ := f.RevParse("a")
+	if after != before {
+		t.Fatalf("a tip changed to %s, want %s", after, before)
+	}
+}
+
 func TestEngineFoldAbsorbs(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -381,6 +403,69 @@ func TestOntoRollsBackMetadataWhenRebaseDoesNotStart(t *testing.T) {
 	}
 	if b.Parent != oldParent || b.ParentSHA != oldParentSHA {
 		t.Fatalf("b metadata = (%s, %s), want (%s, %s)", b.Parent, b.ParentSHA, oldParent, oldParentSHA)
+	}
+}
+
+func TestOntoConflictRecordsPendingReparentWithoutChangingParent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("b")
+	oldParent, oldParentSHA := b.Parent, b.ParentSHA
+	targetSHA, _ := f.RevParse("c")
+	f.conflictOn("b")
+
+	if _, err := Onto(env, s, "c"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto error = %v, want %v", err, ErrConflict)
+	}
+	if b.Parent != oldParent || b.ParentSHA != oldParentSHA {
+		t.Fatalf("b metadata = (%s, %s), want (%s, %s)", b.Parent, b.ParentSHA, oldParent, oldParentSHA)
+	}
+	if s.PendingReparent == nil || s.PendingReparent.Branch != "b" || s.PendingReparent.Parent != "c" || s.PendingReparent.ParentSHA != targetSHA {
+		t.Fatalf("pending reparent = %+v, want b onto c at %s", s.PendingReparent, targetSHA)
+	}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	if b.Parent != "c" || b.ParentSHA != targetSHA {
+		t.Fatalf("b metadata after continue = (%s, %s), want (c, %s)", b.Parent, b.ParentSHA, targetSHA)
+	}
+	if s.PendingReparent != nil {
+		t.Fatalf("pending reparent after continue = %+v, want nil", s.PendingReparent)
+	}
+}
+
+func TestOntoPersistsReparentBeforeRestackingDescendants(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "d")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	var saved []*State
+	env.Save = func() error {
+		saved = append(saved, cloneState(s))
+		return nil
+	}
+	f.conflictOn("d")
+
+	if _, err := Onto(env, s, "c"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto error = %v, want %v", err, ErrConflict)
+	}
+	if len(saved) == 0 {
+		t.Fatal("Onto did not save the current branch reparent before descendant restack")
+	}
+	b, _ := saved[len(saved)-1].Get("b")
+	cTip, _ := f.RevParse("c")
+	if b.Parent != "c" || b.ParentSHA != cTip {
+		t.Fatalf("saved b metadata = (%s, %s), want (c, %s)", b.Parent, b.ParentSHA, cTip)
 	}
 }
 

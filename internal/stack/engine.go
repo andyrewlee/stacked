@@ -309,6 +309,10 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 	if len(subjects) <= 1 {
 		return &OpResult{Summary: fmt.Sprintf("%s already has a single commit; nothing to squash", cur), Branch: cur}, nil
 	}
+	origTip, err := g.RevParse(branchTipRef(cur))
+	if err != nil {
+		return nil, fmt.Errorf("resolving %q before squash: %w", cur, err)
+	}
 	if message == "" {
 		message = subjects[len(subjects)-1]
 		var body []string
@@ -324,6 +328,9 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 		return nil, fmt.Errorf("resetting %q to base: %w", cur, err)
 	}
 	if err := g.Commit(message, false); err != nil {
+		if restoreErr := g.ResetSoft(origTip); restoreErr != nil {
+			return nil, fmt.Errorf("creating squashed commit on %q: %w; additionally failed to restore %q to %s: %v", cur, err, cur, origTip, restoreErr)
+		}
 		return nil, fmt.Errorf("creating squashed commit on %q: %w", cur, err)
 	}
 
@@ -372,32 +379,32 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 	}
 
 	oldBase := b.ParentSHA
-	oldParent := b.Parent
 	newParentTip, err := g.RevParse(branchTipRef(target))
 	if err != nil {
-		return nil, err
-	}
-	b.Parent = target
-	b.ParentSHA = newParentTip
-	if err := env.save(); err != nil {
-		b.Parent = oldParent
-		b.ParentSHA = oldBase
 		return nil, err
 	}
 	if err := g.RebaseOnto(newParentTip, oldBase, cur); err != nil {
 		inProgress, progressErr := g.RebaseInProgress()
 		if progressErr == nil && inProgress {
+			s.PendingReparent = &PendingReparent{Branch: cur, Parent: target, ParentSHA: newParentTip}
+			if saveErr := env.save(); saveErr != nil {
+				s.PendingReparent = nil
+				return nil, fmt.Errorf("moving %q onto %q: %w; additionally failed to record pending reparent: %v", cur, target, ErrConflict, saveErr)
+			}
 			return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
-		}
-		b.Parent = oldParent
-		b.ParentSHA = oldBase
-		if saveErr := env.save(); saveErr != nil {
-			return nil, fmt.Errorf("moving %q onto %q: %w; additionally failed to restore metadata: %v", cur, target, err, saveErr)
 		}
 		if progressErr != nil {
 			return nil, fmt.Errorf("checking rebase state after moving %q onto %q failed: %v (original error: %w)", cur, target, progressErr, err)
 		}
 		return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, err)
+	}
+	b.Parent = target
+	b.ParentSHA = newParentTip
+	if s.PendingReparent != nil && s.PendingReparent.Branch == cur {
+		s.PendingReparent = nil
+	}
+	if err := env.save(); err != nil {
+		return nil, err
 	}
 
 	rebased, err := s.RestackUpstack(env, cur)
@@ -605,6 +612,10 @@ func cloneState(s *State) *State {
 		b := *branch
 		cp.Branches[name] = &b
 	}
+	if s.PendingReparent != nil {
+		p := *s.PendingReparent
+		cp.PendingReparent = &p
+	}
 	return cp
 }
 
@@ -630,7 +641,16 @@ func Continue(env Env, s *State) (*OpResult, error) {
 
 	// The just-finished branch now sits on its parent's current tip.
 	if conflicted != "" {
-		if b, ok := s.Get(conflicted); ok {
+		if pending := s.PendingReparent; pending != nil && pending.Branch == conflicted {
+			if b, ok := s.Get(conflicted); ok {
+				b.Parent = pending.Parent
+				b.ParentSHA = pending.ParentSHA
+			}
+			s.PendingReparent = nil
+			if err := env.save(); err != nil {
+				return nil, err
+			}
+		} else if b, ok := s.Get(conflicted); ok {
 			tip, err := g.RevParse(branchTipRef(b.Parent))
 			if err != nil {
 				return nil, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
