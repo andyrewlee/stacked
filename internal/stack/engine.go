@@ -102,6 +102,12 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	}
 	if message != "" {
 		if err := g.Commit(message, all); err != nil {
+			if checkoutErr := g.Checkout(cur); checkoutErr != nil {
+				return nil, fmt.Errorf("committing on %q: %w; additionally failed to restore %q: %v", name, err, cur, checkoutErr)
+			}
+			if deleteErr := g.DeleteBranch(name, true); deleteErr != nil {
+				return nil, fmt.Errorf("committing on %q: %w; additionally failed to delete new branch %q: %v", name, err, name, deleteErr)
+			}
 			return nil, fmt.Errorf("committing on %q: %w", name, err)
 		}
 	}
@@ -725,13 +731,13 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 		if !merged {
 			continue
 		}
+		if err := g.DeleteBranch(name, true); err != nil {
+			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)
+		}
 		for _, child := range s.Children(name) {
 			child.Parent = b.Parent
 		}
 		s.Untrack(name)
-		if err := g.DeleteBranch(name, true); err != nil {
-			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)
-		}
 		deleted = append(deleted, name)
 		if err := env.save(); err != nil {
 			return deleted, fmt.Errorf("save state after pruning %q: %w", name, err)

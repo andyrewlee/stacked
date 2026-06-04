@@ -508,6 +508,26 @@ func TestCreateRejectsUntrackedParentBeforeBranchCreation(t *testing.T) {
 	}
 }
 
+func TestCreateRemovesBranchWhenInitialCommitFails(t *testing.T) {
+	f, s, env := newEnvState()
+	f.staged = true
+	errBoom := errors.New("commit hook rejected")
+	f.commitErr = errBoom
+
+	if _, err := Create(env, s, "a", "msg", false); !errors.Is(err, errBoom) {
+		t.Fatalf("Create error = %v, want %v", err, errBoom)
+	}
+	if f.BranchExists("a") {
+		t.Fatal("failed create left branch a behind")
+	}
+	if s.IsTracked("a") {
+		t.Fatal("failed create tracked branch a")
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main", f.head)
+	}
+}
+
 func TestCreateValidatesStagedStateBeforeBranchCreation(t *testing.T) {
 	f, s, env := newEnvState()
 	if _, err := Create(env, s, "all-no-message", "", true); err == nil {
@@ -563,5 +583,31 @@ func TestDeleteNonForceChecksMergedIntoParent(t *testing.T) {
 	}
 	if f.head != "b" {
 		t.Fatalf("HEAD = %q, want b restored", f.head)
+	}
+}
+
+func TestPruneMergedDoesNotMutateStateWhenDeleteFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	errBoom := errors.New("branch checked out elsewhere")
+	f.deleteErr["a"] = errBoom
+
+	if _, err := PruneMerged(env, s); !errors.Is(err, errBoom) {
+		t.Fatalf("PruneMerged error = %v, want %v", err, errBoom)
+	}
+	if !s.IsTracked("a") {
+		t.Fatal("failed prune untracked a")
+	}
+	b, _ := s.Get("b")
+	if b.Parent != "a" {
+		t.Fatalf("b parent = %q, want a", b.Parent)
+	}
+	if !f.BranchExists("a") {
+		t.Fatal("failed prune deleted branch a")
 	}
 }
