@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"sort"
@@ -37,7 +38,7 @@ func runUndo(args []string) error {
 	}
 	defer release()
 
-	entry, ok, err := stack.PopUndo()
+	entry, ok, err := stack.PeekUndo()
 	if err != nil {
 		return err
 	}
@@ -45,6 +46,55 @@ func runUndo(args []string) error {
 		return emit(asJSON, struct {
 			Undone bool `json:"undone"`
 		}{false}, func() { out("nothing to undo\n") })
+	}
+
+	var prev stack.State
+	if err := json.Unmarshal(entry.State, &prev); err != nil {
+		return fmt.Errorf("parsing undo state: %w", err)
+	}
+	checkoutAfterRestore := ""
+	if current, err := stack.Load(); err == nil && entry.LocalBranches != nil {
+		existed := map[string]bool{}
+		for _, name := range entry.LocalBranches {
+			existed[name] = true
+		}
+		candidates := map[string]bool{current.Trunk: true}
+		for name := range current.Branches {
+			candidates[name] = true
+		}
+		var extra []string
+		for name := range candidates {
+			if !existed[name] && git.BranchExists(name) {
+				extra = append(extra, name)
+			}
+		}
+		sort.Strings(extra)
+		for _, name := range extra {
+			target := prev.Trunk
+			if b, ok := current.Get(name); ok && git.BranchExists(b.Parent) {
+				target = b.Parent
+			}
+			if cur, err := git.CurrentBranch(); err == nil && cur == name {
+				if entry.Label == "rename" {
+					checkoutAfterRestore = restoredRenameTarget(&prev, current, name)
+				}
+				if !git.BranchExists(target) {
+					sha, ok := entry.Refs[target]
+					if !ok {
+						return fmt.Errorf("cannot restore checkout target %q before deleting %q", target, name)
+					}
+					if err := git.UpdateRef("refs/heads/"+target, sha); err != nil {
+						return fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
+					}
+				}
+				if err := git.Checkout(target); err != nil {
+					return fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
+				}
+			}
+			if err := git.DeleteBranch(name, true); err != nil {
+				return fmt.Errorf("deleting branch %q created by undone command: %w", name, err)
+			}
+		}
 	}
 
 	if err := stack.RestoreState(entry.State); err != nil {
@@ -62,6 +112,14 @@ func runUndo(args []string) error {
 			return fmt.Errorf("restoring branch %q: %w", name, err)
 		}
 	}
+	if checkoutAfterRestore != "" {
+		if err := git.Checkout(checkoutAfterRestore); err != nil {
+			return fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)
+		}
+	}
+	if err := stack.DropUndo(); err != nil {
+		return fmt.Errorf("dropping undo entry: %w", err)
+	}
 
 	if names == nil {
 		names = []string{}
@@ -78,4 +136,16 @@ func runUndo(args []string) error {
 		}
 		out("note: your working tree was not modified; run `git status` to review.\n")
 	})
+}
+
+func restoredRenameTarget(prev, current *stack.State, deleted string) string {
+	if current.Trunk == deleted && prev.Trunk != current.Trunk {
+		return prev.Trunk
+	}
+	for name := range prev.Branches {
+		if !current.IsTracked(name) {
+			return name
+		}
+	}
+	return ""
 }

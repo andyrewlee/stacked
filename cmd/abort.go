@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"stacked/internal/git"
+	"stacked/internal/stack"
 )
 
 func init() {
@@ -42,8 +43,19 @@ func runAbort(args []string) error {
 	if !inProgress {
 		return fmt.Errorf("no rebase in progress; nothing to abort")
 	}
+	conflicted, _ := git.RebaseHeadName()
 	if err := git.RebaseAbort(); err != nil {
 		return fmt.Errorf("aborting rebase: %w", err)
+	}
+	if s, err := stack.Load(); err == nil && s.PendingReparent != nil {
+		if conflicted == "" || s.PendingReparent.Branch == conflicted {
+			s.PendingReparent = nil
+			if err := s.Save(); err != nil {
+				return fmt.Errorf("saving stack state after abort: %w", err)
+			}
+		}
+	} else if err != nil && err != stack.ErrNotInitialized {
+		return err
 	}
 
 	payload := struct {

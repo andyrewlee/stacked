@@ -3,6 +3,7 @@ package cmd
 import (
 	"flag"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"stacked/internal/git"
@@ -87,7 +88,7 @@ func runSubmit(args []string) error {
 
 	for _, name := range stackBranches {
 		if !dryRun {
-			if err := git.Push(name, true); err != nil {
+			if err := git.PushRemote(remote, name, true); err != nil {
 				return fmt.Errorf("pushing %q: %w", name, err)
 			}
 		}
@@ -142,17 +143,22 @@ func remoteToHTTPS(raw string) (webURL, host string) {
 			return "https://" + host + "/" + rest[i+1:], host
 		}
 	case strings.HasPrefix(raw, "ssh://"):
-		rest := strings.TrimPrefix(strings.TrimPrefix(raw, "ssh://"), "git@")
-		if i := strings.Index(rest, "/"); i >= 0 {
-			host = rest[:i]
-			return "https://" + rest, host
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || u.Path == "" {
+			return "", ""
 		}
+		host = u.Host
+		return "https://" + host + strings.TrimSuffix(u.Path, ".git"), host
 	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
-		noScheme := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
-		if i := strings.Index(noScheme, "/"); i >= 0 {
-			host = noScheme[:i]
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return "", ""
 		}
-		return raw, host
+		u.User = nil
+		u.Path = strings.TrimSuffix(u.Path, ".git")
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String(), u.Host
 	}
 	return "", ""
 }

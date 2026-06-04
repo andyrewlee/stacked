@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"stacked/internal/git"
+	"stacked/internal/stack"
 )
 
 // captureStdout swaps os.Stdout for a pipe while fn runs and returns everything
@@ -437,11 +438,19 @@ func TestAbortRestoresState(t *testing.T) {
 	if inProgress, _ := git.RebaseInProgress(); !inProgress {
 		t.Fatalf("expected a rebase in progress")
 	}
+	s := stateT(t)
+	s.PendingReparent = &stack.PendingReparent{Branch: "feat-b", Parent: "main", ParentSHA: "pending"}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
 	if err := runAbort(nil); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
 	if inProgress, _ := git.RebaseInProgress(); inProgress {
 		t.Fatalf("rebase still in progress after abort")
+	}
+	if s := stateT(t); s.PendingReparent != nil {
+		t.Fatalf("pending reparent after abort = %+v, want nil", s.PendingReparent)
 	}
 }
 
@@ -496,6 +505,32 @@ func TestSubmitDryRun(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestSubmitUsesSelectedRemote(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	upstream := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", upstream)
+	mustRun(t, "git", "remote", "add", "upstream", upstream)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	if err := runSubmit([]string{"--remote", "upstream"}); err != nil {
+		t.Fatalf("submit --remote upstream: %v", err)
+	}
+	if out := mustRun(t, "git", "--git-dir", upstream, "rev-parse", "--verify", "refs/heads/feat-a"); out == "" {
+		t.Fatal("feat-a was not pushed to upstream")
+	}
+}
+
+func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
+	webURL, host := remoteToHTTPS("https://TOKEN@example.com/owner/repo.git?access_token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("credential URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "TOKEN") || strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "frag") || strings.Contains(host, "TOKEN") {
+		t.Fatalf("credential leaked in converted remote: %q %q", webURL, host)
 	}
 }
 
@@ -699,6 +734,149 @@ func TestCheckoutUntrackedError(t *testing.T) {
 	mustInit(t)
 	if err := runCheckout([]string{"ghost"}); err == nil {
 		t.Fatalf("expected error checking out an untracked branch")
+	}
+}
+
+// --- repair / undo ---------------------------------------------------------
+
+func TestRepairInvalidParentUsesMergeBase(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	base, _ := git.MergeBase("main", "feat-a")
+	mustCheckout(t, "main")
+	write(t, "advance.txt", "advance\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "advance main")
+
+	s := stateT(t)
+	a, _ := s.Get("feat-a")
+	a.Parent = "missing-parent"
+	a.ParentSHA = "missing"
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runRepair(nil); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	a, _ = stateT(t).Get("feat-a")
+	if a.Parent != "main" || a.ParentSHA != base {
+		t.Fatalf("repaired feat-a = (%s, %s), want (main, %s)", a.Parent, a.ParentSHA, base)
+	}
+}
+
+func TestUndoDeletesCreatedBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo create: %v", err)
+	}
+	if git.BranchExists("feat-b") {
+		t.Fatal("undo left created branch feat-b behind")
+	}
+	if stateT(t).IsTracked("feat-b") {
+		t.Fatal("undo left feat-b tracked")
+	}
+	if !stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo removed parent branch feat-a from state")
+	}
+	if got := curBranch(t); got != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a", got)
+	}
+}
+
+func TestUndoTrackKeepsExistingBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "checkout", "-q", "-b", "loose")
+	write(t, "loose.txt", "loose\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "loose")
+	if err := runTrack(nil); err != nil {
+		t.Fatalf("track loose: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo track: %v", err)
+	}
+	if !git.BranchExists("loose") {
+		t.Fatal("undo track deleted pre-existing branch loose")
+	}
+	if stateT(t).IsTracked("loose") {
+		t.Fatal("undo track left loose tracked")
+	}
+	if got := curBranch(t); got != "loose" {
+		t.Fatalf("HEAD = %q, want loose", got)
+	}
+}
+
+func TestUndoDeletesRenamedTrunkBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	if err := runRename([]string{"master"}); err != nil {
+		t.Fatalf("rename trunk: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo rename trunk: %v", err)
+	}
+	if git.BranchExists("master") {
+		t.Fatal("undo left renamed trunk branch master behind")
+	}
+	if !git.BranchExists("main") {
+		t.Fatal("undo did not restore main")
+	}
+	if stateT(t).Trunk != "main" {
+		t.Fatalf("trunk = %q, want main", stateT(t).Trunk)
+	}
+	if got := curBranch(t); got != "main" {
+		t.Fatalf("HEAD = %q, want main", got)
+	}
+}
+
+func TestUndoCurrentBranchRenameChecksOutRestoredName(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runRename([]string{"renamed"}); err != nil {
+		t.Fatalf("rename current branch: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo rename: %v", err)
+	}
+	if git.BranchExists("renamed") {
+		t.Fatal("undo left renamed branch behind")
+	}
+	if !git.BranchExists("feat-a") {
+		t.Fatal("undo did not restore feat-a")
+	}
+	if got := curBranch(t); got != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a", got)
+	}
+}
+
+func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "stacked", "state.json"), []byte("{bad json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo with malformed current state: %v", err)
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo did not restore the previous state snapshot")
 	}
 }
 

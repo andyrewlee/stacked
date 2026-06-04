@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -336,6 +337,24 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := Push("main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+}
+
+func TestLocalBranchesUsesFullHeadRefs(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "checkout", "-q", "-b", "release")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "tag", "release", "HEAD")
+
+	branches, err := LocalBranches()
+	if err != nil {
+		t.Fatalf("LocalBranches: %v", err)
+	}
+	if !slices.Contains(branches, "release") {
+		t.Fatalf("LocalBranches = %v, want release", branches)
+	}
+	if slices.Contains(branches, "heads/release") {
+		t.Fatalf("LocalBranches returned ambiguous short ref: %v", branches)
 	}
 }
 

@@ -83,7 +83,7 @@ func runRepair(args []string) error {
 		// Parent no longer valid: re-parent onto the trunk.
 		if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !git.BranchExists(b.Parent)) {
 			b.Parent = s.Trunk
-			b.ParentSHA = trunkTip
+			b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
 			fixes = append(fixes, fmt.Sprintf("re-parented %s onto trunk (its parent was invalid)", name))
 			continue
 		}
@@ -91,7 +91,7 @@ func runRepair(args []string) error {
 		// Cycle: break it by re-parenting onto the trunk.
 		if cyclePath(s, name) != "" {
 			b.Parent = s.Trunk
-			b.ParentSHA = trunkTip
+			b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
 			fixes = append(fixes, fmt.Sprintf("broke a parent cycle at %s (re-parented onto trunk)", name))
 		}
 	}
@@ -119,4 +119,11 @@ func runRepair(args []string) error {
 		}
 		out("run `st restack` to rebase any re-parented branches onto their new parents.\n")
 	})
+}
+
+func repairedParentSHA(trunk, branch, fallback string) string {
+	if sha, err := git.MergeBase(trunk, branch); err == nil {
+		return sha
+	}
+	return fallback
 }
