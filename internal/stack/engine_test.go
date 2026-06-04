@@ -167,6 +167,146 @@ func TestEngineTrackUntrackRename(t *testing.T) {
 	}
 }
 
+func TestTrackBranchInfersStaleTrackedAncestorAfterTrunkAdvances(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("manual")
+
+	if _, err := TrackBranch(env, s, ""); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	if mb, _ := s.Get("manual"); mb.Parent != "a" {
+		t.Fatalf("manual parent=%q, want stale tracked ancestor a", mb.Parent)
+	}
+}
+
+func TestTrackBranchKeepsTrunkParentWhenTrackedAncestorAlreadyMerged(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("manual")
+
+	if _, err := TrackBranch(env, s, ""); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	if mb, _ := s.Get("manual"); mb.Parent != "main" {
+		t.Fatalf("manual parent=%q, want main", mb.Parent)
+	}
+}
+
+func TestTrackBranchKeepsTrunkParentWhenMergedAncestorAndTrunkAdvanced(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("manual")
+
+	if _, err := TrackBranch(env, s, ""); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	if mb, _ := s.Get("manual"); mb.Parent != "main" {
+		t.Fatalf("manual parent=%q, want main", mb.Parent)
+	}
+}
+
+func TestUntrackPreservesOldBaseForChildren(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	a, _ := s.Get("a")
+	oldBase := a.ParentSHA
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+
+	if _, err := UntrackBranch(env, s, "a"); err != nil {
+		t.Fatalf("untrack: %v", err)
+	}
+	b, _ := s.Get("b")
+	if b.Parent != "main" || b.ParentSHA != oldBase {
+		t.Fatalf("b metadata = (%s, %s), want (main, %s)", b.Parent, b.ParentSHA, oldBase)
+	}
+}
+
+func TestUntrackMergedParentKeepsChildBase(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	bBefore, _ := s.Get("b")
+	oldChildBase := bBefore.ParentSHA
+	if err := f.ForceBranch("main", oldChildBase); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UntrackBranch(env, s, "a"); err != nil {
+		t.Fatalf("untrack: %v", err)
+	}
+	b, _ := s.Get("b")
+	if b.Parent != "main" || b.ParentSHA != oldChildBase {
+		t.Fatalf("b metadata = (%s, %s), want (main, %s)", b.Parent, b.ParentSHA, oldChildBase)
+	}
+}
+
+func TestUntrackLeafDoesNotRequireLiveGitRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mainTip, _ := f.RevParse("main")
+	s.Track("ghost", "main", mainTip)
+
+	if _, err := UntrackBranch(env, s, "ghost"); err != nil {
+		t.Fatalf("untrack leaf with missing ref: %v", err)
+	}
+	if s.IsTracked("ghost") {
+		t.Fatal("ghost still tracked after untrack")
+	}
+}
+
+func TestUntrackMissingParentRefReparentsChildrenFromRecordedBase(t *testing.T) {
+	f, s, env := newEnvState()
+	mainTip, _ := f.RevParse("main")
+	s.Track("ghost", "main", mainTip)
+	s.Track("child", "ghost", "ghost-tip")
+
+	if _, err := UntrackBranch(env, s, "ghost"); err != nil {
+		t.Fatalf("untrack missing parent ref: %v", err)
+	}
+	child, _ := s.Get("child")
+	if child.Parent != "main" || child.ParentSHA != mainTip {
+		t.Fatalf("child metadata = (%s, %s), want (main, %s)", child.Parent, child.ParentSHA, mainTip)
+	}
+}
+
 func TestEngineModifyRestacksDescendants(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

@@ -529,6 +529,11 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 
 	rebased, err := RestackAll(env, s)
 	if err != nil {
+		if !errors.Is(err, ErrConflict) {
+			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
+				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+			}
+		}
 		return nil, err
 	}
 	if err := env.save(); err != nil {
@@ -766,13 +771,23 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 		if !ancestor {
 			continue
 		}
-		bestIsAncestor, err := g.IsAncestor(best, c)
+		mergedIntoTrunk, err := g.IsAncestor(c, s.Trunk)
 		if err != nil {
-			return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", best, c, err)
+			return "", fmt.Errorf("check whether %q is merged into %q: %w", c, s.Trunk, err)
 		}
-		if bestIsAncestor {
-			best = c
+		if mergedIntoTrunk {
+			continue
 		}
+		if best != s.Trunk {
+			bestIsAncestor, err := g.IsAncestor(best, c)
+			if err != nil {
+				return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", best, c, err)
+			}
+			if !bestIsAncestor {
+				continue
+			}
+		}
+		best = c
 	}
 	return best, nil
 }
@@ -795,12 +810,24 @@ func UntrackBranch(env Env, s *State, name string) (*OpResult, error) {
 	if !ok {
 		return nil, fmt.Errorf("branch %q is not tracked", name)
 	}
-	for _, child := range s.Children(name) {
-		sha, err := g.RevParse(branchTipRef(b.Parent))
+	children := s.Children(name)
+	mergedIntoParent := false
+	if len(children) > 0 {
+		var err error
+		mergedIntoParent, err = g.IsAncestor(name, b.Parent)
 		if err != nil {
-			return nil, fmt.Errorf("resolving new parent %q for %q: %w", b.Parent, child.Name, err)
+			if g.BranchExists(name) {
+				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, b.Parent, err)
+			}
+			mergedIntoParent = false
 		}
-		s.Track(child.Name, b.Parent, sha)
+	}
+	for _, child := range children {
+		parentSHA := b.ParentSHA
+		if mergedIntoParent {
+			parentSHA = child.ParentSHA
+		}
+		s.Track(child.Name, b.Parent, parentSHA)
 	}
 	s.Untrack(name)
 	if err := env.save(); err != nil {

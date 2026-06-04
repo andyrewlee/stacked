@@ -197,6 +197,28 @@ func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {
 	}
 }
 
+func TestSyncRestoresOriginalBranchWhenRestackFailsWithoutConflict(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("new-a")
+	errBoom := errors.New("pre-rebase hook rejected")
+	f.rebaseErr["feat-b"] = errBoom
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false); !errors.Is(err, errBoom) {
+		t.Fatalf("Sync error = %v, want %v", err, errBoom)
+	}
+	if f.head != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a restored", f.head)
+	}
+}
+
 func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
