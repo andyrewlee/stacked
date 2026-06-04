@@ -713,6 +713,7 @@ func TestSyncFastForwardsTrunk(t *testing.T) {
 	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
 	mustRun(t, "git", "remote", "add", "origin", remoteDir)
 	mustRun(t, "git", "push", "-q", "-u", "origin", "main")
+	mustRun(t, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	// Build a stack on the local main.
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
