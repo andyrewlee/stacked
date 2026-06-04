@@ -374,10 +374,10 @@ func RemoteURL(remote string) (string, error) {
 	return Run("remote", "get-url", remote)
 }
 
-// CommitSubjects returns the subject lines of the commits in the range
-// base..branch, newest first.
+// CommitSubjects returns the subject lines of the commits in the local branch
+// range base..branch, newest first.
 func CommitSubjects(base, branch string) ([]string, error) {
-	out, err := Run("log", "--format=%s", base+".."+branch)
+	out, err := Run("log", "--format=%s", "refs/heads/"+base+".."+"refs/heads/"+branch)
 	if err != nil {
 		return nil, err
 	}

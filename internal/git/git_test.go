@@ -215,6 +215,7 @@ func TestCommitSubjects(t *testing.T) {
 	writeFile(t, "g.txt", "g\n")
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "second subject")
+	mustGit(t, "tag", "feat", "main")
 
 	subs, err := CommitSubjects("main", "feat")
 	if err != nil {

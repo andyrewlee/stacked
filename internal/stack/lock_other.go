@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !darwin && !dragonfly && !freebsd && !illumos && !linux && !netbsd && !openbsd
 
 package stack
 
