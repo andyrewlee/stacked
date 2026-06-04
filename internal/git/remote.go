@@ -42,7 +42,7 @@ func (RemoteShell) FastForward(trunk, remote string) (string, error) {
 }
 
 // isAlreadyUpToDate reports whether a failed ff-only merge simply had nothing to do.
-func isAlreadyUpToDate(out string, err error) bool {
-	hay := strings.ToLower(out + " " + err.Error())
+func isAlreadyUpToDate(out string, _ error) bool {
+	hay := strings.ToLower(out)
 	return strings.Contains(hay, "already up to date") || strings.Contains(hay, "up-to-date")
 }

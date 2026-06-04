@@ -12,15 +12,16 @@ import (
 func TestIsAlreadyUpToDate(t *testing.T) {
 	cases := []struct {
 		out  string
+		err  error
 		want bool
 	}{
-		{"Already up to date.", true},
-		{"Already up-to-date.", true},
-		{"Updating abc..def Fast-forward", false},
-		{"", false},
+		{"Already up to date.", errors.New("boom"), true},
+		{"Already up-to-date.", errors.New("boom"), true},
+		{"Updating abc..def Fast-forward", errors.New("boom"), false},
+		{"", errors.New("git merge --ff-only refs/remotes/origin/up-to-date: fatal: missing ref"), false},
 	}
 	for _, c := range cases {
-		if got := isAlreadyUpToDate(c.out, errors.New("boom")); got != c.want {
+		if got := isAlreadyUpToDate(c.out, c.err); got != c.want {
 			t.Errorf("isAlreadyUpToDate(%q) = %v, want %v", c.out, got, c.want)
 		}
 	}
@@ -307,6 +308,27 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := Push("main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+}
+
+func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
+	newRepo(t)
+	bare := t.TempDir()
+	mustGit(t, "init", "-q", "--bare", bare)
+	mustGit(t, "remote", "add", "origin", bare)
+	mustGit(t, "tag", "main", "HEAD")
+
+	if err := Push("main", false); err != nil {
+		t.Fatalf("Push with same-named tag: %v", err)
+	}
+	want := mustGit(t, "rev-parse", "refs/heads/main")
+	gotCmd := exec.Command("git", "--git-dir", bare, "rev-parse", "refs/heads/main")
+	gotOut, err := gotCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve pushed branch: %v\n%s", err, gotOut)
+	}
+	if got := strings.TrimSpace(string(gotOut)); got != want {
+		t.Fatalf("pushed branch = %q, want %q", got, want)
 	}
 }
 

@@ -266,7 +266,8 @@ func Push(branch string, force bool) error {
 	if force {
 		args = append(args, "--force-with-lease")
 	}
-	args = append(args, "origin", branch)
+	refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+	args = append(args, "origin", refspec)
 	_, err := Run(args...)
 	return err
 }
