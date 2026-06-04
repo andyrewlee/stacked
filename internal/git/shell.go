@@ -19,8 +19,10 @@ func (Shell) AmendMessage(message string, all bool) error  { return AmendMessage
 func (Shell) Add(paths ...string) error                    { return Add(paths...) }
 func (Shell) RenameBranch(oldName, newName string) error   { return RenameBranch(oldName, newName) }
 func (Shell) MergeBase(a, b string) (string, error)        { return MergeBase(a, b) }
-func (Shell) IsAncestor(ancestor, descendant string) bool  { return IsAncestor(ancestor, descendant) }
-func (Shell) CurrentBranch() (string, error)               { return CurrentBranch() }
+func (Shell) IsAncestor(ancestor, descendant string) (bool, error) {
+	return IsAncestor(ancestor, descendant)
+}
+func (Shell) CurrentBranch() (string, error) { return CurrentBranch() }
 func (Shell) CommitSubjects(base, br string) ([]string, error) {
 	return CommitSubjects(base, br)
 }

@@ -18,8 +18,9 @@ func (RemoteShell) FastForward(trunk, remote string) (string, error) {
 	if err := Checkout(trunk); err != nil {
 		return "", fmt.Errorf("checkout trunk %q: %w", trunk, err)
 	}
-	upstream := remote + "/" + trunk
-	before, err := RevParse(trunk)
+	localTrunk := "refs/heads/" + trunk
+	upstream := "refs/remotes/" + remote + "/" + trunk
+	before, err := RevParse(localTrunk)
 	if err != nil {
 		return "", fmt.Errorf("resolve trunk %q: %w", trunk, err)
 	}
@@ -30,7 +31,7 @@ func (RemoteShell) FastForward(trunk, remote string) (string, error) {
 		}
 		return "", fmt.Errorf("fast-forward %q to %q: %w", trunk, upstream, err)
 	}
-	after, err := RevParse(trunk)
+	after, err := RevParse(localTrunk)
 	if err != nil {
 		return "", fmt.Errorf("resolve trunk %q: %w", trunk, err)
 	}

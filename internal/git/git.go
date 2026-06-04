@@ -281,10 +281,24 @@ func MergeBase(a, b string) (string, error) {
 	return Run("merge-base", a, b)
 }
 
-// IsAncestor reports whether ancestor is an ancestor of descendant. It returns
-// false (without surfacing an error) when the relationship does not hold.
-func IsAncestor(ancestor, descendant string) bool {
-	return ok("merge-base", "--is-ancestor", ancestor, descendant)
+// IsAncestor reports whether ancestor is an ancestor of descendant. A valid
+// negative answer returns false, nil; invalid refs and other git failures return
+// an error.
+func IsAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	msg := strings.TrimSpace(string(out))
+	if msg != "" {
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s: %w", ancestor, descendant, msg, err)
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestor, descendant, err)
 }
 
 // GitDir returns the absolute path to the repository's .git directory.

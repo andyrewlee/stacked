@@ -19,7 +19,7 @@ type Git interface {
 	Add(paths ...string) error
 	RenameBranch(oldName, newName string) error
 	MergeBase(a, b string) (string, error)
-	IsAncestor(ancestor, descendant string) bool
+	IsAncestor(ancestor, descendant string) (bool, error)
 	CurrentBranch() (string, error)
 	CommitSubjects(base, branch string) ([]string, error)
 	HasStagedChanges() (bool, error)

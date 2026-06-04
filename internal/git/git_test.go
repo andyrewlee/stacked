@@ -170,11 +170,16 @@ func TestMergeBaseAndAncestor(t *testing.T) {
 	if mb != base {
 		t.Fatalf("MergeBase = %q, want %s", mb, base)
 	}
-	if !IsAncestor("main", "feat") {
-		t.Fatalf("main should be an ancestor of feat")
+	ok, err := IsAncestor("main", "feat")
+	if err != nil || !ok {
+		t.Fatalf("IsAncestor(main, feat) = %v, %v; want true, nil", ok, err)
 	}
-	if IsAncestor("feat", "main") {
-		t.Fatalf("feat should not be an ancestor of main")
+	ok, err = IsAncestor("feat", "main")
+	if err != nil || ok {
+		t.Fatalf("IsAncestor(feat, main) = %v, %v; want false, nil", ok, err)
+	}
+	if _, err := IsAncestor("definitely-not-a-ref", "main"); err == nil {
+		t.Fatalf("IsAncestor with an invalid ref returned nil error")
 	}
 }
 
@@ -302,6 +307,44 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := Push("main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+}
+
+func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
+	newRepo(t)
+	base := mustGit(t, "rev-parse", "HEAD")
+	bare := t.TempDir()
+	mustGit(t, "init", "-q", "--bare", bare)
+	mustGit(t, "remote", "add", "origin", bare)
+	if err := Push("main", false); err != nil {
+		t.Fatalf("initial Push: %v", err)
+	}
+
+	mustGit(t, "checkout", "-q", "-b", "decoy", base)
+	writeFile(t, "decoy.txt", "decoy\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "decoy")
+	decoy := mustGit(t, "rev-parse", "HEAD")
+
+	mustGit(t, "checkout", "-q", "main")
+	writeFile(t, "remote.txt", "remote\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "remote")
+	remoteTip := mustGit(t, "rev-parse", "HEAD")
+	if err := Push("main", false); err != nil {
+		t.Fatalf("remote Push: %v", err)
+	}
+	if err := Fetch("origin"); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	mustGit(t, "reset", "--hard", base)
+	mustGit(t, "update-ref", "refs/heads/origin/main", decoy)
+	if _, err := (RemoteShell{}).FastForward("main", "origin"); err != nil {
+		t.Fatalf("FastForward: %v", err)
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
+		t.Fatalf("FastForward moved main to %q, want remote tracking tip %q", got, remoteTip)
 	}
 }
 
