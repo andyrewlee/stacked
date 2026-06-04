@@ -328,6 +328,25 @@ func TestEngineModifyRestacksDescendants(t *testing.T) {
 	}
 }
 
+func TestModifyRejectsUnstagedChangesBeforeRestackingDescendants(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.RevParse("a")
+	f.clean = false
+
+	if _, err := Modify(env, s, "amend", false, false); !errors.Is(err, ErrDirty) {
+		t.Fatalf("Modify dirty error = %v, want ErrDirty", err)
+	}
+	after, _ := f.RevParse("a")
+	if after != before {
+		t.Fatalf("a tip changed to %s, want %s", after, before)
+	}
+}
+
 func TestModifyRejectsUntrackedBranch(t *testing.T) {
 	f, s, env := newEnvState()
 	if err := f.CreateBranch("scratch"); err != nil {

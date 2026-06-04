@@ -313,4 +313,7 @@ func (f *fakeGit) Add(_ ...string) error {
 }
 
 func (f *fakeGit) HasStagedChanges() (bool, error) { return f.staged, nil }
-func (f *fakeGit) IsClean() (bool, error)          { return f.clean && !f.staged, nil }
+func (f *fakeGit) HasUnstagedChanges() (bool, error) {
+	return !f.clean && !f.staged, nil
+}
+func (f *fakeGit) IsClean() (bool, error) { return f.clean && !f.staged, nil }

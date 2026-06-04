@@ -27,6 +27,9 @@ func (Shell) CommitSubjects(base, br string) ([]string, error) {
 	return CommitSubjects(base, br)
 }
 func (Shell) HasStagedChanges() (bool, error) { return HasStagedChanges() }
+func (Shell) HasUnstagedChanges() (bool, error) {
+	return HasUnstagedChanges()
+}
 func (Shell) IsClean() (bool, error)          { return IsClean() }
 func (Shell) RebaseInProgress() (bool, error) { return RebaseInProgress() }
 func (Shell) RebaseHeadName() (string, error) { return RebaseHeadName() }

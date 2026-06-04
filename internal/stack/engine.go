@@ -131,6 +131,15 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 			return nil, fmt.Errorf("staging changes on %q: %w", cur, err)
 		}
 	}
+	if len(s.Descendants(cur)) > 0 {
+		unstaged, err := g.HasUnstagedChanges()
+		if err != nil {
+			return nil, fmt.Errorf("checking unstaged changes: %w", err)
+		}
+		if unstaged {
+			return nil, ErrDirty
+		}
+	}
 
 	var action string
 	switch {

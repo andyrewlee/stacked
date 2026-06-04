@@ -38,6 +38,17 @@ func TestRestackPlanListsOutOfDateAndDescendants(t *testing.T) {
 	}
 }
 
+func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RestackPlan(env, s); err == nil {
+		t.Fatal("RestackPlan on untracked branch should error")
+	}
+}
+
 func TestSyncPlanPreviewsPrune(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

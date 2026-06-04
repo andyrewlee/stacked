@@ -164,6 +164,25 @@ func HasStagedChanges() (bool, error) {
 	return false, fmt.Errorf("git diff --cached --quiet: %w", err)
 }
 
+// HasUnstagedChanges reports whether the working tree has unstaged tracked
+// changes or untracked files.
+func HasUnstagedChanges() (bool, error) {
+	cmd := exec.Command("git", "diff", "--quiet")
+	err := cmd.Run()
+	if err == nil {
+		out, err := Run("ls-files", "--others", "--exclude-standard")
+		if err != nil {
+			return false, err
+		}
+		return out != "", nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, fmt.Errorf("git diff --quiet: %w", err)
+}
+
 // Add stages the given paths. When no paths are provided it stages all changes
 // in the repository ("git add -A").
 func Add(paths ...string) error {

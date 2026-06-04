@@ -99,6 +99,9 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if start != s.Trunk && !s.IsTracked(start) {
+		return nil, fmt.Errorf("branch %q is not tracked", start)
+	}
 	plan, err := s.restackPlan(env.Git, start)
 	if err != nil {
 		return nil, err
