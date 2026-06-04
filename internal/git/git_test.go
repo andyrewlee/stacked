@@ -232,6 +232,9 @@ func TestCommitSubjects(t *testing.T) {
 	if len(subs) != 2 || subs[0] != "second subject" || subs[1] != "first subject" {
 		t.Fatalf("CommitSubjects = %v, want [second, first]", subs)
 	}
+	if subs, err := CommitSubjects(mustGit(t, "rev-parse", "main"), "feat"); err != nil || len(subs) != 2 {
+		t.Fatalf("CommitSubjects with SHA base = %v err=%v, want two subjects", subs, err)
+	}
 	// Empty range returns no subjects, no error.
 	empty, err := CommitSubjects("main", "main")
 	if err != nil || len(empty) != 0 {

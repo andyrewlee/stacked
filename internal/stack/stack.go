@@ -26,6 +26,15 @@ type Branch struct {
 	ParentSHA string `json:"parentSHA"`
 }
 
+// PendingReparent records an onto operation whose rebase stopped on conflicts.
+// The normal Branch metadata remains on the old parent until `st continue`
+// completes the rebase and promotes this pending parent.
+type PendingReparent struct {
+	Branch    string `json:"branch"`
+	Parent    string `json:"parent"`
+	ParentSHA string `json:"parentSHA"`
+}
+
 // State is the complete stacked metadata for a repository: the trunk branch
 // name and the set of tracked branches keyed by branch name.
 type State struct {
@@ -33,6 +42,8 @@ type State struct {
 	Trunk string `json:"trunk"`
 	// Branches maps a branch name to its tracked metadata.
 	Branches map[string]*Branch `json:"branches"`
+	// PendingReparent is set only while an onto rebase is paused on conflicts.
+	PendingReparent *PendingReparent `json:"pendingReparent,omitempty"`
 }
 
 // Get returns the tracked Branch with the given name and whether it exists.

@@ -23,6 +23,7 @@ type Git interface {
 	CurrentBranch() (string, error)
 	CommitSubjects(base, branch string) ([]string, error)
 	HasStagedChanges() (bool, error)
+	HasUnstagedChanges() (bool, error)
 	IsClean() (bool, error)
 	RebaseInProgress() (bool, error)
 	RebaseHeadName() (string, error)
