@@ -136,7 +136,7 @@ func checkInvariants(t *testing.T, f *fakeGit, s *State, step int) {
 		if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !f.BranchExists(b.Parent)) {
 			t.Fatalf("step %d: %q has invalid parent %q", step, name, b.Parent)
 		}
-		if !f.IsAncestor(b.ParentSHA, name) {
+		if !mustFakeIsAncestor(t, f, b.ParentSHA, name) {
 			t.Fatalf("step %d: %q parentSHA is not an ancestor of its tip", step, name)
 		}
 		needs, err := s.NeedsRestack(f, name)

@@ -31,7 +31,7 @@ func TestEngineCreateTracksParent(t *testing.T) {
 	}
 	for _, n := range []string{"a", "b"} {
 		b, _ := s.Get(n)
-		if !f.IsAncestor(b.ParentSHA, n) {
+		if !mustFakeIsAncestor(t, f, b.ParentSHA, n) {
 			t.Fatalf("%s parentSHA is not an ancestor of its tip", n)
 		}
 	}
@@ -102,7 +102,7 @@ func TestEngineDeleteDropsCommits(t *testing.T) {
 	if cb, _ := s.Get("c"); cb.Parent != "a" {
 		t.Fatalf("c parent=%q, want a", cb.Parent)
 	}
-	if f.IsAncestor(bTip, "c") {
+	if mustFakeIsAncestor(t, f, bTip, "c") {
 		t.Fatal("c still contains deleted b's commit")
 	}
 	if subs, _ := f.CommitSubjects("a", "c"); len(subs) != 1 {
@@ -180,7 +180,7 @@ func TestEngineModifyRestacksDescendants(t *testing.T) {
 	if bb.ParentSHA != aTip {
 		t.Fatalf("b.ParentSHA=%s, not updated to amended a tip %s", bb.ParentSHA, aTip)
 	}
-	if !f.IsAncestor(aTip, "b") {
+	if !mustFakeIsAncestor(t, f, aTip, "b") {
 		t.Fatal("b was not rebased onto the amended a")
 	}
 }

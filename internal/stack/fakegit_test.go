@@ -3,6 +3,7 @@ package stack
 import (
 	"fmt"
 	"strconv"
+	"testing"
 )
 
 // fakeCommit is a node in the in-memory commit DAG.
@@ -224,18 +225,27 @@ func (f *fakeGit) RebaseContinue() error {
 	return f.replay(newBase, oldBase, branch)
 }
 
-func (f *fakeGit) IsAncestor(ancestor, descendant string) bool {
+func (f *fakeGit) IsAncestor(ancestor, descendant string) (bool, error) {
 	a := f.resolve(ancestor)
 	d := f.resolve(descendant)
 	if a == "" || d == "" {
-		return false
+		return false, fmt.Errorf("unknown revision in ancestry check %q..%q", ancestor, descendant)
 	}
 	for cur := d; cur != ""; cur = f.commits[cur].parent {
 		if cur == a {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func mustFakeIsAncestor(t *testing.T, f *fakeGit, ancestor, descendant string) bool {
+	t.Helper()
+	ok, err := f.IsAncestor(ancestor, descendant)
+	if err != nil {
+		t.Fatalf("IsAncestor(%q, %q): %v", ancestor, descendant, err)
+	}
+	return ok
 }
 
 func (f *fakeGit) MergeBase(a, b string) (string, error) {

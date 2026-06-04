@@ -49,7 +49,7 @@ func TestContinueResolvesConflict(t *testing.T) {
 	if bb.ParentSHA != aTip {
 		t.Fatalf("feat-b.ParentSHA = %s, want amended feat-a tip %s", bb.ParentSHA, aTip)
 	}
-	if !f.IsAncestor(aTip, "feat-b") {
+	if !mustFakeIsAncestor(t, f, aTip, "feat-b") {
 		t.Fatal("feat-b was not rebased onto the amended feat-a")
 	}
 }

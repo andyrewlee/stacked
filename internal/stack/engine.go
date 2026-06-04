@@ -503,7 +503,11 @@ func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 	var deletedList []string
 	if !noDelete {
 		for _, name := range sortedBranchNames(s) {
-			if g.IsAncestor(name, s.Trunk) {
+			merged, err := g.IsAncestor(name, s.Trunk)
+			if err != nil {
+				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, s.Trunk, err)
+			}
+			if merged {
 				deleted[name] = true
 				deletedList = append(deletedList, name)
 			}
@@ -612,7 +616,11 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 		if !ok {
 			continue
 		}
-		if !g.IsAncestor(name, trunk) {
+		merged, err := g.IsAncestor(name, trunk)
+		if err != nil {
+			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunk, err)
+		}
+		if !merged {
 			continue
 		}
 		for _, child := range s.Children(name) {
@@ -650,7 +658,11 @@ func TrackBranch(env Env, s *State, parent string) (*OpResult, error) {
 			return nil, fmt.Errorf("parent %q is not the trunk or a tracked branch", parent)
 		}
 	} else {
-		parent = inferParent(g, s, cur)
+		var err error
+		parent, err = inferParent(g, s, cur)
+		if err != nil {
+			return nil, err
+		}
 	}
 	parentSHA, err := g.MergeBase(parent, cur)
 	if err != nil {
@@ -664,7 +676,7 @@ func TrackBranch(env Env, s *State, parent string) (*OpResult, error) {
 }
 
 // inferParent picks the closest tracked ancestor (or the trunk) of cur.
-func inferParent(g Git, s *State, cur string) string {
+func inferParent(g Git, s *State, cur string) (string, error) {
 	best := s.Trunk
 	candidates := []string{s.Trunk}
 	for name := range s.Branches {
@@ -673,14 +685,25 @@ func inferParent(g Git, s *State, cur string) string {
 		}
 	}
 	for _, c := range candidates {
-		if c == cur || c == best || !g.IsAncestor(c, cur) {
+		if c == cur || c == best {
 			continue
 		}
-		if g.IsAncestor(best, c) {
+		ancestor, err := g.IsAncestor(c, cur)
+		if err != nil {
+			return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", c, cur, err)
+		}
+		if !ancestor {
+			continue
+		}
+		bestIsAncestor, err := g.IsAncestor(best, c)
+		if err != nil {
+			return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", best, c, err)
+		}
+		if bestIsAncestor {
 			best = c
 		}
 	}
-	return best
+	return best, nil
 }
 
 // UntrackBranch stops tracking name (the current branch when name is empty),
