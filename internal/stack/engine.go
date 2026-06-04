@@ -61,6 +61,16 @@ func restoreHEAD(env Env, target, fallback string) error {
 	return nil
 }
 
+func restoreHEADAfterNonConflict(env Env, target, fallback string, err error) error {
+	if errors.Is(err, ErrConflict) {
+		return err
+	}
+	if restoreErr := restoreHEAD(env, target, fallback); restoreErr != nil {
+		return fmt.Errorf("%w; additionally failed to restore %q: %v", err, target, restoreErr)
+	}
+	return err
+}
+
 // Create makes a new branch stacked on the current branch and tracks it. With
 // all it stages everything first; with a message it commits the staged changes.
 func Create(env Env, s *State, name, message string, all bool) (*OpResult, error) {
@@ -173,6 +183,7 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 	// restore HEAD in that case.
 	rebased, err := s.RestackUpstack(env, cur)
 	if err != nil {
+		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
 		return nil, fmt.Errorf("restacking upstack of %q: %w", cur, err)
 	}
 	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
@@ -208,6 +219,7 @@ func Restack(env Env, s *State) (*OpResult, error) {
 	}
 	up, err := s.RestackUpstack(env, start)
 	if err != nil {
+		err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 		return nil, err
 	}
 	rebased = append(rebased, up...)
@@ -272,6 +284,7 @@ func Fold(env Env, s *State) (*OpResult, error) {
 
 	rebased, err := s.RestackUpstack(env, parent)
 	if err != nil {
+		err = restoreHEADAfterNonConflict(env, parent, s.Trunk, err)
 		return nil, err
 	}
 	if err := env.save(); err != nil {
@@ -342,6 +355,7 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 
 	rebased, err := s.RestackUpstack(env, cur)
 	if err != nil {
+		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
 		return nil, err
 	}
 	if err := env.save(); err != nil {
@@ -415,6 +429,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 
 	rebased, err := s.RestackUpstack(env, cur)
 	if err != nil {
+		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
 		return nil, err
 	}
 	if err := env.save(); err != nil {
@@ -486,9 +501,11 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 
 	for _, child := range formerChildren {
 		if err := s.RestackBranch(env, child); err != nil {
+			err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 			return nil, err
 		}
 		if _, err := s.RestackUpstack(env, child); err != nil {
+			err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 			return nil, err
 		}
 	}
@@ -670,6 +687,9 @@ func Continue(env Env, s *State) (*OpResult, error) {
 
 	rebased, err := RestackAll(env, s)
 	if err != nil {
+		if conflicted != "" {
+			err = restoreHEADAfterNonConflict(env, conflicted, s.Trunk, err)
+		}
 		return nil, err
 	}
 	if err := env.save(); err != nil {

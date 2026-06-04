@@ -369,6 +369,25 @@ func TestModifyRejectsUnstagedChangesBeforeRestackingDescendants(t *testing.T) {
 	}
 }
 
+func TestModifyRestoresBranchAfterNonConflictDescendantRestackFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	errBoom := errors.New("pre-rebase hook rejected")
+	f.rebaseErr["c"] = errBoom
+
+	if _, err := Modify(env, s, "amend", true, false); !errors.Is(err, errBoom) {
+		t.Fatalf("Modify error = %v, want %v", err, errBoom)
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a", f.head)
+	}
+}
+
 func TestModifyRejectsUntrackedBranch(t *testing.T) {
 	f, s, env := newEnvState()
 	if err := f.CreateBranch("scratch"); err != nil {
