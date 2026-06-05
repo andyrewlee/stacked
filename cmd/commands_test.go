@@ -871,6 +871,24 @@ func TestUndoDeletesCreatedBranch(t *testing.T) {
 	}
 }
 
+func TestUndoKeepsUnrelatedBranchCreatedAfterSnapshot(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustRun(t, "git", "branch", "scratch")
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo create: %v", err)
+	}
+	if git.BranchExists("feat-b") {
+		t.Fatal("undo left created branch feat-b behind")
+	}
+	if !git.BranchExists("scratch") {
+		t.Fatal("undo deleted unrelated branch scratch")
+	}
+}
+
 func TestUndoTrackKeepsExistingBranch(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -952,6 +970,9 @@ func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
 	}
 	if err := git.RenameBranch("feat-a", "renamed"); err != nil {
 		t.Fatalf("rename git branch: %v", err)
+	}
+	if err := stack.SetLastUndoCreatedBranches([]string{"renamed"}); err != nil {
+		t.Fatalf("record created branch: %v", err)
 	}
 
 	if err := runUndo(nil); err != nil {

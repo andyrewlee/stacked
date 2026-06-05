@@ -16,10 +16,11 @@ const maxUndoEntries = 20
 // state-file contents and the tip SHAs of the trunk and every tracked branch at
 // that moment.
 type UndoEntry struct {
-	Label         string            `json:"label"`
-	State         json.RawMessage   `json:"state"`
-	Refs          map[string]string `json:"refs"`
-	LocalBranches []string          `json:"localBranches,omitempty"`
+	Label           string            `json:"label"`
+	State           json.RawMessage   `json:"state"`
+	Refs            map[string]string `json:"refs"`
+	LocalBranches   []string          `json:"localBranches,omitempty"`
+	CreatedBranches []string          `json:"createdBranches,omitempty"`
 }
 
 func undoPath() (string, error) {
@@ -129,6 +130,20 @@ func DropUndo() error {
 		return nil
 	}
 	return writeUndo(entries[:len(entries)-1])
+}
+
+// SetLastUndoCreatedBranches records local branches that were created by the
+// in-progress operation represented by the latest undo entry.
+func SetLastUndoCreatedBranches(names []string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	entries[len(entries)-1].CreatedBranches = names
+	return writeUndo(entries)
 }
 
 // PopUndo removes and returns the most recent undo entry. The boolean is false

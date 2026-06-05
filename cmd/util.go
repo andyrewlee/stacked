@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"stacked/internal/git"
@@ -116,26 +117,35 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	return renderResult(res, asJSON)
 }
 
-func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) error {
+func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) (bool, error) {
 	if entry == nil || errors.Is(opErr, stack.ErrConflict) {
-		return nil
+		return false, nil
 	}
 	unchanged, err := sameState(s, entry.State)
 	if err != nil || !unchanged {
-		return err
+		return false, err
 	}
 	for name, want := range entry.Refs {
 		got, err := git.RevParse("refs/heads/" + name)
 		if err != nil || got != want {
-			return nil
+			return false, nil
 		}
 	}
-	return stack.DropUndo()
+	if len(createdBranchesSince(entry)) > 0 {
+		return false, nil
+	}
+	return true, stack.DropUndo()
 }
 
 func finalizeUndoOnSuccess(s *stack.State, entry *stack.UndoEntry) error {
 	if entry == nil {
 		return stack.TrimUndo()
+	}
+	created := createdBranchesSince(entry)
+	if len(created) > 0 {
+		if err := stack.SetLastUndoCreatedBranches(created); err != nil {
+			return err
+		}
 	}
 	unchanged, err := sameState(s, entry.State)
 	if err != nil {
@@ -152,10 +162,41 @@ func finalizeUndoOnSuccess(s *stack.State, entry *stack.UndoEntry) error {
 
 func cleanupNoopUndoOnError(s *stack.State, opErr error) error {
 	entry, _, _ := stack.PeekUndo()
-	if err := dropNoopUndo(s, entry, opErr); err != nil {
+	dropped, err := dropNoopUndo(s, entry, opErr)
+	if err != nil {
 		return err
 	}
+	if !dropped {
+		created := createdBranchesSince(entry)
+		if len(created) > 0 {
+			if err := stack.SetLastUndoCreatedBranches(created); err != nil {
+				return err
+			}
+		}
+	}
 	return stack.TrimUndo()
+}
+
+func createdBranchesSince(entry *stack.UndoEntry) []string {
+	if entry == nil || entry.LocalBranches == nil {
+		return nil
+	}
+	existed := map[string]bool{}
+	for _, name := range entry.LocalBranches {
+		existed[name] = true
+	}
+	branches, err := git.LocalBranches()
+	if err != nil {
+		return nil
+	}
+	var created []string
+	for _, name := range branches {
+		if !existed[name] {
+			created = append(created, name)
+		}
+	}
+	sort.Strings(created)
+	return created
 }
 
 func refsUnchanged(entry *stack.UndoEntry) bool {

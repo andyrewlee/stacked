@@ -58,24 +58,19 @@ func runUndo(args []string) error {
 	checkoutAfterRestore := ""
 	current, currentErr := stack.Load()
 	if entry.LocalBranches != nil {
-		existed := map[string]bool{}
-		for _, name := range entry.LocalBranches {
-			existed[name] = true
-		}
 		candidates := map[string]bool{}
-		if branches, err := git.LocalBranches(); err == nil {
-			for _, name := range branches {
-				candidates[name] = true
-			}
-		} else if currentErr == nil {
+		if currentErr == nil {
 			candidates[current.Trunk] = true
 			for name := range current.Branches {
 				candidates[name] = true
 			}
 		}
+		for _, name := range entry.CreatedBranches {
+			candidates[name] = true
+		}
 		var extra []string
 		for name := range candidates {
-			if !existed[name] && git.BranchExists(name) {
+			if branchCreatedByEntry(entry, name) && git.BranchExists(name) {
 				extra = append(extra, name)
 			}
 		}
@@ -181,4 +176,18 @@ func missingRestoredRef(entry *stack.UndoEntry) string {
 		return missing[0]
 	}
 	return ""
+}
+
+func branchCreatedByEntry(entry *stack.UndoEntry, name string) bool {
+	for _, created := range entry.CreatedBranches {
+		if created == name {
+			return true
+		}
+	}
+	for _, existed := range entry.LocalBranches {
+		if existed == name {
+			return false
+		}
+	}
+	return true
 }
