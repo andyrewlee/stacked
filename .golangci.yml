@@ -1,0 +1,107 @@
+# golangci-lint v2 configuration for the "stacked" project (the `st` CLI).
+#
+# Strict-but-practical: catches real bugs and dead code while allowing the
+# deliberate stdlib-only patterns this codebase uses (writing to stdout/stderr
+# without checking the error, etc.).
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - gocritic
+    - revive
+
+  settings:
+    errcheck:
+      # Writing to os.Stdout/os.Stderr (and the buffered/Fprint* family) is a
+      # deliberate fire-and-forget in a CLI; checking those errors adds noise
+      # with no benefit. Genuinely meaningful errors (git mutations, file
+      # Close/Flush, flock) are still required to be handled.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*bufio.Writer).WriteString
+        - (*strings.Builder).WriteString
+        - (*strings.Builder).WriteByte
+        - (*strings.Builder).WriteRune
+        - (*bytes.Buffer).WriteString
+        - (*bytes.Buffer).WriteByte
+        - (*bytes.Buffer).WriteRune
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # micro-optimization; not worth reordering struct fields
+        - shadow         # too noisy for idiomatic err shadowing
+
+    revive:
+      rules:
+        # Keep the genuinely useful rules; relax the ones that would demand
+        # redundant doc comments on every exported symbol in a small CLI.
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: var-declaration
+        - name: unreachable-code
+        - name: superfluous-else
+
+    staticcheck:
+      checks:
+        - all
+
+    gocritic:
+      disabled-checks:
+        - ifElseChain # the dispatcher/switch-like if chains are clearer as-is
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test files exercise error/edge paths and use helpers that intentionally
+      # ignore some returns; don't hold them to the same gocritic/revive bar.
+      - path: _test\.go
+        linters:
+          - gocritic
+          - revive
+          - errcheck
+
+formatters:
+  enable:
+    - gofumpt
+    - gofmt
+  settings:
+    gofumpt:
+      # Tell gofumpt our module path so it groups local "stacked/..." imports
+      # the same way the standalone gofumpt binary does (a separate block,
+      # blank-line-separated). Without this the bundled gofumpt collapses them
+      # and disagrees with `gofumpt -w .`.
+      module-path: stacked

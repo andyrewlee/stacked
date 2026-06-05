@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"sort"
+	"strings"
 
 	"stacked/internal/git"
 	"stacked/internal/stack"
@@ -62,6 +63,7 @@ func runUndo(args []string) error {
 		return fmt.Errorf("parsing undo state: %w", err)
 	}
 	checkoutAfterRestore := ""
+	skipCheckoutRestore := false
 	current, currentErr := stack.Load()
 	if entry.LocalBranches != nil {
 		candidates := map[string]bool{}
@@ -105,7 +107,18 @@ func runUndo(args []string) error {
 					}
 				}
 				if err := git.Checkout(target); err != nil {
-					return fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
+					if checkoutBlockedByLocalChanges(err) {
+						head, revErr := git.RevParse("HEAD")
+						if revErr != nil {
+							return fmt.Errorf("resolving HEAD before deleting %q: %w", name, revErr)
+						}
+						if detachErr := git.CheckoutDetach(head); detachErr != nil {
+							return fmt.Errorf("detaching HEAD before deleting %q: %w", name, detachErr)
+						}
+						skipCheckoutRestore = true
+					} else {
+						return fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
+					}
 				}
 			}
 			if err := git.DeleteBranch(name, true); err != nil {
@@ -129,12 +142,14 @@ func runUndo(args []string) error {
 			return fmt.Errorf("restoring branch %q: %w", name, err)
 		}
 	}
-	if checkoutAfterRestore == "" && entry.CurrentBranch != "" && git.BranchExists(entry.CurrentBranch) {
+	if !skipCheckoutRestore && checkoutAfterRestore == "" && entry.CurrentBranch != "" && git.BranchExists(entry.CurrentBranch) {
 		checkoutAfterRestore = entry.CurrentBranch
 	}
 	if checkoutAfterRestore != "" {
 		if err := git.Checkout(checkoutAfterRestore); err != nil {
-			return fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)
+			if !checkoutBlockedByLocalChanges(err) {
+				return fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)
+			}
 		}
 	}
 	if err := stack.DropUndo(); err != nil {
@@ -199,4 +214,9 @@ func branchCreatedByEntry(entry *stack.UndoEntry, name string) bool {
 		}
 	}
 	return true
+}
+
+func checkoutBlockedByLocalChanges(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
 }

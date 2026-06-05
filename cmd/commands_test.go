@@ -971,6 +971,32 @@ func TestUndoDeleteCurrentRestoresCheckout(t *testing.T) {
 	}
 }
 
+func TestUndoCreateAfterModifyUndoPreservesDirtyWorktree(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	write(t, "a.txt", "a-modified\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo modify: %v", err)
+	}
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo create with dirty worktree: %v", err)
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo create left feat-a tracked")
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo create left feat-a branch behind")
+	}
+	if got, err := os.ReadFile("a.txt"); err != nil || string(got) != "a-modified\n" {
+		t.Fatalf("worktree a.txt = %q err %v, want preserved modification", got, err)
+	}
+}
+
 func TestUndoFoldCurrentRestoresCheckout(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

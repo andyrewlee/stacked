@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# pre-push — FULL feedback loop. Runs the same gate as CI (`make ci`):
+# fmt-check + lint + vet + build + race tests + e2e + coverage. Blocks the
+# push if anything is off so the remote stays green.
+#
+# Skip with: SKIP_HOOKS=1 git push ...
+#
+set -euo pipefail
+
+if [ "${SKIP_HOOKS:-0}" != "0" ]; then
+	echo "pre-push: SKIP_HOOKS set, skipping full CI gate"
+	exit 0
+fi
+
+# Run from the repo root so the Makefile is found.
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-push: running full CI gate (make ci)"
+if ! make ci; then
+	echo >&2
+	echo "pre-push: FAILED. The remote would go red. Fix the issues above, or bypass with SKIP_HOOKS=1 git push ..." >&2
+	exit 1
+fi
+
+echo "pre-push: OK"
