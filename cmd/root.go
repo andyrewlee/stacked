@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -160,6 +161,12 @@ func jsonRequested(args []string) bool {
 		}
 		if a == "--json" || a == "-json" {
 			return true
+		}
+		for _, prefix := range []string{"--json=", "-json="} {
+			if strings.HasPrefix(a, prefix) {
+				v, err := strconv.ParseBool(strings.TrimPrefix(a, prefix))
+				return err != nil || v
+			}
 		}
 	}
 	return false

@@ -543,6 +543,14 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 		t.Fatalf("credential leaked in converted remote: %q %q", webURL, host)
 	}
 
+	webURL, host = remoteToHTTPS("git@example.com:owner/repo.git?token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("scp-like URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "token") || strings.Contains(webURL, "frag") {
+		t.Fatalf("scp-like credential leaked in converted remote: %q %q", webURL, host)
+	}
+
 	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com/owner/repo.git?token=SECRET#frag")
 	if webURL != "https://example.com/owner/repo" || host != "example.com" {
 		t.Fatalf("credential SSH URL converted to (%q, %q), want sanitized example.com URL", webURL, host)

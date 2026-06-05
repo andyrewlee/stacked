@@ -143,7 +143,8 @@ func remoteToHTTPS(raw string) (webURL, host string) {
 		rest := strings.TrimPrefix(raw, "git@") // host:owner/repo
 		if i := strings.Index(rest, ":"); i >= 0 {
 			host = rest[:i]
-			return "https://" + host + "/" + rest[i+1:], host
+			path := sanitizeRemotePath(rest[i+1:])
+			return "https://" + host + "/" + path, host
 		}
 	case strings.HasPrefix(raw, "ssh://"):
 		u, err := url.Parse(raw)
@@ -182,4 +183,11 @@ func remoteToHTTPS(raw string) (webURL, host string) {
 		return u.String(), u.Host
 	}
 	return "", ""
+}
+
+func sanitizeRemotePath(path string) string {
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
+	return strings.TrimSuffix(path, ".git")
 }

@@ -106,11 +106,7 @@ func TestExecuteCommandError(t *testing.T) {
 func TestExecuteJSONErrorIsParseable(t *testing.T) {
 	var code int
 	var stdout string
-	errOut := captureStderr(t, func() {
-		stdout = captureStdout(t, func() {
-			withArgs(t, []string{"create", "--json"}, func() { code = Execute() })
-		})
-	})
+	errOut := executeCapturingOutput(t, []string{"create", "--json"}, &code, &stdout)
 	if code != 1 {
 		t.Fatalf("Execute(create --json) = %d, want 1", code)
 	}
@@ -129,16 +125,14 @@ func TestExecuteJSONErrorIsParseable(t *testing.T) {
 func TestExecuteJSONFlagParseErrorIsParseable(t *testing.T) {
 	cases := [][]string{
 		{"create", "--json", "--bad"},
+		{"create", "--json=true", "--bad"},
 		{"status", "--json", "--bad"},
+		{"status", "--json=true", "--bad"},
 	}
 	for _, args := range cases {
 		var code int
 		var stdout string
-		errOut := captureStderr(t, func() {
-			stdout = captureStdout(t, func() {
-				withArgs(t, args, func() { code = Execute() })
-			})
-		})
+		errOut := executeCapturingOutput(t, args, &code, &stdout)
 		if code != 1 {
 			t.Fatalf("Execute(%v) = %d, want 1", args, code)
 		}
@@ -153,6 +147,15 @@ func TestExecuteJSONFlagParseErrorIsParseable(t *testing.T) {
 			t.Fatalf("JSON flag parse error was not parseable for %v: %v\n%s", args, err, errOut)
 		}
 	}
+}
+
+func executeCapturingOutput(t *testing.T, args []string, code *int, stdout *string) string {
+	t.Helper()
+	return captureStderr(t, func() {
+		*stdout = captureStdout(t, func() {
+			withArgs(t, args, func() { *code = Execute() })
+		})
+	})
 }
 
 func TestExitCodeAndErrorCodeMapping(t *testing.T) {
@@ -180,6 +183,12 @@ func TestExitCodeAndErrorCodeMapping(t *testing.T) {
 func TestJSONRequested(t *testing.T) {
 	if !jsonRequested([]string{"create", "x", "--json"}) {
 		t.Error("want true when --json present")
+	}
+	if !jsonRequested([]string{"create", "--json=true"}) {
+		t.Error("want true when --json=true present")
+	}
+	if jsonRequested([]string{"create", "--json=false"}) {
+		t.Error("want false when --json=false present")
 	}
 	if jsonRequested([]string{"create", "--", "--json"}) {
 		t.Error("want false when --json is after a -- terminator")
