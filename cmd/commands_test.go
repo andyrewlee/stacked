@@ -942,6 +942,35 @@ func TestUndoCurrentBranchRenameChecksOutRestoredName(t *testing.T) {
 	}
 }
 
+func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	s := stateT(t)
+	if err := s.RecordUndo("rename"); err != nil {
+		t.Fatalf("record undo: %v", err)
+	}
+	if err := git.RenameBranch("feat-a", "renamed"); err != nil {
+		t.Fatalf("rename git branch: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo partial rename: %v", err)
+	}
+	if git.BranchExists("renamed") {
+		t.Fatal("undo left partially renamed branch behind")
+	}
+	if !git.BranchExists("feat-a") {
+		t.Fatal("undo did not restore original branch")
+	}
+	if !stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo did not keep original branch tracked")
+	}
+	if got := curBranch(t); got != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a", got)
+	}
+}
+
 func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

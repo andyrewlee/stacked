@@ -56,14 +56,22 @@ func runUndo(args []string) error {
 		return fmt.Errorf("parsing undo state: %w", err)
 	}
 	checkoutAfterRestore := ""
-	if current, err := stack.Load(); err == nil && entry.LocalBranches != nil {
+	current, currentErr := stack.Load()
+	if entry.LocalBranches != nil {
 		existed := map[string]bool{}
 		for _, name := range entry.LocalBranches {
 			existed[name] = true
 		}
-		candidates := map[string]bool{current.Trunk: true}
-		for name := range current.Branches {
-			candidates[name] = true
+		candidates := map[string]bool{}
+		if branches, err := git.LocalBranches(); err == nil {
+			for _, name := range branches {
+				candidates[name] = true
+			}
+		} else if currentErr == nil {
+			candidates[current.Trunk] = true
+			for name := range current.Branches {
+				candidates[name] = true
+			}
 		}
 		var extra []string
 		for name := range candidates {
@@ -74,12 +82,17 @@ func runUndo(args []string) error {
 		sort.Strings(extra)
 		for _, name := range extra {
 			target := prev.Trunk
-			if b, ok := current.Get(name); ok && git.BranchExists(b.Parent) {
-				target = b.Parent
+			if currentErr == nil {
+				if b, ok := current.Get(name); ok && git.BranchExists(b.Parent) {
+					target = b.Parent
+				}
 			}
 			if cur, err := git.CurrentBranch(); err == nil && cur == name {
 				if entry.Label == "rename" {
 					checkoutAfterRestore = restoredRenameTarget(&prev, current, name)
+				}
+				if checkoutAfterRestore == "" && entry.Label == "rename" {
+					checkoutAfterRestore = missingRestoredRef(entry)
 				}
 				if !git.BranchExists(target) {
 					sha, ok := entry.Refs[target]
@@ -142,6 +155,9 @@ func runUndo(args []string) error {
 }
 
 func restoredRenameTarget(prev, current *stack.State, deleted string) string {
+	if current == nil {
+		return ""
+	}
 	if current.Trunk == deleted && prev.Trunk != current.Trunk {
 		return prev.Trunk
 	}
@@ -149,6 +165,20 @@ func restoredRenameTarget(prev, current *stack.State, deleted string) string {
 		if !current.IsTracked(name) {
 			return name
 		}
+	}
+	return ""
+}
+
+func missingRestoredRef(entry *stack.UndoEntry) string {
+	var missing []string
+	for name := range entry.Refs {
+		if !git.BranchExists(name) {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) == 1 {
+		return missing[0]
 	}
 	return ""
 }
