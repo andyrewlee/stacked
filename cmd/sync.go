@@ -43,7 +43,15 @@ func runSync(args []string) error {
 		if err != nil {
 			return err
 		}
-		res, err := stack.SyncPlan(stackEnv(s, asJSON), s, noDelete)
+		trunkRef := "refs/heads/" + s.Trunk
+		remoteShell := git.RemoteShell{}
+		if remoteShell.Exists(remote) {
+			if err := remoteShell.Fetch(remote); err != nil {
+				return fmt.Errorf("fetch %q: %w", remote, err)
+			}
+			trunkRef = "refs/remotes/" + remote + "/" + s.Trunk
+		}
+		res, err := stack.SyncPlanAgainst(stackEnv(s, asJSON), s, noDelete, trunkRef)
 		if err != nil {
 			return err
 		}

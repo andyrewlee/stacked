@@ -10,11 +10,19 @@ func branchTipRef(name string) string {
 // parent, i.e. the parent's current tip differs from the SHA this branch was
 // last based onto.
 func (s *State) NeedsRestack(g Git, name string) (bool, error) {
+	return s.needsRestackAgainst(g, name, branchTipRef(s.Trunk))
+}
+
+func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) {
 	b, ok := s.Get(name)
 	if !ok {
 		return false, fmt.Errorf("branch %q is not tracked", name)
 	}
-	parentTip, err := g.RevParse(branchTipRef(b.Parent))
+	parentRef := branchTipRef(b.Parent)
+	if b.Parent == s.Trunk {
+		parentRef = trunkRef
+	}
+	parentTip, err := g.RevParse(parentRef)
 	if err != nil {
 		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
@@ -66,6 +74,10 @@ func (s *State) RestackBranch(env Env, name string) error {
 // date, or its parent will be rebased (which moves the parent tip and forces the
 // child). When start is the trunk, the whole forest is considered.
 func (s *State) restackPlan(g Git, start string) ([]string, error) {
+	return s.restackPlanAgainst(g, start, branchTipRef(s.Trunk))
+}
+
+func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, error) {
 	var order []string
 	if start != s.Trunk {
 		order = append(order, start)
@@ -80,7 +92,7 @@ func (s *State) restackPlan(g Git, start string) ([]string, error) {
 		if !ok {
 			continue
 		}
-		needs, err := s.NeedsRestack(g, name)
+		needs, err := s.needsRestackAgainst(g, name, trunkRef)
 		if err != nil {
 			return nil, err
 		}
