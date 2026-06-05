@@ -38,7 +38,7 @@ func runContinue(args []string) error {
 	}
 	undoEntry, _, _ := stack.PeekUndo()
 
-	res, err := stack.Continue(stackEnv(s), s)
+	res, err := stack.Continue(stackEnv(s, asJSON), s)
 	if err != nil {
 		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
 			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)

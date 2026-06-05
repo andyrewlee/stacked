@@ -43,7 +43,7 @@ func runSync(args []string) error {
 		if err != nil {
 			return err
 		}
-		res, err := stack.SyncPlan(stackEnv(s), s, noDelete)
+		res, err := stack.SyncPlan(stackEnv(s, asJSON), s, noDelete)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ func runSync(args []string) error {
 	}
 	undoEntry, _, _ := stack.PeekUndo()
 
-	res, err := stack.Sync(stackEnv(s), git.RemoteShell{}, s, remote, noDelete)
+	res, err := stack.Sync(stackEnv(s, asJSON), git.RemoteShell{}, s, remote, noDelete)
 	if err != nil {
 		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
 			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)

@@ -32,8 +32,14 @@ func loadState() (*stack.State, error) {
 var gitShell stack.Git = git.Shell{}
 
 // stackEnv builds the engine environment for s, persisting via s.Save.
-func stackEnv(s *stack.State) stack.Env {
-	return stack.Env{Git: gitShell, Save: s.Save}
+func stackEnv(s *stack.State, asJSON ...bool) stack.Env {
+	g := gitShell
+	if len(asJSON) > 0 && asJSON[0] {
+		if _, ok := g.(git.Shell); ok {
+			g = git.QuietShell{}
+		}
+	}
+	return stack.Env{Git: g, Save: s.Save}
 }
 
 func rejectArgs(command string, args []string) error {
@@ -101,7 +107,7 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 		return err
 	}
 	undoEntry, _, _ := stack.PeekUndo()
-	res, err := op(stackEnv(s), s)
+	res, err := op(stackEnv(s, asJSON), s)
 	if err != nil {
 		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
 			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)

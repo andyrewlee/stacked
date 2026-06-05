@@ -21,6 +21,7 @@ type UndoEntry struct {
 	Refs            map[string]string `json:"refs"`
 	LocalBranches   []string          `json:"localBranches,omitempty"`
 	CreatedBranches []string          `json:"createdBranches,omitempty"`
+	CurrentBranch   string            `json:"currentBranch,omitempty"`
 }
 
 func undoPath() (string, error) {
@@ -84,11 +85,18 @@ func (s *State) RecordUndo(label string) error {
 		}
 	}
 	localBranches, _ := git.LocalBranches()
+	currentBranch, _ := git.CurrentBranch()
 	entries, err := loadUndo()
 	if err != nil {
 		return err
 	}
-	entries = append(entries, UndoEntry{Label: label, State: stateBytes, Refs: refs, LocalBranches: localBranches})
+	entries = append(entries, UndoEntry{
+		Label:         label,
+		State:         stateBytes,
+		Refs:          refs,
+		LocalBranches: localBranches,
+		CurrentBranch: currentBranch,
+	})
 	return writeUndo(entries)
 }
 

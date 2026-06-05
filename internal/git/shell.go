@@ -5,6 +5,13 @@ package git
 // is a zero-size value, so `git.Shell{}` is free to construct.
 type Shell struct{}
 
+// QuietShell is the production git port variant used by JSON-mode commands.
+// It avoids inheriting git's human stdout/stderr for rebase operations so the
+// CLI can keep JSON output parseable.
+type QuietShell struct {
+	Shell
+}
+
 func (Shell) RevParse(ref string) (string, error)          { return RevParse(ref) }
 func (Shell) RebaseOnto(newBase, oldBase, br string) error { return RebaseOnto(newBase, oldBase, br) }
 func (Shell) BranchExists(name string) bool                { return BranchExists(name) }
@@ -34,3 +41,8 @@ func (Shell) IsClean() (bool, error)          { return IsClean() }
 func (Shell) RebaseInProgress() (bool, error) { return RebaseInProgress() }
 func (Shell) RebaseHeadName() (string, error) { return RebaseHeadName() }
 func (Shell) RebaseContinue() error           { return RebaseContinue() }
+
+func (QuietShell) RebaseOnto(newBase, oldBase, br string) error {
+	return RebaseOntoQuiet(newBase, oldBase, br)
+}
+func (QuietShell) RebaseContinue() error { return RebaseContinueQuiet() }

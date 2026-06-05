@@ -123,6 +123,9 @@ func runUndo(args []string) error {
 			return fmt.Errorf("restoring branch %q: %w", name, err)
 		}
 	}
+	if checkoutAfterRestore == "" && entry.CurrentBranch != "" && git.BranchExists(entry.CurrentBranch) {
+		checkoutAfterRestore = entry.CurrentBranch
+	}
 	if checkoutAfterRestore != "" {
 		if err := git.Checkout(checkoutAfterRestore); err != nil {
 			return fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)

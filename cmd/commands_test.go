@@ -889,6 +889,54 @@ func TestUndoKeepsUnrelatedBranchCreatedAfterSnapshot(t *testing.T) {
 	}
 }
 
+func TestUndoDeleteCurrentRestoresCheckout(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	if err := runDelete([]string{"feat-b", "--force"}); err != nil {
+		t.Fatalf("delete current branch: %v", err)
+	}
+	if got := curBranch(t); got != "feat-a" {
+		t.Fatalf("after delete HEAD = %q, want feat-a", got)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo delete: %v", err)
+	}
+	if got := curBranch(t); got != "feat-b" {
+		t.Fatalf("after undo HEAD = %q, want feat-b", got)
+	}
+	if !git.BranchExists("feat-b") {
+		t.Fatal("undo did not restore deleted branch")
+	}
+}
+
+func TestUndoFoldCurrentRestoresCheckout(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	if err := runFold(nil); err != nil {
+		t.Fatalf("fold current branch: %v", err)
+	}
+	if got := curBranch(t); got != "feat-a" {
+		t.Fatalf("after fold HEAD = %q, want feat-a", got)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo fold: %v", err)
+	}
+	if got := curBranch(t); got != "feat-b" {
+		t.Fatalf("after undo HEAD = %q, want feat-b", got)
+	}
+	if !git.BranchExists("feat-b") {
+		t.Fatal("undo did not restore folded branch")
+	}
+}
+
 func TestUndoTrackKeepsExistingBranch(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -1177,6 +1225,19 @@ func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
 	}
 	if payload.Docs == "" {
 		t.Fatal("guide JSON omitted docs guidance")
+	}
+}
+
+func TestJSONStackEnvUsesQuietGit(t *testing.T) {
+	orig := gitShell
+	gitShell = git.Shell{}
+	defer func() { gitShell = orig }()
+
+	if _, ok := stackEnv(&stack.State{}, true).Git.(git.QuietShell); !ok {
+		t.Fatal("JSON stack env did not use QuietShell")
+	}
+	if _, ok := stackEnv(&stack.State{}, false).Git.(git.Shell); !ok {
+		t.Fatal("text stack env did not use Shell")
 	}
 }
 

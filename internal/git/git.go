@@ -253,6 +253,13 @@ func RebaseOnto(newBase, oldBase, branch string) error {
 	return RunInteractive("rebase", "--onto", newBase, oldBase, branch)
 }
 
+// RebaseOntoQuiet runs rebase without inheriting stdout/stderr, for callers that
+// need machine-readable output.
+func RebaseOntoQuiet(newBase, oldBase, branch string) error {
+	_, err := run("rebase", "--quiet", "--onto", newBase, oldBase, branch)
+	return err
+}
+
 // RebaseInProgress reports whether a git rebase is currently in progress (for
 // example, because it stopped on a merge conflict).
 func RebaseInProgress() (bool, error) {
@@ -301,6 +308,23 @@ func RebaseContinue() error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
 	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git rebase --continue: %w", err)
+	}
+	return nil
+}
+
+// RebaseContinueQuiet resumes a rebase without writing git's human output to
+// stdout/stderr.
+func RebaseContinueQuiet() error {
+	cmd := exec.Command("git", "rebase", "--continue", "--quiet")
+	cmd.Stdin = os.Stdin
+	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("git rebase --continue: %s: %w", msg, err)
+		}
 		return fmt.Errorf("git rebase --continue: %w", err)
 	}
 	return nil
