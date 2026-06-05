@@ -1080,6 +1080,26 @@ func TestFailedDirectMutationDoesNotReplacePreviousUndo(t *testing.T) {
 	}
 }
 
+func TestFailedConflictNoopDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	s := stateT(t)
+	if err := s.RecordUndo("continue"); err != nil {
+		t.Fatalf("record undo: %v", err)
+	}
+	if err := cleanupNoopUndoOnError(s, stack.ErrConflict); err != nil {
+		t.Fatalf("cleanup failed conflict: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after failed conflict: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
+	}
+}
+
 func TestNoopRepairDoesNotReplacePreviousUndo(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

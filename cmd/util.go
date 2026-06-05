@@ -118,7 +118,7 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 }
 
 func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) (bool, error) {
-	if entry == nil || errors.Is(opErr, stack.ErrConflict) {
+	if entry == nil {
 		return false, nil
 	}
 	unchanged, err := sameState(s, entry.State)
