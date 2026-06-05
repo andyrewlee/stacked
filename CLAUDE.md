@@ -94,8 +94,9 @@ engine and these hold, the topology bookkeeping is sound.
 ## Conflicts & gotchas
 
 - A restack conflict leaves a real git rebase in progress; the op returns an error
-  pointing at `st continue` (finishes + resumes) or `st abort` (rolls back). In the
-  fake git, rebases never conflict — conflict handling is covered by integration/e2e.
+  pointing at `st continue` (finishes + resumes) or `st abort` (rolls back). The
+  fake git can model paused rebase conflicts (`conflictOn`) for fast engine tests;
+  use real-git integration/e2e for worktree, index, and conflict-marker behavior.
 - `Onto` records the new parent in state **before** rebasing so `st continue`
   computes the right base after a conflict.
 - Mutators take the flock lock (`internal/stack/lock_unix.go`); no-op off unix.

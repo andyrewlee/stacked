@@ -1,15 +1,19 @@
 # Driving `st` from an agent
 
-`st` is built to be driven programmatically. It never prompts for input, emits
-machine-readable JSON on request, and reports outcomes through stable exit codes.
+`st` is built to be driven programmatically. Local stack operations do not prompt
+for input, JSON-capable commands emit machine-readable JSON on request, and all
+commands report outcomes through stable exit codes.
 
 ## No prompts
 
-`st` never reads from stdin or opens an interactive editor. The only interactive
-step in all of `st` is the underlying `git rebase` during a restack, which `st`
-runs with `GIT_EDITOR`/sequence-editor disabled. When a rebase stops on a
-conflict, `st` returns control to you (exit code 2) rather than blocking — resolve
-the files, `git add` them, and run `st continue` (or `st abort`).
+Local stack operations do not read from stdin or open an interactive editor. The
+rebase path runs with `GIT_EDITOR`/sequence-editor disabled; when a rebase stops
+on a conflict, `st` returns control to you (exit code 2) rather than blocking —
+resolve the files, `git add` them, and run `st continue` (or `st abort`).
+
+Remote Git operations use your configured Git transport. `st sync` may fetch and
+`st submit` may push, so credentials, SSH agents, and host prompts behave like
+the corresponding `git fetch`/`git push` commands in your environment.
 
 ## Exit codes
 
@@ -25,9 +29,11 @@ Branch on the exit code; do not parse messages.
 
 ## JSON output
 
-Every command except `completion` accepts `--json`. Successful output is a single
-indented JSON object on **stdout**. On failure, `--json` writes a structured
-envelope to **stderr** and the process still exits with the code above:
+Every subcommand except `completion` accepts `--json`. The built-ins `help`,
+`-h`/`--help`, `version`, and `-v`/`--version` are plain-text only. Successful
+JSON output is a single indented object on **stdout**. On failure, `--json`
+writes a structured envelope to **stderr** and the process still exits with the
+code above:
 
 ```json
 { "error": { "code": "conflict", "message": "rebasing \"feat-b\" ... : st continue" } }
@@ -50,19 +56,21 @@ envelope, and the exit code for the category.
     "children": [ { "name": "feat-a", "parent": "main", "parentSHA": "…",
                     "current": true, "needsRestack": false, "topCommit": "add a", "children": [] } ] }
   ```
-- **`status --json`** — `{ "branch", "role", "parent", "children": [], "needsRestack": bool|null, "worktreeClean": bool }`
+- **`status --json`** — `{ "branch", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies.
 - **`checkout --json`** (no name) — `{ "trunk", "current", "branches": [] }`
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point)
-- **`submit --json`** — `{ "remote", "dryRun", "pushed": [], "repoURL" }`
+- **`submit --json`** — `{ "remote", "dryRun", "pushed": [], "repoURL" }`; from trunk it returns `{ "remote", "pushed": [], "summary" }`.
 - **operational** (`init`, `abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
 
 ## Idempotency & safety
 
 - `restack`, `sync`, `validate`, `log`, `status` are safe to re-run.
-- `st restack --dry-run` and `st sync --dry-run` preview the branches that *would*
-  be rebased/pruned (a `{"dryRun": true, ...}` result) without changing anything —
-  use this to plan before mutating.
+- `st restack --dry-run` previews the branches that *would* be rebased.
+  `st sync --dry-run` previews prune/restack work without fetching, using the
+  current local trunk or already-cached `refs/remotes/<remote>/<trunk>`. Both
+  return a `{"dryRun": true, ...}` result without changing stack metadata or
+  branch refs.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not

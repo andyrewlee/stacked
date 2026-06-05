@@ -10,8 +10,9 @@ rebased on its parent as the parent changes — `stacked` automates exactly that
 
 `stacked` is a thin, ergonomic layer over `git`:
 
-- **No login. No host API.** It never opens pull requests and never talks to any
-  service. `st submit` just pushes your branches; you open PRs yourself.
+- **No host API.** It never opens pull requests or calls a forge API. Remote Git
+  commands still contact your configured remotes: `st sync` fetches and `st
+  submit` pushes your branches; you open PRs yourself.
 - **No third-party dependencies.** It is written in pure Go using only the standard
   library and shells out to your system `git`.
 - **Local metadata only.** The stack topology (which branch's parent is which) is
@@ -70,7 +71,7 @@ Requires **Go 1.26+** and a working `git` on your `PATH`.
 
 ```sh
 # install onto your PATH
-go install stacked/cmd/st@latest
+go install ./cmd/st
 
 # ...or build locally (Makefile stamps the version from git)
 make build          # -> ./st
@@ -87,10 +88,11 @@ worktrees of the same repo share one stack.
 
 ## For scripts and agents
 
-`st` is built to be driven programmatically: it never prompts, every command
-accepts `--json`, and failures report stable exit codes (`2` conflict, `3` not
-initialized, `4` dirty tree). See **[docs/AGENT.md](docs/AGENT.md)** for the full
-machine interface (JSON schemas, exit codes, idempotency).
+`st` is built to be driven programmatically: it never prompts, JSON-capable
+subcommands accept `--json`, and failures report stable exit codes (`2`
+conflict, `3` not initialized, `4` dirty tree). See
+**[docs/AGENT.md](docs/AGENT.md)** for the full machine interface (JSON schemas,
+exit codes, idempotency).
 
 ## Contributing
 
@@ -154,7 +156,7 @@ stages all changes first; `-m` commits the staged changes onto the new branch.
 st create feat-a -m "add A"
 ```
 
-#### `st log` (`ls`, `l`)
+#### `st log` (`ls`)
 Renders the stack as a tree with the trunk at the bottom and each branch above its
 parent. The current branch is marked `●`, others `◯`, drifted branches are tagged
 `(needs restack)`, and each branch shows its top commit subject.
