@@ -1122,11 +1122,13 @@ func TestNoArgMutatorsRejectPositionalArgs(t *testing.T) {
 		run  func([]string) error
 	}{
 		{"abort", runAbort},
+		{"bottom", runBottom},
 		{"continue", runContinue},
 		{"fold", runFold},
 		{"repair", runRepair},
 		{"restack", runRestack},
 		{"squash", runSquash},
+		{"top", runTop},
 		{"track", runTrack},
 		{"undo", runUndo},
 	}
