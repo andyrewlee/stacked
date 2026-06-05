@@ -16,9 +16,12 @@ const maxUndoEntries = 20
 // state-file contents and the tip SHAs of the trunk and every tracked branch at
 // that moment.
 type UndoEntry struct {
-	Label string            `json:"label"`
-	State json.RawMessage   `json:"state"`
-	Refs  map[string]string `json:"refs"`
+	Label           string            `json:"label"`
+	State           json.RawMessage   `json:"state"`
+	Refs            map[string]string `json:"refs"`
+	LocalBranches   []string          `json:"localBranches,omitempty"`
+	CreatedBranches []string          `json:"createdBranches,omitempty"`
+	CurrentBranch   string            `json:"currentBranch,omitempty"`
 }
 
 func undoPath() (string, error) {
@@ -81,20 +84,39 @@ func (s *State) RecordUndo(label string) error {
 			refs[name] = sha
 		}
 	}
+	localBranches, _ := git.LocalBranches()
+	currentBranch, _ := git.CurrentBranch()
 	entries, err := loadUndo()
 	if err != nil {
 		return err
 	}
-	entries = append(entries, UndoEntry{Label: label, State: stateBytes, Refs: refs})
-	if len(entries) > maxUndoEntries {
-		entries = entries[len(entries)-maxUndoEntries:]
-	}
+	entries = append(entries, UndoEntry{
+		Label:         label,
+		State:         stateBytes,
+		Refs:          refs,
+		LocalBranches: localBranches,
+		CurrentBranch: currentBranch,
+	})
 	return writeUndo(entries)
 }
 
-// PopUndo removes and returns the most recent undo entry. The boolean is false
-// when the journal is empty.
-func PopUndo() (*UndoEntry, bool, error) {
+// TrimUndo bounds the undo log to the most recent entries. Callers run this
+// only after a command has produced a real undoable change; failed no-op
+// commands can drop their tentative entry first without evicting older history.
+func TrimUndo() error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) <= maxUndoEntries {
+		return nil
+	}
+	return writeUndo(entries[len(entries)-maxUndoEntries:])
+}
+
+// PeekUndo returns the most recent undo entry without removing it. The boolean
+// is false when the journal is empty.
+func PeekUndo() (*UndoEntry, bool, error) {
 	entries, err := loadUndo()
 	if err != nil {
 		return nil, false, err
@@ -103,10 +125,46 @@ func PopUndo() (*UndoEntry, bool, error) {
 		return nil, false, nil
 	}
 	last := entries[len(entries)-1]
-	if err := writeUndo(entries[:len(entries)-1]); err != nil {
+	return &last, true, nil
+}
+
+// DropUndo removes the most recent undo entry.
+func DropUndo() error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return writeUndo(entries[:len(entries)-1])
+}
+
+// SetLastUndoCreatedBranches records local branches that were created by the
+// in-progress operation represented by the latest undo entry.
+func SetLastUndoCreatedBranches(names []string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	entries[len(entries)-1].CreatedBranches = names
+	return writeUndo(entries)
+}
+
+// PopUndo removes and returns the most recent undo entry. The boolean is false
+// when the journal is empty.
+func PopUndo() (*UndoEntry, bool, error) {
+	last, ok, err := PeekUndo()
+	if err != nil || !ok {
+		return last, ok, err
+	}
+	if err := DropUndo(); err != nil {
 		return nil, false, err
 	}
-	return &last, true, nil
+	return last, true, nil
 }
 
 // RestoreState overwrites the on-disk state file with raw bytes (used by undo to

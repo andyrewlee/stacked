@@ -83,6 +83,23 @@ func BranchExists(name string) bool {
 	return ok("show-ref", "--verify", "--quiet", "refs/heads/"+name)
 }
 
+// LocalBranches returns the names of all local branches.
+func LocalBranches() ([]string, error) {
+	out, err := Run("for-each-ref", "--format=%(refname)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	refs := strings.Split(out, "\n")
+	branches := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		branches = append(branches, strings.TrimPrefix(ref, "refs/heads/"))
+	}
+	return branches, nil
+}
+
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
 	_, err := Run("checkout", name)
@@ -236,6 +253,13 @@ func RebaseOnto(newBase, oldBase, branch string) error {
 	return RunInteractive("rebase", "--onto", newBase, oldBase, branch)
 }
 
+// RebaseOntoQuiet runs rebase without inheriting stdout/stderr, for callers that
+// need machine-readable output.
+func RebaseOntoQuiet(newBase, oldBase, branch string) error {
+	_, err := run("rebase", "--quiet", "--onto", newBase, oldBase, branch)
+	return err
+}
+
 // RebaseInProgress reports whether a git rebase is currently in progress (for
 // example, because it stopped on a merge conflict).
 func RebaseInProgress() (bool, error) {
@@ -289,6 +313,23 @@ func RebaseContinue() error {
 	return nil
 }
 
+// RebaseContinueQuiet resumes a rebase without writing git's human output to
+// stdout/stderr.
+func RebaseContinueQuiet() error {
+	cmd := exec.Command("git", "rebase", "--continue")
+	cmd.Stdin = os.Stdin
+	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("git rebase --continue: %s: %w", msg, err)
+		}
+		return fmt.Errorf("git rebase --continue: %w", err)
+	}
+	return nil
+}
+
 // Fetch updates remote-tracking refs for the named remote.
 func Fetch(remote string) error {
 	_, err := Run("fetch", remote)
@@ -299,12 +340,19 @@ func Fetch(remote string) error {
 // branch's upstream (-u) so ahead/behind tracking works after the first publish.
 // When force is true it uses --force-with-lease for a safe force push.
 func Push(branch string, force bool) error {
+	return PushRemote("origin", branch, force)
+}
+
+// PushRemote pushes the given branch to remote and records it as the branch's
+// upstream (-u) so ahead/behind tracking works after the first publish. When
+// force is true it uses --force-with-lease for a safe force push.
+func PushRemote(remote, branch string, force bool) error {
 	args := []string{"push", "-u"}
 	if force {
 		args = append(args, "--force-with-lease")
 	}
 	refspec := "refs/heads/" + branch + ":refs/heads/" + branch
-	args = append(args, "origin", refspec)
+	args = append(args, remote, refspec)
 	_, err := Run(args...)
 	return err
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -339,6 +340,24 @@ func TestFetchAndPush(t *testing.T) {
 	}
 }
 
+func TestLocalBranchesUsesFullHeadRefs(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "checkout", "-q", "-b", "release")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "tag", "release", "HEAD")
+
+	branches, err := LocalBranches()
+	if err != nil {
+		t.Fatalf("LocalBranches: %v", err)
+	}
+	if !slices.Contains(branches, "release") {
+		t.Fatalf("LocalBranches = %v, want release", branches)
+	}
+	if slices.Contains(branches, "heads/release") {
+		t.Fatalf("LocalBranches returned ambiguous short ref: %v", branches)
+	}
+}
+
 func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
 	newRepo(t)
 	bare := t.TempDir()
@@ -413,6 +432,17 @@ func TestRebaseInProgressFalse(t *testing.T) {
 	}
 	if name != "" {
 		t.Fatalf("RebaseHeadName = %q, want empty", name)
+	}
+}
+
+func TestRebaseContinueQuietUsesValidContinueForm(t *testing.T) {
+	newRepo(t)
+	err := RebaseContinueQuiet()
+	if err == nil {
+		t.Fatal("RebaseContinueQuiet unexpectedly succeeded without a rebase")
+	}
+	if strings.Contains(err.Error(), "usage:") || strings.Contains(err.Error(), "options") {
+		t.Fatalf("RebaseContinueQuiet used an invalid option form: %v", err)
 	}
 }
 

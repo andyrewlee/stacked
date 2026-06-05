@@ -1,0 +1,34 @@
+st - manage stacked diffs on top of git
+
+usage: st <command> [args]
+
+commands:
+  abort       Abort an in-progress restack/rebase, restoring the prior state
+  bottom      Jump to the bottom branch of the current stack (just above trunk)
+  checkout    Check out a tracked branch (lists branches if no name)
+  completion  Print a shell completion script (bash|zsh|fish)
+  continue    Resume a restack that was interrupted by a merge conflict
+  create      Create a new branch stacked on the current branch
+  delete      Delete a branch and re-parent its children
+  down        Move down the stack toward trunk
+  fold        Fold the current branch into its parent (parent absorbs its commits)
+  guide       Print the recommended stacked-diff workflow
+  init        Initialize stacked stack tracking in this repo
+  log         Show the stack as a tree
+  modify      Amend (or add) a commit on the current branch and restack everything above
+  onto        Move the current branch (and its upstack) onto a new parent
+  rename      Rename a branch and update the stack metadata
+  repair      Reconcile the stack metadata with the repository (fix drift)
+  restack     Rebase the current branch and everything above it onto their parents
+  squash      Squash all of the current branch's commits into one
+  status      Show current branch, its parent/children, and restack state
+  submit      Push every branch in the current stack to the remote (no PRs — login-free)
+  sync        Fetch trunk, fast-forward it, restack everything, and prune merged branches
+  top         Jump to the top of the current stack
+  track       Start tracking the current git branch in the stack
+  undo        Undo the last stack-mutating command
+  untrack     Stop tracking a branch (re-parents its children)
+  up          Move up the stack to a child branch
+  validate    Check the stack state for drift or inconsistencies
+  help        show this help
+  version     print the version

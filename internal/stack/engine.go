@@ -594,15 +594,21 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 // and which branches it would restack. It does not fetch, fast-forward, or
 // mutate anything.
 func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
+	return SyncPlanAgainst(env, s, noDelete, branchTipRef(s.Trunk))
+}
+
+// SyncPlanAgainst previews sync against the supplied trunk ref, used by the CLI
+// dry-run path after fetching the selected remote's trunk.
+func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResult, error) {
 	g := env.Git
 	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
 		for _, name := range sortedBranchNames(planState) {
-			merged, err := g.IsAncestor(name, s.Trunk)
+			merged, err := g.IsAncestor(name, trunkRef)
 			if err != nil {
-				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, s.Trunk, err)
+				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunkRef, err)
 			}
 			if merged {
 				if b, ok := planState.Get(name); ok {
@@ -616,7 +622,7 @@ func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 			}
 		}
 	}
-	full, err := planState.restackPlan(g, planState.Trunk)
+	full, err := planState.restackPlanAgainst(g, planState.Trunk, trunkRef)
 	if err != nil {
 		return nil, err
 	}
