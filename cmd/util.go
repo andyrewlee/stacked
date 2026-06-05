@@ -127,6 +127,13 @@ func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) (bool, er
 	if entry == nil {
 		return false, nil
 	}
+	if errors.Is(opErr, stack.ErrConflict) {
+		if inProgress, err := git.RebaseInProgress(); err != nil {
+			return false, err
+		} else if inProgress {
+			return false, nil
+		}
+	}
 	unchanged, err := sameState(s, entry.State)
 	if err != nil || !unchanged {
 		return false, err

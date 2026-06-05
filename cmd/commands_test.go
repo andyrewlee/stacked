@@ -1301,6 +1301,39 @@ func TestJSONStackEnvUsesQuietGit(t *testing.T) {
 
 // --- sync with a real remote ----------------------------------------------
 
+func TestSyncDryRunDoesNotFetch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustRun(t, "git", "push", "-q", "-u", "origin", "main")
+	mustRun(t, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	clone := t.TempDir()
+	mustRun(t, "git", "clone", "-q", remoteDir, clone)
+	mustRun(t, "git", "-C", clone, "config", "user.email", "t@e.com")
+	mustRun(t, "git", "-C", clone, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(clone, "up.txt"), []byte("up\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", clone, "add", "-A")
+	mustRun(t, "git", "-C", clone, "commit", "-q", "-m", "upstream advance")
+	mustRun(t, "git", "-C", clone, "push", "-q", "origin", "main")
+	mustRun(t, "git", "update-ref", "-d", "refs/remotes/origin/main")
+	if _, err := git.RevParse("refs/remotes/origin/main"); err == nil {
+		t.Fatal("test setup unexpectedly left origin/main fetched")
+	}
+
+	if err := runSync([]string{"--dry-run"}); err != nil {
+		t.Fatalf("sync --dry-run: %v", err)
+	}
+	if _, err := git.RevParse("refs/remotes/origin/main"); err == nil {
+		t.Fatal("sync --dry-run fetched origin/main")
+	}
+}
+
 func TestSyncFastForwardsTrunk(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
