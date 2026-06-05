@@ -39,7 +39,7 @@ func runModify(args []string) error {
 		return err
 	}
 	if len(fs.Args()) != 0 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return fmt.Errorf("modify takes no positional arguments")
 	}
 

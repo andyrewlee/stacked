@@ -41,6 +41,12 @@ func rejectArgs(command string, args []string) error {
 	return fmt.Errorf("%s takes no positional arguments, got %q", command, args[0])
 }
 
+func usageUnlessJSON(fs *flag.FlagSet, args []string) {
+	if !jsonRequested(args) {
+		fs.Usage()
+	}
+}
+
 // acquireLock takes the repository stack lock; the caller must defer the
 // returned release function. It serializes mutating commands across concurrent
 // st processes (a no-op on platforms without flock).

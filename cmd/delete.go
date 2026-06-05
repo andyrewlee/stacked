@@ -34,7 +34,7 @@ func runDelete(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return errors.New("delete requires exactly one branch name")
 	}
 	name := rest[0]

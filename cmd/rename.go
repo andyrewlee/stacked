@@ -27,7 +27,7 @@ func runRename(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) < 1 || len(rest) > 2 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return fmt.Errorf("rename requires a new name (and optionally the old name)")
 	}
 	oldName, newName := "", rest[0]

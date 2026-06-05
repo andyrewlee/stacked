@@ -27,7 +27,7 @@ func runOnto(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return fmt.Errorf("onto requires exactly one target branch")
 	}
 	target := rest[0]

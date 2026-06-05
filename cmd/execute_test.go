@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -17,6 +19,30 @@ func withArgs(t *testing.T, args []string, fn func()) {
 	os.Args = append([]string{"st"}, args...)
 	defer func() { os.Args = orig }()
 	fn()
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan string, 1)
+	go func() {
+		var b strings.Builder
+		_, _ = io.Copy(&b, r)
+		done <- b.String()
+	}()
+
+	fn()
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }
 
 func TestExecuteHelp(t *testing.T) {
@@ -74,6 +100,23 @@ func TestExecuteCommandError(t *testing.T) {
 	})
 	if code != 3 {
 		t.Fatalf("Execute(up uninitialized) = %d, want 3 (not_initialized)", code)
+	}
+}
+
+func TestExecuteJSONErrorIsParseable(t *testing.T) {
+	var code int
+	errOut := captureStderr(t, func() {
+		withArgs(t, []string{"create", "--json"}, func() { code = Execute() })
+	})
+	if code != 1 {
+		t.Fatalf("Execute(create --json) = %d, want 1", code)
+	}
+	if strings.Contains(errOut, "usage:") {
+		t.Fatalf("JSON error included usage text:\n%s", errOut)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+		t.Fatalf("JSON error was not parseable: %v\n%s", err, errOut)
 	}
 }
 

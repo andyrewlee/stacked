@@ -29,7 +29,7 @@ func runUntrack(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) > 1 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return fmt.Errorf("untrack takes at most one branch name")
 	}
 	name := ""
