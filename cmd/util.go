@@ -80,12 +80,69 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	}
 	res, err := op(stackEnv(s), s)
 	if err != nil {
+		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
+			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
+		}
 		return err
 	}
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
 	}
+	if err := stack.TrimUndo(); err != nil {
+		return fmt.Errorf("trimming undo log: %w", err)
+	}
 	return renderResult(res, asJSON)
+}
+
+func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) error {
+	if entry == nil || errors.Is(opErr, stack.ErrConflict) {
+		return nil
+	}
+	unchanged, err := sameState(s, entry.State)
+	if err != nil || !unchanged {
+		return err
+	}
+	for name, want := range entry.Refs {
+		got, err := git.RevParse("refs/heads/" + name)
+		if err != nil || got != want {
+			return nil
+		}
+	}
+	return stack.DropUndo()
+}
+
+func cleanupNoopUndoOnError(s *stack.State, opErr error) error {
+	entry, _, _ := stack.PeekUndo()
+	if err := dropNoopUndo(s, entry, opErr); err != nil {
+		return err
+	}
+	return stack.TrimUndo()
+}
+
+func sameState(s *stack.State, raw []byte) (bool, error) {
+	var prev stack.State
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return false, err
+	}
+	if s.Trunk != prev.Trunk {
+		return false, nil
+	}
+	if (s.PendingReparent == nil) != (prev.PendingReparent == nil) {
+		return false, nil
+	}
+	if s.PendingReparent != nil && *s.PendingReparent != *prev.PendingReparent {
+		return false, nil
+	}
+	if len(s.Branches) != len(prev.Branches) {
+		return false, nil
+	}
+	for name, got := range s.Branches {
+		want, ok := prev.Branches[name]
+		if !ok || got == nil || want == nil || *got != *want {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // emit renders a command result as indented JSON when asJSON, otherwise runs

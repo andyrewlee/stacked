@@ -541,6 +541,19 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 	if strings.Contains(webURL, "TOKEN") || strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "frag") || strings.Contains(host, "TOKEN") {
 		t.Fatalf("credential leaked in converted remote: %q %q", webURL, host)
 	}
+
+	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com/owner/repo.git?token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("credential SSH URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "user") || strings.Contains(webURL, "token") || strings.Contains(webURL, "frag") {
+		t.Fatalf("SSH credential leaked in converted remote: %q %q", webURL, host)
+	}
+
+	webURL, host = remoteToHTTPS("ssh://git@[2001:db8::1]/owner/repo.git")
+	if webURL != "https://[2001:db8::1]/owner/repo" || host != "2001:db8::1" {
+		t.Fatalf("IPv6 SSH URL converted to (%q, %q), want bracketed web URL", webURL, host)
+	}
 }
 
 func TestSubmitUntracked(t *testing.T) {
@@ -906,6 +919,58 @@ func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	}
 	if stateT(t).IsTracked("feat-a") {
 		t.Fatal("undo did not restore the previous state snapshot")
+	}
+}
+
+func TestFailedMutationDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	if err := runModify(nil); err == nil {
+		t.Fatal("modify on trunk should fail")
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after failed modify: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo did not restore state from before the last successful create")
+	}
+}
+
+func TestFailedDirectMutationDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runContinue(nil); err == nil {
+		t.Fatal("continue without a rebase should fail")
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after failed continue: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
+	}
+}
+
+func TestNoopRepairDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runRepair(nil); err != nil {
+		t.Fatalf("noop repair: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after noop repair: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
 	}
 }
 

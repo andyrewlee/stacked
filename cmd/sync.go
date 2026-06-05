@@ -61,10 +61,16 @@ func runSync(args []string) error {
 
 	res, err := stack.Sync(stackEnv(s), git.RemoteShell{}, s, remote, noDelete)
 	if err != nil {
+		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
+			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
+		}
 		return err
 	}
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
+	}
+	if err := stack.TrimUndo(); err != nil {
+		return fmt.Errorf("trimming undo log: %w", err)
 	}
 	return renderResult(res, asJSON)
 }

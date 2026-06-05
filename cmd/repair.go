@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"stacked/internal/git"
+	"stacked/internal/stack"
 )
 
 func init() {
@@ -105,6 +106,11 @@ func runRepair(args []string) error {
 		if err := s.Save(); err != nil {
 			return fmt.Errorf("saving stack state: %w", err)
 		}
+		if err := stack.TrimUndo(); err != nil {
+			return fmt.Errorf("trimming undo log: %w", err)
+		}
+	} else if err := stack.DropUndo(); err != nil {
+		return fmt.Errorf("dropping empty repair undo entry: %w", err)
 	}
 	if fixes == nil {
 		fixes = []string{}

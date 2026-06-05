@@ -88,10 +88,21 @@ func (s *State) RecordUndo(label string) error {
 		return err
 	}
 	entries = append(entries, UndoEntry{Label: label, State: stateBytes, Refs: refs, LocalBranches: localBranches})
-	if len(entries) > maxUndoEntries {
-		entries = entries[len(entries)-maxUndoEntries:]
-	}
 	return writeUndo(entries)
+}
+
+// TrimUndo bounds the undo log to the most recent entries. Callers run this
+// only after a command has produced a real undoable change; failed no-op
+// commands can drop their tentative entry first without evicting older history.
+func TrimUndo() error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) <= maxUndoEntries {
+		return nil
+	}
+	return writeUndo(entries[len(entries)-maxUndoEntries:])
 }
 
 // PeekUndo returns the most recent undo entry without removing it. The boolean

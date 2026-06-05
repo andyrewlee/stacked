@@ -150,8 +150,11 @@ func remoteToHTTPS(raw string) (webURL, host string) {
 		if err != nil || u.Host == "" || u.Path == "" {
 			return "", ""
 		}
-		host = u.Host
-		return "https://" + host + strings.TrimSuffix(u.Path, ".git"), host
+		host = u.Hostname()
+		if host == "" {
+			return "", ""
+		}
+		return "https://" + u.Host + strings.TrimSuffix(u.Path, ".git"), host
 	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" {
