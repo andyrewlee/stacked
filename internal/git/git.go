@@ -106,6 +106,12 @@ func Checkout(name string) error {
 	return err
 }
 
+// CheckoutDetach detaches HEAD at ref without switching to a branch.
+func CheckoutDetach(ref string) error {
+	_, err := Run("checkout", "--detach", ref)
+	return err
+}
+
 // CreateBranch creates a new branch off the current HEAD and switches to it.
 func CreateBranch(name string) error {
 	_, err := Run("checkout", "-b", name)
