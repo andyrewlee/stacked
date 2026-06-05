@@ -524,6 +524,15 @@ func TestSubmitUsesSelectedRemote(t *testing.T) {
 	}
 }
 
+func TestSubmitRejectsPositionalArgs(t *testing.T) {
+	if err := runSubmit([]string{"typo", "--dry-run"}); err == nil {
+		t.Fatal("submit accepted a positional argument")
+	}
+	if err := runSubmit([]string{"origin", "--remote"}); err == nil {
+		t.Fatal("submit accepted a positional argument before a missing-value flag")
+	}
+}
+
 func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 	webURL, host := remoteToHTTPS("https://TOKEN@example.com/owner/repo.git?access_token=SECRET#frag")
 	if webURL != "https://example.com/owner/repo" || host != "example.com" {

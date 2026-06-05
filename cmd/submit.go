@@ -43,6 +43,9 @@ func runSubmit(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("submit", fs.Args()); err != nil {
+		return err
+	}
 
 	state, err := loadState()
 	if err != nil {
