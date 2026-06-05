@@ -455,6 +455,28 @@ func TestAbortRestoresState(t *testing.T) {
 	}
 }
 
+func TestUndoRejectsActiveRebase(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	write(t, "f.txt", "A\nB\n")
+	if err := runCreate([]string{"feat-b", "-a", "-m", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	mustCheckout(t, "feat-a")
+
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatalf("expected a conflict")
+	}
+	if err := runUndo(nil); err == nil {
+		t.Fatal("undo succeeded while rebase was active")
+	}
+	if _, ok, err := stack.PeekUndo(); err != nil || !ok {
+		t.Fatalf("undo entry after rejected undo = ok %v err %v, want preserved entry", ok, err)
+	}
+}
+
 // --- submit ----------------------------------------------------------------
 
 func TestSubmitNoRemote(t *testing.T) {

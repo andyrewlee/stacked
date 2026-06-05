@@ -41,6 +41,12 @@ func runUndo(args []string) error {
 	}
 	defer release()
 
+	if inProgress, err := git.RebaseInProgress(); err != nil {
+		return err
+	} else if inProgress {
+		return fmt.Errorf("cannot undo while a rebase is in progress; run st abort or resolve conflicts and run st continue")
+	}
+
 	entry, ok, err := stack.PeekUndo()
 	if err != nil {
 		return err
