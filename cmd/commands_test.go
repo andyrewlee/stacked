@@ -477,6 +477,42 @@ func TestUndoRejectsActiveRebase(t *testing.T) {
 	}
 }
 
+func TestContinueKeepsOriginalUndoEntry(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	write(t, "f.txt", "A\nB\n")
+	if err := runCreate([]string{"feat-b", "-a", "-m", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	mustCheckout(t, "feat-a")
+
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatalf("expected a conflict")
+	}
+	entry, ok, err := stack.PeekUndo()
+	if err != nil || !ok {
+		t.Fatalf("peek undo after conflict = ok %v err %v", ok, err)
+	}
+	if entry.Label != "modify" {
+		t.Fatalf("undo label after conflict = %q, want modify", entry.Label)
+	}
+
+	write(t, "f.txt", "X\nB\n")
+	mustRun(t, "git", "add", "f.txt")
+	if err := runContinue(nil); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	entry, ok, err = stack.PeekUndo()
+	if err != nil || !ok {
+		t.Fatalf("peek undo after continue = ok %v err %v", ok, err)
+	}
+	if entry.Label != "modify" {
+		t.Fatalf("undo label after continue = %q, want modify", entry.Label)
+	}
+}
+
 // --- submit ----------------------------------------------------------------
 
 func TestSubmitNoRemote(t *testing.T) {

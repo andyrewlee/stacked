@@ -33,23 +33,12 @@ func runContinue(args []string) error {
 		return err
 	}
 	defer release()
-	if err := s.RecordUndo("continue"); err != nil {
-		return err
-	}
-	undoEntry, _, _ := stack.PeekUndo()
-
 	res, err := stack.Continue(stackEnv(s, asJSON), s)
 	if err != nil {
-		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
-			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
-		}
 		return err
 	}
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
-	}
-	if err := finalizeUndoOnSuccess(s, undoEntry); err != nil {
-		return fmt.Errorf("finalizing undo entry: %w", err)
 	}
 	return renderResult(res, asJSON)
 }
