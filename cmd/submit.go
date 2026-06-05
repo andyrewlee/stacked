@@ -40,7 +40,7 @@ func runSubmit(args []string) error {
 	fs.Usage = func() {
 		out("usage: st submit [--remote <name>] [--dry-run] [--json]\n")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("submit", fs.Args()); err != nil {
@@ -154,13 +154,28 @@ func remoteToHTTPS(raw string) (webURL, host string) {
 		if host == "" {
 			return "", ""
 		}
-		return "https://" + u.Host + strings.TrimSuffix(u.Path, ".git"), host
+		displayHost := host
+		if strings.Contains(displayHost, ":") {
+			displayHost = "[" + displayHost + "]"
+		}
+		if port := u.Port(); port != "" {
+			displayHost += ":" + port
+		}
+		return "https://" + displayHost + strings.TrimSuffix(u.EscapedPath(), ".git"), host
 	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" {
 			return "", ""
 		}
 		u.User = nil
+		if port := u.Port(); port != "" {
+			host = u.Hostname()
+			if host != "" && strings.Contains(host, ":") {
+				u.Host = "[" + host + "]:" + port
+			} else if host != "" {
+				u.Host = host + ":" + port
+			}
+		}
 		u.Path = strings.TrimSuffix(u.Path, ".git")
 		u.RawQuery = ""
 		u.Fragment = ""

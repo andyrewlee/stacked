@@ -555,6 +555,11 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 	if webURL != "https://[2001:db8::1]/owner/repo" || host != "2001:db8::1" {
 		t.Fatalf("IPv6 SSH URL converted to (%q, %q), want bracketed web URL", webURL, host)
 	}
+
+	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com:2222/owner/repo.git")
+	if webURL != "https://example.com:2222/owner/repo" || host != "example.com" {
+		t.Fatalf("credential SSH URL with port converted to (%q, %q), want sanitized example.com:2222 URL", webURL, host)
+	}
 }
 
 func TestSubmitUntracked(t *testing.T) {

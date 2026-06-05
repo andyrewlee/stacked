@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -45,6 +46,20 @@ func usageUnlessJSON(fs *flag.FlagSet, args []string) {
 	if !jsonRequested(args) {
 		fs.Usage()
 	}
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string) error {
+	if jsonRequested(args) {
+		output := fs.Output()
+		usage := fs.Usage
+		fs.SetOutput(io.Discard)
+		fs.Usage = func() {}
+		defer func() {
+			fs.SetOutput(output)
+			fs.Usage = usage
+		}()
+	}
+	return fs.Parse(args)
 }
 
 // acquireLock takes the repository stack lock; the caller must defer the
@@ -280,7 +295,7 @@ func parseArgs(fs *flag.FlagSet, args []string) error {
 		}
 		positional = append(positional, a)
 	}
-	return fs.Parse(append(flags, positional...))
+	return parseFlagSet(fs, append(flags, positional...))
 }
 
 // isBoolFlag reports whether the flag named by the argument token (e.g. "-a" or

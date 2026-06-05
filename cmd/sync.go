@@ -31,7 +31,7 @@ func runSync(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: st sync [--no-delete] [--remote <name>] [--dry-run] [--json]")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if rest := fs.Args(); len(rest) > 0 {

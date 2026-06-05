@@ -32,7 +32,7 @@ func runValidate(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: st validate [--json]")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 

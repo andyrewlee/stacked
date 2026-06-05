@@ -21,7 +21,7 @@ func runFold(args []string) error {
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st fold [--json]") }
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("fold", fs.Args()); err != nil {

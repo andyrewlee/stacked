@@ -27,7 +27,7 @@ func runBottom(args []string) error {
 	fs.Usage = func() {
 		out("usage: st bottom [--json]\n")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 

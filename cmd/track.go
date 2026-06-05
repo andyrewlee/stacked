@@ -26,7 +26,7 @@ func runTrack(args []string) error {
 	fs.StringVar(&parent, "parent", "", "parent branch (trunk or a tracked branch)")
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("track", fs.Args()); err != nil {

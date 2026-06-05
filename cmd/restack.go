@@ -24,7 +24,7 @@ func runRestack(args []string) error {
 	var dryRun bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show what would be restacked without changing anything")
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st restack [--dry-run] [--json]") }
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("restack", fs.Args()); err != nil {

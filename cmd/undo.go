@@ -28,7 +28,7 @@ func runUndo(args []string) error {
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st undo [--json]") }
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("undo", fs.Args()); err != nil {

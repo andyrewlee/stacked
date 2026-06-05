@@ -26,7 +26,7 @@ func runAbort(args []string) error {
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st abort [--json]") }
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("abort", fs.Args()); err != nil {

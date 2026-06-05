@@ -105,11 +105,17 @@ func TestExecuteCommandError(t *testing.T) {
 
 func TestExecuteJSONErrorIsParseable(t *testing.T) {
 	var code int
+	var stdout string
 	errOut := captureStderr(t, func() {
-		withArgs(t, []string{"create", "--json"}, func() { code = Execute() })
+		stdout = captureStdout(t, func() {
+			withArgs(t, []string{"create", "--json"}, func() { code = Execute() })
+		})
 	})
 	if code != 1 {
 		t.Fatalf("Execute(create --json) = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("JSON error wrote stdout:\n%s", stdout)
 	}
 	if strings.Contains(errOut, "usage:") {
 		t.Fatalf("JSON error included usage text:\n%s", errOut)
@@ -117,6 +123,35 @@ func TestExecuteJSONErrorIsParseable(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
 		t.Fatalf("JSON error was not parseable: %v\n%s", err, errOut)
+	}
+}
+
+func TestExecuteJSONFlagParseErrorIsParseable(t *testing.T) {
+	cases := [][]string{
+		{"create", "--json", "--bad"},
+		{"status", "--json", "--bad"},
+	}
+	for _, args := range cases {
+		var code int
+		var stdout string
+		errOut := captureStderr(t, func() {
+			stdout = captureStdout(t, func() {
+				withArgs(t, args, func() { code = Execute() })
+			})
+		})
+		if code != 1 {
+			t.Fatalf("Execute(%v) = %d, want 1", args, code)
+		}
+		if stdout != "" {
+			t.Fatalf("JSON flag parse error wrote stdout for %v:\n%s", args, stdout)
+		}
+		if strings.Contains(errOut, "usage:") {
+			t.Fatalf("JSON flag parse error included flag output for %v:\n%s", args, errOut)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+			t.Fatalf("JSON flag parse error was not parseable for %v: %v\n%s", args, err, errOut)
+		}
 	}
 }
 

@@ -35,7 +35,7 @@ func runModify(args []string) error {
 	fs.BoolVar(&commit, "commit", false, "create a new commit instead of amending the tip")
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if len(fs.Args()) != 0 {

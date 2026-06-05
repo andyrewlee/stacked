@@ -32,7 +32,7 @@ func runInit(args []string) error {
 		fmt.Fprintln(fs.Output(), "usage: st init [--trunk <name>] [--json]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 
