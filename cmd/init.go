@@ -35,6 +35,9 @@ func runInit(args []string) error {
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("init", fs.Args()); err != nil {
+		return err
+	}
 
 	// Ensure we are inside a git repository.
 	if _, err := git.RepoRoot(); err != nil {

@@ -1199,3 +1199,13 @@ func TestInitRejectsMissingTrunk(t *testing.T) {
 		t.Fatalf("state after failed init = %v, want ErrNotInitialized", err)
 	}
 }
+
+func TestInitRejectsPositionalArgs(t *testing.T) {
+	newRepo(t)
+	if err := runInit([]string{"typo", "--trunk", "main"}); err == nil {
+		t.Fatal("init accepted a positional argument")
+	}
+	if _, err := stack.Load(); !errors.Is(err, stack.ErrNotInitialized) {
+		t.Fatalf("state after failed init = %v, want ErrNotInitialized", err)
+	}
+}
