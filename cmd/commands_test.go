@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -968,6 +969,38 @@ func TestFailedMutationDoesNotReplacePreviousUndo(t *testing.T) {
 	}
 }
 
+func TestSuccessfulNoopMutationDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runRestack(nil); err != nil {
+		t.Fatalf("noop restack: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after noop restack: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
+	}
+}
+
+func TestSuccessfulDirectNoopMutationDoesNotReplacePreviousUndo(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runSync(nil); err != nil {
+		t.Fatalf("noop sync: %v", err)
+	}
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after noop sync: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo did not remove branch from the last successful create")
+	}
+}
+
 func TestFailedDirectMutationDoesNotReplacePreviousUndo(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -1091,5 +1124,15 @@ func TestInitAlreadyInitialized(t *testing.T) {
 	})
 	if !strings.Contains(out, "already initialized") {
 		t.Fatalf("re-init should report already initialized, got:\n%s", out)
+	}
+}
+
+func TestInitRejectsMissingTrunk(t *testing.T) {
+	newRepo(t)
+	if err := runInit([]string{"--trunk", "mian"}); err == nil {
+		t.Fatal("init accepted a missing trunk branch")
+	}
+	if _, err := stack.Load(); !errors.Is(err, stack.ErrNotInitialized) {
+		t.Fatalf("state after failed init = %v, want ErrNotInitialized", err)
 	}
 }

@@ -57,6 +57,9 @@ func runInit(args []string) error {
 	if trunk == "" {
 		trunk = detectTrunk()
 	}
+	if !git.BranchExists(trunk) {
+		return fmt.Errorf("trunk branch %q does not exist", trunk)
+	}
 
 	if _, err := stack.Init(trunk); err != nil {
 		return fmt.Errorf("initializing stacked: %w", err)

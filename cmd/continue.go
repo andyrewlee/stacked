@@ -36,6 +36,7 @@ func runContinue(args []string) error {
 	if err := s.RecordUndo("continue"); err != nil {
 		return err
 	}
+	undoEntry, _, _ := stack.PeekUndo()
 
 	res, err := stack.Continue(stackEnv(s), s)
 	if err != nil {
@@ -47,8 +48,8 @@ func runContinue(args []string) error {
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
 	}
-	if err := stack.TrimUndo(); err != nil {
-		return fmt.Errorf("trimming undo log: %w", err)
+	if err := finalizeUndoOnSuccess(s, undoEntry); err != nil {
+		return fmt.Errorf("finalizing undo entry: %w", err)
 	}
 	return renderResult(res, asJSON)
 }

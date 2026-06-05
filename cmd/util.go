@@ -78,6 +78,7 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	if err := s.RecordUndo(label); err != nil {
 		return err
 	}
+	undoEntry, _, _ := stack.PeekUndo()
 	res, err := op(stackEnv(s), s)
 	if err != nil {
 		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
@@ -88,8 +89,8 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
 	}
-	if err := stack.TrimUndo(); err != nil {
-		return fmt.Errorf("trimming undo log: %w", err)
+	if err := finalizeUndoOnSuccess(s, undoEntry); err != nil {
+		return fmt.Errorf("finalizing undo entry: %w", err)
 	}
 	return renderResult(res, asJSON)
 }
@@ -111,12 +112,39 @@ func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) error {
 	return stack.DropUndo()
 }
 
+func finalizeUndoOnSuccess(s *stack.State, entry *stack.UndoEntry) error {
+	if entry == nil {
+		return stack.TrimUndo()
+	}
+	unchanged, err := sameState(s, entry.State)
+	if err != nil {
+		return err
+	}
+	if !unchanged {
+		return stack.TrimUndo()
+	}
+	if refsUnchanged(entry) {
+		return stack.DropUndo()
+	}
+	return stack.TrimUndo()
+}
+
 func cleanupNoopUndoOnError(s *stack.State, opErr error) error {
 	entry, _, _ := stack.PeekUndo()
 	if err := dropNoopUndo(s, entry, opErr); err != nil {
 		return err
 	}
 	return stack.TrimUndo()
+}
+
+func refsUnchanged(entry *stack.UndoEntry) bool {
+	for name, want := range entry.Refs {
+		got, err := git.RevParse("refs/heads/" + name)
+		if err != nil || got != want {
+			return false
+		}
+	}
+	return true
 }
 
 func sameState(s *stack.State, raw []byte) (bool, error) {
