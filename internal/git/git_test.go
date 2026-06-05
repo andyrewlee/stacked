@@ -435,6 +435,17 @@ func TestRebaseInProgressFalse(t *testing.T) {
 	}
 }
 
+func TestRebaseContinueQuietUsesValidContinueForm(t *testing.T) {
+	newRepo(t)
+	err := RebaseContinueQuiet()
+	if err == nil {
+		t.Fatal("RebaseContinueQuiet unexpectedly succeeded without a rebase")
+	}
+	if strings.Contains(err.Error(), "usage:") || strings.Contains(err.Error(), "options") {
+		t.Fatalf("RebaseContinueQuiet used an invalid option form: %v", err)
+	}
+}
+
 func TestRunAndRunErr(t *testing.T) {
 	newRepo(t)
 	out, err := Run("rev-parse", "--abbrev-ref", "HEAD")

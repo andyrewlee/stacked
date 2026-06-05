@@ -316,7 +316,7 @@ func RebaseContinue() error {
 // RebaseContinueQuiet resumes a rebase without writing git's human output to
 // stdout/stderr.
 func RebaseContinueQuiet() error {
-	cmd := exec.Command("git", "rebase", "--continue", "--quiet")
+	cmd := exec.Command("git", "rebase", "--continue")
 	cmd.Stdin = os.Stdin
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
 	out, err := cmd.CombinedOutput()
