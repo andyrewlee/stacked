@@ -34,7 +34,9 @@ func runDown(args []string) error {
 	}
 
 	n := 1
-	if rest := fs.Args(); len(rest) > 0 {
+	if rest := fs.Args(); len(rest) > 1 {
+		return fmt.Errorf("down takes at most one step count, got %q", rest[1])
+	} else if len(rest) > 0 {
 		v, err := strconv.Atoi(rest[0])
 		if err != nil {
 			return fmt.Errorf("invalid step count %q: %w", rest[0], err)

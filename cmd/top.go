@@ -37,6 +37,9 @@ func runTop(args []string) error {
 	if err != nil {
 		return err
 	}
+	if cur != s.Trunk && !s.IsTracked(cur) {
+		return fmt.Errorf("branch %q is not tracked by stacked", cur)
+	}
 
 	leaf := cur
 	for {

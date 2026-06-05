@@ -31,7 +31,9 @@ func runUp(args []string) error {
 	}
 
 	n := 1
-	if rest := fs.Args(); len(rest) > 0 {
+	if rest := fs.Args(); len(rest) > 1 {
+		return fmt.Errorf("up takes at most one level count, got %q", rest[1])
+	} else if len(rest) > 0 {
 		parsed, err := strconv.Atoi(rest[0])
 		if err != nil {
 			return fmt.Errorf("invalid level count %q: %w", rest[0], err)
@@ -49,6 +51,9 @@ func runUp(args []string) error {
 	cur, err := currentBranch()
 	if err != nil {
 		return err
+	}
+	if cur != state.Trunk && !state.IsTracked(cur) {
+		return fmt.Errorf("branch %q is not tracked by stacked", cur)
 	}
 
 	start := cur

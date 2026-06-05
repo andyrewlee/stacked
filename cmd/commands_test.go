@@ -696,6 +696,12 @@ func TestUpDownInvalidCounts(t *testing.T) {
 	if err := runDown([]string{"-1"}); err == nil {
 		t.Fatalf("down with negative should error")
 	}
+	if err := runUp([]string{"1", "extra"}); err == nil {
+		t.Fatalf("up with extra count should error")
+	}
+	if err := runDown([]string{"1", "extra"}); err == nil {
+		t.Fatalf("down with extra count should error")
+	}
 }
 
 func TestBottomNotices(t *testing.T) {
@@ -723,6 +729,26 @@ func TestBottomNotices(t *testing.T) {
 	})
 	if !strings.Contains(out, "at trunk") {
 		t.Fatalf("bottom at trunk should say so, got:\n%s", out)
+	}
+}
+
+func TestNavigationRejectsUntrackedCurrentBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "checkout", "-q", "-b", "loose")
+	for _, tt := range []struct {
+		name string
+		run  func([]string) error
+	}{
+		{"up", runUp},
+		{"top", runTop},
+		{"bottom", runBottom},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(nil); err == nil {
+				t.Fatalf("%s succeeded on an untracked branch", tt.name)
+			}
+		})
 	}
 }
 

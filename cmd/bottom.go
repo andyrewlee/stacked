@@ -44,6 +44,9 @@ func runBottom(args []string) error {
 	if cur == s.Trunk {
 		return navEmit(asJSON, s.Trunk, "at trunk")
 	}
+	if !s.IsTracked(cur) {
+		return fmt.Errorf("branch %q is not tracked by stacked", cur)
+	}
 
 	b := s.BottomOf(cur)
 	if b == cur {
