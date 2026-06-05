@@ -29,6 +29,9 @@ func runStatus(args []string) error {
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("status", fs.Args()); err != nil {
+		return err
+	}
 
 	s, err := loadState()
 	if err != nil {

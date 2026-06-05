@@ -29,6 +29,9 @@ func runLog(args []string) error {
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("log", fs.Args()); err != nil {
+		return err
+	}
 
 	s, err := loadState()
 	if err != nil {

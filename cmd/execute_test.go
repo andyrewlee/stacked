@@ -92,7 +92,7 @@ func TestExecuteUnknownCommand(t *testing.T) {
 
 func TestExecuteCommandError(t *testing.T) {
 	// `st up` in an uninitialized repo returns ErrNotInitialized, which the
-	// dispatcher maps to the dedicated exit code 3 (see docs/AGENT.md).
+	// dispatcher maps to the dedicated exit code 3.
 	newRepo(t)
 	var code int
 	withArgs(t, []string{"up"}, func() {

@@ -37,11 +37,14 @@ func runGuide(args []string) error {
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("guide", fs.Args()); err != nil {
+		return err
+	}
 
 	payload := struct {
 		Steps []string `json:"steps"`
 		Docs  string   `json:"docs"`
-	}{guideSteps, "docs/AGENT.md (exit codes + JSON schemas); also `st help <command>`"}
+	}{guideSteps, "`st help <command>` for command usage"}
 
 	return emit(asJSON, payload, func() {
 		out("stacked — recommended workflow\n\n")
@@ -49,6 +52,6 @@ func runGuide(args []string) error {
 			out("  %s\n", step)
 		}
 		out("\nEvery command accepts --json; failures use exit codes 2=conflict, 3=not-initialized, 4=dirty.\n")
-		out("See docs/AGENT.md for the full machine contract, or `st help <command>`.\n")
+		out("Use `st help <command>` for command usage.\n")
 	})
 }

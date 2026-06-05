@@ -1139,6 +1139,45 @@ func TestNoArgMutatorsRejectPositionalArgs(t *testing.T) {
 	}
 }
 
+func TestNoArgReadOnlyCommandsRejectPositionalArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func([]string) error
+	}{
+		{"guide", runGuide},
+		{"log", runLog},
+		{"status", runStatus},
+		{"validate", runValidate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run([]string{"unexpected"}); err == nil {
+				t.Fatalf("%s accepted a positional argument", tt.name)
+			}
+		})
+	}
+}
+
+func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := runGuide([]string{"--json"}); err != nil {
+			t.Fatalf("guide --json: %v", err)
+		}
+	})
+	if strings.Contains(out, "docs/AGENT.md") {
+		t.Fatalf("guide references missing docs path:\n%s", out)
+	}
+	var payload struct {
+		Docs string `json:"docs"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("guide JSON invalid: %v\n%s", err, out)
+	}
+	if payload.Docs == "" {
+		t.Fatal("guide JSON omitted docs guidance")
+	}
+}
+
 // --- sync with a real remote ----------------------------------------------
 
 func TestSyncFastForwardsTrunk(t *testing.T) {

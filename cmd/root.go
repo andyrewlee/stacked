@@ -109,8 +109,8 @@ func helpForCommand(name string) int {
 	return 0
 }
 
-// exitCode maps an error to a stable, documented exit status so agents can
-// branch on the category without parsing messages. See docs/AGENT.md.
+// exitCode maps an error to a stable exit status so agents can branch on the
+// category without parsing messages.
 func exitCode(err error) int {
 	switch {
 	case errors.Is(err, stack.ErrNotInitialized):
