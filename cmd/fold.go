@@ -24,6 +24,9 @@ func runFold(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("fold", fs.Args()); err != nil {
+		return err
+	}
 
 	return mutate("fold", asJSON, stack.Fold)
 }

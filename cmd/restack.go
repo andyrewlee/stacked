@@ -27,6 +27,9 @@ func runRestack(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("restack", fs.Args()); err != nil {
+		return err
+	}
 
 	if dryRun {
 		s, err := loadState()

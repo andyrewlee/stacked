@@ -24,6 +24,9 @@ func runContinue(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("continue", fs.Args()); err != nil {
+		return err
+	}
 
 	s, release, err := lockAndLoad()
 	if err != nil {

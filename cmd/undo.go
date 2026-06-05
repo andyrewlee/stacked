@@ -31,6 +31,9 @@ func runUndo(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("undo", fs.Args()); err != nil {
+		return err
+	}
 
 	release, err := acquireLock()
 	if err != nil {

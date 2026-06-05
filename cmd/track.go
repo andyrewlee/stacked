@@ -29,6 +29,9 @@ func runTrack(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("track", fs.Args()); err != nil {
+		return err
+	}
 
 	return mutate("track", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.TrackBranch(env, s, parent)

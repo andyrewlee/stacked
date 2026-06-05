@@ -27,6 +27,9 @@ func runSquash(args []string) error {
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("squash", fs.Args()); err != nil {
+		return err
+	}
 
 	return mutate("squash", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Squash(env, s, message)

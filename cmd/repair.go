@@ -30,6 +30,9 @@ func runRepair(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectArgs("repair", fs.Args()); err != nil {
+		return err
+	}
 
 	s, release, err := lockAndLoad()
 	if err != nil {
@@ -73,7 +76,9 @@ func runRepair(args []string) error {
 			}
 			for _, child := range s.Children(name) {
 				child.Parent = newParent
-				child.ParentSHA = psha
+				if child.ParentSHA == "" {
+					child.ParentSHA = psha
+				}
 			}
 			s.Untrack(name)
 			fixes = append(fixes, fmt.Sprintf("untracked missing branch %s (children re-parented onto %s)", name, newParent))

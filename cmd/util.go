@@ -34,6 +34,13 @@ func stackEnv(s *stack.State) stack.Env {
 	return stack.Env{Git: gitShell, Save: s.Save}
 }
 
+func rejectArgs(command string, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s takes no positional arguments, got %q", command, args[0])
+}
+
 // acquireLock takes the repository stack lock; the caller must defer the
 // returned release function. It serializes mutating commands across concurrent
 // st processes (a no-op on platforms without flock).

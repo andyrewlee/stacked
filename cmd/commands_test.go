@@ -766,6 +766,26 @@ func TestRepairInvalidParentUsesMergeBase(t *testing.T) {
 	}
 }
 
+func TestRepairMissingParentPreservesChildBase(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	before := stateT(t)
+	childBefore, _ := before.Get("feat-b")
+	oldBase := childBefore.ParentSHA
+	mustCheckout(t, "main")
+	mustRun(t, "git", "branch", "-D", "feat-a")
+
+	if err := runRepair(nil); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	child, _ := stateT(t).Get("feat-b")
+	if child.Parent != "main" || child.ParentSHA != oldBase {
+		t.Fatalf("repaired feat-b = (%s, %s), want (main, %s)", child.Parent, child.ParentSHA, oldBase)
+	}
+}
+
 func TestUndoDeletesCreatedBranch(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -877,6 +897,29 @@ func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	}
 	if stateT(t).IsTracked("feat-a") {
 		t.Fatal("undo did not restore the previous state snapshot")
+	}
+}
+
+func TestNoArgMutatorsRejectPositionalArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func([]string) error
+	}{
+		{"abort", runAbort},
+		{"continue", runContinue},
+		{"fold", runFold},
+		{"repair", runRepair},
+		{"restack", runRestack},
+		{"squash", runSquash},
+		{"track", runTrack},
+		{"undo", runUndo},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run([]string{"unexpected"}); err == nil {
+				t.Fatalf("%s accepted a positional argument", tt.name)
+			}
+		})
 	}
 }
 
