@@ -12,7 +12,7 @@ func init() {
 		Name:    "bottom",
 		Aliases: []string{"b"},
 		Summary: "Jump to the bottom branch of the current stack (just above trunk)",
-		Usage:   "st bottom",
+		Usage:   "st bottom [--json]",
 		Run:     runBottom,
 	})
 }

@@ -15,7 +15,7 @@ func init() {
 		Name:    "validate",
 		Aliases: []string{"doctor"},
 		Summary: "Check the stack state for drift or inconsistencies",
-		Usage:   "st validate",
+		Usage:   "st validate [--json]",
 		Run:     runValidate,
 	})
 }

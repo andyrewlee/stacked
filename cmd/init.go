@@ -14,7 +14,7 @@ func init() {
 	register(&Command{
 		Name:    "init",
 		Summary: "Initialize stacked stack tracking in this repo",
-		Usage:   "st init [--trunk <name>]",
+		Usage:   "st init [--trunk <name>] [--json]",
 		Run:     runInit,
 	})
 }

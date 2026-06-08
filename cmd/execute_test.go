@@ -95,6 +95,130 @@ func TestExecuteSubcommandHelp(t *testing.T) {
 	}
 }
 
+func TestExecuteHelpJSON(t *testing.T) {
+	// `st help --json` and `st --help --json` emit a commands array, exit 0.
+	for _, args := range [][]string{{"help", "--json"}, {"--help", "--json"}} {
+		var code int
+		out := captureStdout(t, func() {
+			withArgs(t, args, func() { code = Execute() })
+		})
+		if code != 0 {
+			t.Fatalf("Execute(%v) = %d, want 0", args, code)
+		}
+		var payload struct {
+			Commands []commandInfo `json:"commands"`
+		}
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatalf("help --json not parseable for %v: %v\n%s", args, err, out)
+		}
+		names := map[string]bool{}
+		for _, c := range payload.Commands {
+			names[c.Name] = true
+		}
+		for _, want := range []string{"create", "help", "version"} {
+			if !names[want] {
+				t.Fatalf("help --json missing %q in %v", want, names)
+			}
+		}
+	}
+
+	// `st help <command> --json` emits a single object.
+	var code int
+	out := captureStdout(t, func() {
+		withArgs(t, []string{"help", "create", "--json"}, func() { code = Execute() })
+	})
+	if code != 0 {
+		t.Fatalf("Execute(help create --json) = %d, want 0", code)
+	}
+	var info commandInfo
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		t.Fatalf("help create --json not parseable: %v\n%s", err, out)
+	}
+	if info.Name != "create" {
+		t.Errorf("help create --json name = %q, want create", info.Name)
+	}
+	for _, topic := range []string{"help", "version"} {
+		out = captureStdout(t, func() {
+			withArgs(t, []string{"help", topic, "--json"}, func() { code = Execute() })
+		})
+		if code != 0 {
+			t.Fatalf("Execute(help %s --json) = %d, want 0", topic, code)
+		}
+		if err := json.Unmarshal([]byte(out), &info); err != nil {
+			t.Fatalf("help %s --json not parseable: %v\n%s", topic, err, out)
+		}
+		if info.Name != topic {
+			t.Errorf("help %s --json name = %q, want %s", topic, info.Name, topic)
+		}
+	}
+
+	// `st version --json`.
+	out = captureStdout(t, func() {
+		withArgs(t, []string{"version", "--json"}, func() { code = Execute() })
+	})
+	if code != 0 {
+		t.Fatalf("Execute(version --json) = %d, want 0", code)
+	}
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("version --json not parseable: %v\n%s", err, out)
+	}
+	if v.Version != version {
+		t.Errorf("version --json = %q, want %q", v.Version, version)
+	}
+}
+
+func TestExecuteBuiltInUnknownFlags(t *testing.T) {
+	cases := []struct {
+		args     []string
+		wantJSON bool
+	}{
+		{[]string{"help", "--jsno"}, false},
+		{[]string{"help", "--bad", "--json"}, true},
+		{[]string{"version", "--bad"}, false},
+		{[]string{"version", "--bad", "--json"}, true},
+	}
+	for _, tc := range cases {
+		var code int
+		var stdout string
+		stderr := executeCapturingOutput(t, tc.args, &code, &stdout)
+		if code != 1 {
+			t.Fatalf("Execute(%v) = %d, want 1", tc.args, code)
+		}
+		if stdout != "" {
+			t.Fatalf("Execute(%v) wrote stdout:\n%s", tc.args, stdout)
+		}
+		if tc.wantJSON {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(stderr), &payload); err != nil {
+				t.Fatalf("Execute(%v) stderr not JSON: %v\n%s", tc.args, err, stderr)
+			}
+			continue
+		}
+		if !strings.Contains(stderr, "unknown") {
+			t.Fatalf("Execute(%v) stderr missing unknown-flag message:\n%s", tc.args, stderr)
+		}
+	}
+}
+
+// Every command except completion accepts --json and must say so in its registry
+// usage string, so `st help <cmd>` documents the flag (CLI-6, DOC-2/3).
+func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
+	for _, c := range registry {
+		if c.Name == "completion" {
+			continue // completion emits shell scripts, not JSON
+		}
+		if !strings.Contains(c.Usage, "--json") {
+			t.Errorf("command %q usage %q does not document --json", c.Name, c.Usage)
+		}
+	}
+	if u := byName["sync"].Usage; !strings.Contains(u, "--dry-run") {
+		t.Errorf("sync usage %q does not document --dry-run", u)
+	}
+}
+
 func TestExecuteUnknownCommand(t *testing.T) {
 	// Plain mode: exit 1 and nothing on stdout (the diagnostic goes to stderr,
 	// verified by the e2e suite).

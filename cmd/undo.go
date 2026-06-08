@@ -15,7 +15,7 @@ func init() {
 	register(&Command{
 		Name:    "undo",
 		Summary: "Undo the last stack-mutating command",
-		Usage:   "st undo",
+		Usage:   "st undo [--json]",
 		Run:     runUndo,
 	})
 }

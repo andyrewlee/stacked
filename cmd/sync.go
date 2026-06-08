@@ -13,7 +13,7 @@ func init() {
 		Name:    "sync",
 		Aliases: []string{"s"},
 		Summary: "Fetch trunk, fast-forward it, restack everything, and prune merged branches",
-		Usage:   "st sync [--no-delete] [--remote <name>] [--json]",
+		Usage:   "st sync [--no-delete] [--remote <name>] [--dry-run] [--json]",
 		Run:     runSync,
 	})
 }

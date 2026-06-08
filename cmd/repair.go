@@ -13,7 +13,7 @@ func init() {
 	register(&Command{
 		Name:    "repair",
 		Summary: "Reconcile the stack metadata with the repository (fix drift)",
-		Usage:   "st repair",
+		Usage:   "st repair [--json]",
 		Run:     runRepair,
 	})
 }

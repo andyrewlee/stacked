@@ -12,7 +12,7 @@ func init() {
 	register(&Command{
 		Name:    "abort",
 		Summary: "Abort an in-progress restack/rebase, restoring the prior state",
-		Usage:   "st abort",
+		Usage:   "st abort [--json]",
 		Run:     runAbort,
 	})
 }

@@ -13,7 +13,7 @@ func init() {
 		Name:    "down",
 		Aliases: []string{"d"},
 		Summary: "Move down the stack toward trunk",
-		Usage:   "st down [n]",
+		Usage:   "st down [n] [--json]",
 		Run:     runDown,
 	})
 }
