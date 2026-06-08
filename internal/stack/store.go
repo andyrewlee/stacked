@@ -78,7 +78,7 @@ func Load() (*State, error) {
 }
 
 // Save atomically writes the state to disk as pretty-printed JSON with a
-// trailing newline, using a temporary file and rename.
+// trailing newline.
 func (s *State) Save() error {
 	path, err := statePath()
 	if err != nil {
@@ -88,28 +88,36 @@ func (s *State) Save() error {
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
-	data = append(data, '\n')
+	return atomicWriteFile(path, append(data, '\n'))
+}
 
+// atomicWriteFile writes data to path so a reader never observes a half-written
+// file: it writes a temporary file in the same directory, then renames it over
+// path (rename is atomic within a filesystem). The parent directory is created
+// if necessary. A crash or full disk mid-write leaves either the old file or the
+// new one intact, never a truncated mix. This is the single writer used for all
+// on-disk stacked metadata (state.json and undo.json).
+func atomicWriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create stacked dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, "state-*.json.tmp")
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temp state file: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return fmt.Errorf("write temp state file: %w", err)
+		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp state file: %w", err)
+		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename state file: %w", err)
+		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
 }

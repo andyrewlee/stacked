@@ -46,7 +46,13 @@ func loadUndo() ([]UndoEntry, error) {
 	}
 	var entries []UndoEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("parse undo log: %w", err)
+		// A corrupt or truncated journal is recoverable state, not a fatal
+		// error. Every mutating command records an undo entry first, so
+		// returning an error here would block all mutations until the file was
+		// manually deleted. Discard the unparseable journal and start fresh; the
+		// worst case is losing undo history, never the stack itself (state.json
+		// is written atomically and separately).
+		return nil, nil
 	}
 	return entries, nil
 }
@@ -56,14 +62,11 @@ func writeUndo(entries []UndoEntry) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return atomicWriteFile(path, append(data, '\n'))
 }
 
 // RecordUndo snapshots the current state and the tips of the trunk and all
@@ -174,11 +177,8 @@ func RestoreState(raw []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
 		raw = append(raw, '\n')
 	}
-	return os.WriteFile(path, raw, 0o644)
+	return atomicWriteFile(path, raw)
 }
