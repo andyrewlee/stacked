@@ -79,14 +79,31 @@ func TestExecuteVersion(t *testing.T) {
 }
 
 func TestExecuteUnknownCommand(t *testing.T) {
+	// Plain mode: exit 1 and nothing on stdout (the diagnostic goes to stderr,
+	// verified by the e2e suite).
 	var code int
-	withArgs(t, []string{"frobnicate"}, func() {
-		// Help still goes to stdout; we only assert the exit code here. The
-		// stderr "unknown command" line is verified by the e2e suite.
-		_ = captureStdout(t, func() { code = Execute() })
+	stdout := captureStdout(t, func() {
+		withArgs(t, []string{"frobnicate"}, func() { code = Execute() })
 	})
 	if code != 1 {
 		t.Fatalf("Execute(unknown) = %d, want 1", code)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatalf("unknown command wrote stdout:\n%s", stdout)
+	}
+
+	// --json: a parseable error envelope on stderr, still nothing on stdout.
+	var stdoutJSON string
+	errOut := executeCapturingOutput(t, []string{"frobnicate", "--json"}, &code, &stdoutJSON)
+	if code != 1 {
+		t.Fatalf("Execute(unknown --json) = %d, want 1", code)
+	}
+	if stdoutJSON != "" {
+		t.Fatalf("unknown command --json wrote stdout:\n%s", stdoutJSON)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+		t.Fatalf("unknown --json stderr not parseable: %v\n%s", err, errOut)
 	}
 }
 

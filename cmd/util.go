@@ -55,17 +55,21 @@ func usageUnlessJSON(fs *flag.FlagSet, args []string) {
 	}
 }
 
+// parseFlagSet parses args with fs while keeping the flag package quiet: the
+// dispatcher (renderError) is the single reporter of a parse error, so the flag
+// package's own error line and its automatic usage dump are suppressed during
+// Parse. This avoids a duplicated error in plain mode and keeps a non-JSON usage
+// block out of --json output. Commands that want to show usage call
+// fs.Usage()/usageUnlessJSON explicitly after parsing.
 func parseFlagSet(fs *flag.FlagSet, args []string) error {
-	if jsonRequested(args) {
-		output := fs.Output()
-		usage := fs.Usage
-		fs.SetOutput(io.Discard)
-		fs.Usage = func() {}
-		defer func() {
-			fs.SetOutput(output)
-			fs.Usage = usage
-		}()
-	}
+	output := fs.Output()
+	usage := fs.Usage
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	defer func() {
+		fs.SetOutput(output)
+		fs.Usage = usage
+	}()
 	return fs.Parse(args)
 }
 
