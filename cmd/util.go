@@ -103,11 +103,15 @@ func lockAndLoad() (*stack.State, func(), error) {
 	return s, release, nil
 }
 
-// mutate runs a stack-mutating engine operation under the repo lock with an undo
-// snapshot, then persists and renders the result. The op mutates s and returns
-// an OpResult; locking, undo, save, and rendering are handled here so each
-// command stays a thin adapter.
-func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.OpResult, error)) error {
+// mutateState runs a stack-mutating op under the repo lock with the undo-snapshot
+// protocol: it records an undo entry, runs op, and on success persists and
+// finalizes the entry (trimming it, or dropping it when op was a no-op); on
+// error it cleans up the tentative entry. It does NOT render — callers render
+// from the (possibly mutated) state. This is the single implementation of the
+// locking/undo/save protocol; mutate is the common case, and commands with a
+// custom result shape (sync, repair) call it directly. The op closure may close
+// over a Remote, so remote-dependent mutations fit the same protocol.
+func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) error) error {
 	s, release, err := lockAndLoad()
 	if err != nil {
 		return err
@@ -117,8 +121,7 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 		return err
 	}
 	undoEntry, _, _ := stack.PeekUndo()
-	res, err := op(stackEnv(s, asJSON), s)
-	if err != nil {
+	if err := op(stackEnv(s, asJSON), s); err != nil {
 		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
 			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
 		}
@@ -129,6 +132,20 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	}
 	if err := finalizeUndoOnSuccess(s, undoEntry); err != nil {
 		return fmt.Errorf("finalizing undo entry: %w", err)
+	}
+	return nil
+}
+
+// mutate runs an engine operation that returns an OpResult through mutateState
+// and renders the result, so each command stays a thin adapter.
+func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.OpResult, error)) error {
+	var res *stack.OpResult
+	if err := mutateState(label, asJSON, func(env stack.Env, s *stack.State) error {
+		r, err := op(env, s)
+		res = r
+		return err
+	}); err != nil {
+		return err
 	}
 	return renderResult(res, asJSON)
 }

@@ -71,6 +71,25 @@ func restoreHEADAfterNonConflict(env Env, target, fallback string, err error) er
 	return err
 }
 
+// finishUpstack is the common tail of the operations that rewrite a branch's
+// commits (fold, squash, onto): it restacks anchor's descendants, persists, and
+// restores HEAD to the original branch (or the trunk). On a non-conflict restack
+// error it restores HEAD before returning; on a conflict it leaves the rebase in
+// progress for `st continue`.
+func finishUpstack(env Env, s *State, anchor string) ([]string, error) {
+	rebased, err := s.RestackUpstack(env, anchor)
+	if err != nil {
+		return nil, restoreHEADAfterNonConflict(env, anchor, s.Trunk, err)
+	}
+	if err := env.save(); err != nil {
+		return nil, err
+	}
+	if err := restoreHEAD(env, anchor, s.Trunk); err != nil {
+		return nil, err
+	}
+	return rebased, nil
+}
+
 // Create makes a new branch stacked on the current branch and tracks it. With
 // all it stages everything first; with a message it commits the staged changes.
 func Create(env Env, s *State, name, message string, all bool) (*OpResult, error) {
@@ -302,15 +321,8 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		return nil, err
 	}
 
-	rebased, err := s.RestackUpstack(env, parent)
+	rebased, err := finishUpstack(env, s, parent)
 	if err != nil {
-		err = restoreHEADAfterNonConflict(env, parent, s.Trunk, err)
-		return nil, err
-	}
-	if err := env.save(); err != nil {
-		return nil, err
-	}
-	if err := restoreHEAD(env, parent, s.Trunk); err != nil {
 		return nil, err
 	}
 	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: rebased}, nil
@@ -373,15 +385,8 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 		return nil, fmt.Errorf("creating squashed commit on %q: %w", cur, err)
 	}
 
-	rebased, err := s.RestackUpstack(env, cur)
+	rebased, err := finishUpstack(env, s, cur)
 	if err != nil {
-		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
-		return nil, err
-	}
-	if err := env.save(); err != nil {
-		return nil, err
-	}
-	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
 		return nil, err
 	}
 	return &OpResult{Summary: fmt.Sprintf("Squashed %d commits on %s into one", len(subjects), cur), Branch: cur, Restacked: rebased}, nil
@@ -447,15 +452,8 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 		return nil, err
 	}
 
-	rebased, err := s.RestackUpstack(env, cur)
+	rebased, err := finishUpstack(env, s, cur)
 	if err != nil {
-		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
-		return nil, err
-	}
-	if err := env.save(); err != nil {
-		return nil, err
-	}
-	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
 		return nil, err
 	}
 	return &OpResult{Summary: fmt.Sprintf("Moved %s onto %s", cur, target), Branch: cur, Restacked: rebased}, nil
