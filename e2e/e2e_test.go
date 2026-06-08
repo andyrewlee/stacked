@@ -689,6 +689,119 @@ func TestConflictAbort(t *testing.T) {
 	wantStderrContains(t, res, "no rebase in progress")
 }
 
+// TestSyncConflictContinue drives a conflict that occurs *during* sync's restack
+// (the trunk advances under a stacked branch), then resolves it (TEST-2).
+func TestSyncConflictContinue(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	// feat-a adds f.txt; the trunk then adds f.txt with different content, so
+	// restacking feat-a onto the advanced trunk during sync conflicts.
+	r.create("feat-a", "f.txt", "A\n", "a")
+	r.stOK("checkout", "main")
+	r.writeFile("f.txt", "MAIN\n")
+	r.git("add", "f.txt")
+	r.git("commit", "-q", "-m", "trunk advances")
+	r.stOK("checkout", "feat-a")
+
+	res := r.st("sync")
+	wantExit(t, res, 2) // conflict maps to the dedicated exit code
+	wantStderrContains(t, res, "st continue")
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); err != nil {
+		t.Fatalf("expected a rebase in progress mid-sync: %v", err)
+	}
+
+	// Resolve and continue; the stack must reconcile and validate clean.
+	r.writeFile("f.txt", "MAIN\nA\n")
+	r.git("add", "f.txt")
+	r.stOK("continue")
+	r.stOK("validate")
+}
+
+// TestModifyJSONRestacksDescendants amends the bottom of a 2-deep stack in --json
+// mode, exercising the QuietShell rebase path and asserting the descendant
+// actually rebased (TEST-6).
+func TestModifyJSONRestacksDescendants(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+	bBefore := r.git("rev-parse", "feat-b")
+
+	r.writeFile("a.txt", "a2\n")
+	res := r.stOK("modify", "-a", "--json")
+	var payload struct {
+		Branch    string   `json:"branch"`
+		Restacked []string `json:"restacked"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &payload); err != nil {
+		t.Fatalf("modify --json not parseable: %v\n%s", err, res.stdout)
+	}
+	if len(payload.Restacked) == 0 {
+		t.Fatalf("modify --json reported no restack: %+v", payload)
+	}
+	if bAfter := r.git("rev-parse", "feat-b"); bAfter == bBefore {
+		t.Fatalf("feat-b was not rebased (still %s)", bAfter)
+	}
+}
+
+// TestModifyMessageReword rewords the bottom branch's commit (the AmendMessage
+// real-git path) and asserts the subject changed and the descendant restacked
+// (TEST-7).
+func TestModifyMessageReword(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "original")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+	bBefore := r.git("rev-parse", "feat-b")
+
+	r.stOK("modify", "-m", "reworded")
+	if subj := r.git("log", "-1", "--format=%s", "feat-a"); subj != "reworded" {
+		t.Fatalf("feat-a subject = %q, want reworded", subj)
+	}
+	if bAfter := r.git("rev-parse", "feat-b"); bAfter == bBefore {
+		t.Fatal("feat-b was not restacked after the reword")
+	}
+}
+
+// TestExitCodeContract maps each documented exit code (docs/AGENT.md) to a
+// triggering scenario, guarding the exit-code contract against drift (LOOP-3).
+func TestExitCodeContract(t *testing.T) {
+	t.Run("0_success", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		wantExit(t, r.st("status"), 0)
+	})
+	t.Run("1_usage", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		wantExit(t, r.st("create"), 1) // missing branch name
+	})
+	t.Run("2_conflict", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "f.txt", "A\n", "a")
+		r.create("feat-b", "f.txt", "A\nB\n", "b")
+		r.stOK("checkout", "feat-a")
+		r.writeFile("f.txt", "X\n")
+		wantExit(t, r.st("modify", "-a"), 2)
+	})
+	t.Run("3_not_initialized", func(t *testing.T) {
+		r := newRepo(t)
+		wantExit(t, r.st("status"), 3)
+	})
+	t.Run("4_dirty", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "a.txt", "a\n", "a")
+		r.create("feat-b", "b.txt", "b\n", "b")
+		r.stOK("checkout", "feat-a")
+		r.writeFile("a.txt", "dirty\n") // unstaged change
+		wantExit(t, r.st("restack"), 4)
+	})
+}
+
 // TestFold folds the top branch into its parent: the parent absorbs the commits
 // and the folded branch is removed.
 func TestFold(t *testing.T) {
