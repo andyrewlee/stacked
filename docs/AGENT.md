@@ -49,8 +49,11 @@ the result, stderr for the error envelope, and the exit code for the category.
 - **Stack-mutating commands** (`create`, `modify`, `restack`, `fold`, `squash`,
   `onto`, `delete`, `track`, `untrack`, `rename`) share one shape:
   ```json
-  { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"], "deleted": [], "notes": [] }
+  { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
+  `branch`, `restacked`, `deleted`, `notes`, and `dryRun` are all `omitempty` —
+  absent when empty or false. Preview-capable commands (`restack`, `sync`) add
+  `"dryRun": true` under `--dry-run`.
 - **`log --json`** — a recursive tree rooted at the trunk:
   ```json
   { "name": "main", "current": false, "needsRestack": false,
@@ -58,7 +61,8 @@ the result, stderr for the error envelope, and the exit code for the category.
                     "current": true, "needsRestack": false, "topCommit": "add a", "children": [] } ] }
   ```
 - **`status --json`** — `{ "branch", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies.
-- **`checkout --json`** (no name) — `{ "trunk", "current", "branches": [] }`
+- **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
+  name, `{ "trunk", "current", "branches": [] }`
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point)
 - **`submit --json`** — `{ "remote", "dryRun", "pushed": [], "repoURL" }`; from trunk it returns `{ "remote", "pushed": [], "summary" }`.

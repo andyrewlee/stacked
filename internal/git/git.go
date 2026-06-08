@@ -342,13 +342,6 @@ func Fetch(remote string) error {
 	return err
 }
 
-// Push pushes the given branch to the "origin" remote and records it as the
-// branch's upstream (-u) so ahead/behind tracking works after the first publish.
-// When force is true it uses --force-with-lease for a safe force push.
-func Push(branch string, force bool) error {
-	return PushRemote("origin", branch, force)
-}
-
 // PushRemote pushes the given branch to remote and records it as the branch's
 // upstream (-u) so ahead/behind tracking works after the first publish. When
 // force is true it uses --force-with-lease for a safe force push.

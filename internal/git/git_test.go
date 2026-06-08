@@ -328,14 +328,14 @@ func TestFetchAndPush(t *testing.T) {
 	mustGit(t, "init", "-q", "--bare", bare)
 	mustGit(t, "remote", "add", "origin", bare)
 
-	if err := Push("main", false); err != nil {
+	if err := PushRemote("origin", "main", false); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 	if err := Fetch("origin"); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
-	if err := Push("main", true); err != nil {
+	if err := PushRemote("origin", "main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
 	}
 }
@@ -365,7 +365,7 @@ func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
 	mustGit(t, "remote", "add", "origin", bare)
 	mustGit(t, "tag", "main", "HEAD")
 
-	if err := Push("main", false); err != nil {
+	if err := PushRemote("origin", "main", false); err != nil {
 		t.Fatalf("Push with same-named tag: %v", err)
 	}
 	want := mustGit(t, "rev-parse", "refs/heads/main")
@@ -385,7 +385,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 	bare := t.TempDir()
 	mustGit(t, "init", "-q", "--bare", bare)
 	mustGit(t, "remote", "add", "origin", bare)
-	if err := Push("main", false); err != nil {
+	if err := PushRemote("origin", "main", false); err != nil {
 		t.Fatalf("initial Push: %v", err)
 	}
 
@@ -400,7 +400,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "remote")
 	remoteTip := mustGit(t, "rev-parse", "HEAD")
-	if err := Push("main", false); err != nil {
+	if err := PushRemote("origin", "main", false); err != nil {
 		t.Fatalf("remote Push: %v", err)
 	}
 	if err := Fetch("origin"); err != nil {
