@@ -8,6 +8,7 @@ loop, and the engine you'll touch most is tested in milliseconds.
 ```sh
 make test-fast   # sub-second: pure engine logic over the fake git
 make ci          # the full gate (= the pre-push hook = CI)
+make smoke       # real-git smoke matrix for manual release/audit closeout
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
@@ -15,6 +16,13 @@ make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 `vet` + `build` + race tests + black-box e2e + a merged-coverage gate (≥75%). If
 it's green, you can commit. Keep the tool **standard-library only** — `go.mod` must
 have zero `require` entries (`go mod tidy` stays a no-op).
+
+`make smoke` is an additional manual-closeout loop. It builds `./st`, then drives
+the binary in fresh temporary repositories through high-frequency workflows:
+stack creation/navigation, modify/restack, fold/squash/onto/rename/delete,
+undo/repair, JSON/exit-code contracts, local bare remotes, sync/submit, and
+conflict continue/abort. It is intentionally not part of `make ci`, but it is the
+right tool before releases or after broad CLI changes.
 
 ## Architecture in one breath
 

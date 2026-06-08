@@ -8,7 +8,7 @@ COVERAGE_MIN ?= 75
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet lint check-deps golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet lint check-deps golden test test-fast e2e cover smoke hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order.
 # `cover` runs the whole suite once (race + combined in-process/e2e coverage),
@@ -71,6 +71,11 @@ test:
 # Black-box e2e suite: builds and drives the real binary as a subprocess.
 e2e:
 	go test ./e2e/... -count=1
+
+# Real-git smoke matrix for manual closeout. It drives the built binary through
+# common workflows in fresh temporary repos, including remotes and conflicts.
+smoke: build
+	scripts/smoke.sh ./$(BINARY)
 
 # Whole suite, once: race-checked in-process tests + e2e, merged coverage, gated.
 cover:
