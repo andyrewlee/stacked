@@ -280,12 +280,18 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		return nil, fmt.Errorf("advancing %q to %q: %w", parent, cur, err)
 	}
 	if err := g.Checkout(parent); err != nil {
-		_ = g.ForceBranch(parent, parentTip)
+		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
+			return nil, fmt.Errorf("checking out %q: %w; additionally failed to roll back %q: %v", parent, err, parent, rollbackErr)
+		}
 		return nil, fmt.Errorf("checking out %q: %w", parent, err)
 	}
 	if err := g.DeleteBranch(cur, true); err != nil {
-		_ = g.Checkout(cur)
-		_ = g.ForceBranch(parent, parentTip)
+		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
+			return nil, fmt.Errorf("deleting %q: %w; additionally failed to roll back %q: %v", cur, err, parent, rollbackErr)
+		}
+		if restoreErr := g.Checkout(cur); restoreErr != nil {
+			return nil, fmt.Errorf("deleting %q: %w; rolled back %q but failed to restore %q: %v", cur, err, parent, cur, restoreErr)
+		}
 		return nil, fmt.Errorf("deleting %q: %w", cur, err)
 	}
 	for _, child := range s.Children(cur) {

@@ -2,6 +2,7 @@ package stack
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +146,45 @@ func TestFoldRollsBackWhenDeleteFails(t *testing.T) {
 	// HEAD must be restored to cur.
 	if f.head != "b" {
 		t.Fatalf("HEAD = %q after failed fold, want b restored", f.head)
+	}
+}
+
+func TestFoldRollsBackParentWhenDeleteAndRestoreCheckoutFail(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+	deleteErr := errors.New("branch checked out elsewhere")
+	checkoutErr := errors.New("cannot restore checked-out branch")
+	f.deleteErr["b"] = deleteErr
+	f.checkoutErr["b"] = checkoutErr
+
+	err := func() error {
+		_, err := Fold(env, s)
+		return err
+	}()
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("Fold error = %v, want wrapped %v", err, deleteErr)
+	}
+	if !strings.Contains(err.Error(), checkoutErr.Error()) {
+		t.Fatalf("Fold error = %v, want restore checkout failure", err)
+	}
+	if after, _ := f.RevParse("a"); after != aTip {
+		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("failed fold destroyed branch b or its metadata")
+	}
+	if cb, _ := s.Get("c"); cb.Parent != "b" {
+		t.Fatalf("c parent = %q after failed fold, want b (unchanged)", cb.Parent)
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q after failed fold, want rolled-back parent", f.head)
 	}
 }
 
