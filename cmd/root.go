@@ -50,13 +50,29 @@ func register(c *Command) {
 	}
 }
 
+// exitInternal is the exit code for a recovered panic (an internal bug). It is
+// deliberately outside the semantic range 1-4 so an agent never mistakes a crash
+// for a resolvable condition — in particular not for a conflict (exit 2), which
+// is the code the Go runtime would otherwise use for an unrecovered panic.
+const exitInternal = 70
+
 // Execute parses os.Args, dispatches to the matching subcommand, and returns the
 // process exit code. With no arguments, or help/-h/--help, it prints help and
 // returns 0. version/-v/--version prints the version and returns 0. An unknown
 // command prints an error plus help and returns 1. A command that returns an
-// error prints "st: <err>" to stderr and returns 1.
-func Execute() int {
+// error prints "st: <err>" to stderr and returns 1. A panic in any command is
+// recovered into a structured error and exitInternal so the process never
+// crashes with a raw stack trace and the runtime's exit code 2.
+func Execute() (rc int) {
 	args := os.Args[1:]
+
+	defer func() {
+		if r := recover(); r != nil {
+			renderInternalError(r, jsonRequested(args))
+			rc = exitInternal
+		}
+	}()
+
 	if len(args) == 0 {
 		printHelp()
 		return 0
@@ -150,6 +166,24 @@ func renderError(err error, asJSON bool) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "st: %s\n", err)
+}
+
+// renderInternalError reports a recovered panic. In --json mode it writes the
+// standard error envelope with code "internal" to stderr, so the machine
+// contract holds even on a crash; otherwise it writes a one-line message plus
+// the stack trace to stderr for a human bug report.
+func renderInternalError(r any, asJSON bool) {
+	msg := fmt.Sprintf("internal error: %v", r)
+	if asJSON {
+		enc := json.NewEncoder(os.Stderr)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(map[string]any{
+			"error": map[string]string{"code": "internal", "message": msg},
+		})
+		return
+	}
+	fmt.Fprintln(os.Stderr, "st: "+msg)
+	os.Stderr.Write(debug.Stack())
 }
 
 // jsonRequested reports whether --json (or -json) appears before a "--"
