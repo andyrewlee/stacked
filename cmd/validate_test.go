@@ -79,8 +79,12 @@ func TestValidateProblemCategories(t *testing.T) {
 				t.Fatalf("validate output missing %q:\n%s", c.wantSub, out)
 			}
 
-			// JSON mode: ok=false and the problem appears in problems[].
-			outJSON := captureStdout(t, func() { _ = runValidate([]string{"--json"}) })
+			// JSON mode: still returns an error, with ok=false and the problem in problems[].
+			var errJSON error
+			outJSON := captureStdout(t, func() { errJSON = runValidate([]string{"--json"}) })
+			if errJSON == nil {
+				t.Fatalf("validate --json returned nil error, want a problem; output:\n%s", outJSON)
+			}
 			var payload struct {
 				OK       bool     `json:"ok"`
 				Problems []string `json:"problems"`
