@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -29,7 +30,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 
 	for step := 0; step < steps; step++ {
 		tracked := sortedBranchNames(s)
-		switch rng.Intn(6) {
+		switch rng.Intn(8) {
 		case 0: // create off a random branch
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			mustCheckout(t, f, parent)
@@ -96,6 +97,22 @@ func runModel(t *testing.T, seed int64, steps int) {
 			if err := func() error { _, err := Delete(env, s, pick(rng, tracked), true); return err }(); err != nil {
 				t.Fatalf("delete: %v", err)
 			}
+		case 6: // squash a random branch (a no-op when it has a single commit)
+			if len(tracked) == 0 {
+				continue
+			}
+			mustCheckout(t, f, pick(rng, tracked))
+			if _, err := Squash(env, s, "squashed"); err != nil {
+				t.Fatalf("squash: %v", err)
+			}
+		case 7: // rename a random branch to a fresh name
+			if len(tracked) == 0 {
+				continue
+			}
+			nameSeq++
+			if _, err := Rename(env, s, pick(rng, tracked), fmt.Sprintf("b%d", nameSeq)); err != nil {
+				t.Fatalf("rename: %v", err)
+			}
 		}
 
 		// Reconcile the whole forest, then assert invariants.
@@ -118,6 +135,70 @@ func runModel(t *testing.T, seed int64, steps int) {
 }
 
 func pick(rng *rand.Rand, xs []string) string { return xs[rng.Intn(len(xs))] }
+
+// TestModelConflictContinueInvariants drives a real conflict-then-Continue (the
+// recovery path the random model can't reach) and asserts the invariants hold
+// afterward (TEST-3).
+func TestModelConflictContinueInvariants(t *testing.T) {
+	f := newFakeGit()
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	env := Env{Git: f}
+
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	// b conflicts the next time it restacks; amending a triggers the upstack
+	// restack and the conflict on b.
+	f.conflictOn("b")
+	mustCheckout(t, f, "a")
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict from the upstack restack, got %v", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("expected a rebase in progress after the conflict")
+	}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	// A full restack must now be idempotent and every invariant must hold.
+	f.head = "main"
+	if res, err := Restack(env, s); err != nil {
+		t.Fatalf("restack after continue: %v", err)
+	} else if len(res.Restacked) != 0 {
+		t.Fatalf("restack after continue not idempotent, rebased %v", res.Restacked)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
+// TestModelSyncInvariants runs a prune-merged sync and asserts the invariants
+// hold on the remaining, re-parented stack (TEST-3).
+func TestModelSyncInvariants(t *testing.T) {
+	f := newFakeGit()
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	env := Env{Git: f}
+
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	// Simulate "a" having merged into the trunk: advance main to a's tip.
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a should have been pruned as merged")
+	}
+	f.head = "main"
+	if _, err := Restack(env, s); err != nil {
+		t.Fatalf("restack after sync: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
 
 func mustCheckout(t *testing.T, f *fakeGit, name string) {
 	t.Helper()

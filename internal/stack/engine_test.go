@@ -653,6 +653,51 @@ func TestCreateValidatesStagedStateBeforeBranchCreation(t *testing.T) {
 	}
 }
 
+// TestRequireCleanGuards asserts every mutator that requires a clean working
+// tree returns ErrDirty — and moves no branch — when the tree is dirty.
+// requireClean is the first thing each does, so a minimal stack suffices (TEST-1).
+func TestRequireCleanGuards(t *testing.T) {
+	cases := []struct {
+		name string
+		op   func(Env, *State) (*OpResult, error)
+	}{
+		{"Restack", func(env Env, s *State) (*OpResult, error) { return Restack(env, s) }},
+		{"Fold", func(env Env, s *State) (*OpResult, error) { return Fold(env, s) }},
+		{"Squash", func(env Env, s *State) (*OpResult, error) { return Squash(env, s, "m") }},
+		{"Onto", func(env Env, s *State) (*OpResult, error) { return Onto(env, s, "main") }},
+		{"Sync", func(env Env, s *State) (*OpResult, error) {
+			return Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "a")
+			mkBranch(t, env, s, f, "a", "b")
+			if err := f.Checkout("b"); err != nil {
+				t.Fatal(err)
+			}
+			before := map[string]string{}
+			for k, v := range f.branches {
+				before[k] = v
+			}
+			f.clean = false
+
+			if _, err := c.op(env, s); !errors.Is(err, ErrDirty) {
+				t.Fatalf("%s with a dirty tree = %v, want ErrDirty", c.name, err)
+			}
+			if len(f.branches) != len(before) {
+				t.Fatalf("%s changed the branch set despite a dirty tree", c.name)
+			}
+			for k, v := range f.branches {
+				if before[k] != v {
+					t.Fatalf("%s moved branch %q despite a dirty tree", c.name, k)
+				}
+			}
+		})
+	}
+}
+
 func TestDeleteRequiresCleanTreeBeforeMutation(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
