@@ -35,83 +35,68 @@ func runRepair(args []string) error {
 		return err
 	}
 
-	s, release, err := lockAndLoad()
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	if !git.BranchExists(s.Trunk) {
-		return fmt.Errorf("trunk branch %q does not exist; cannot repair", s.Trunk)
-	}
-
-	trunkTip, err := git.RevParse(s.Trunk)
-	if err != nil {
-		return err
-	}
-
-	if err := s.RecordUndo("repair"); err != nil {
-		return err
-	}
-
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
 	var fixes []string
-	for _, name := range names {
-		b, ok := s.Get(name)
-		if !ok {
-			continue // removed during an earlier fix
+	if err := mutateState("repair", asJSON, func(_ stack.Env, s *stack.State) error {
+		if !git.BranchExists(s.Trunk) {
+			return fmt.Errorf("trunk branch %q does not exist; cannot repair", s.Trunk)
 		}
 
-		// Branch deleted outside st: untrack it, re-parenting children.
-		if !git.BranchExists(name) {
-			newParent, psha := b.Parent, trunkTip
-			if newParent != s.Trunk && !git.BranchExists(newParent) {
-				newParent = s.Trunk
-			} else if sha, err := git.RevParse(newParent); err == nil {
-				psha = sha
+		trunkTip, err := git.RevParse(s.Trunk)
+		if err != nil {
+			return err
+		}
+
+		names := make([]string, 0, len(s.Branches))
+		for name := range s.Branches {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			b, ok := s.Get(name)
+			if !ok {
+				continue // removed during an earlier fix
 			}
-			for _, child := range s.Children(name) {
-				child.Parent = newParent
-				if child.ParentSHA == "" {
-					child.ParentSHA = psha
+
+			// Branch deleted outside st: untrack it, re-parenting children.
+			if !git.BranchExists(name) {
+				newParent, psha := b.Parent, trunkTip
+				if newParent != s.Trunk && !git.BranchExists(newParent) {
+					newParent = s.Trunk
+				} else if sha, err := git.RevParse(newParent); err == nil {
+					psha = sha
 				}
+				for _, child := range s.Children(name) {
+					child.Parent = newParent
+					if child.ParentSHA == "" {
+						child.ParentSHA = psha
+					}
+				}
+				s.Untrack(name)
+				fixes = append(fixes, fmt.Sprintf("untracked missing branch %s (children re-parented onto %s)", name, newParent))
+				continue
 			}
-			s.Untrack(name)
-			fixes = append(fixes, fmt.Sprintf("untracked missing branch %s (children re-parented onto %s)", name, newParent))
-			continue
-		}
 
-		// Parent no longer valid: re-parent onto the trunk.
-		if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !git.BranchExists(b.Parent)) {
-			b.Parent = s.Trunk
-			b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
-			fixes = append(fixes, fmt.Sprintf("re-parented %s onto trunk (its parent was invalid)", name))
-			continue
-		}
+			// Parent no longer valid: re-parent onto the trunk.
+			if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !git.BranchExists(b.Parent)) {
+				b.Parent = s.Trunk
+				b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
+				fixes = append(fixes, fmt.Sprintf("re-parented %s onto trunk (its parent was invalid)", name))
+				continue
+			}
 
-		// Cycle: break it by re-parenting onto the trunk.
-		if cyclePath(s, name) != "" {
-			b.Parent = s.Trunk
-			b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
-			fixes = append(fixes, fmt.Sprintf("broke a parent cycle at %s (re-parented onto trunk)", name))
+			// Cycle: break it by re-parenting onto the trunk.
+			if cyclePath(s, name) != "" {
+				b.Parent = s.Trunk
+				b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
+				fixes = append(fixes, fmt.Sprintf("broke a parent cycle at %s (re-parented onto trunk)", name))
+			}
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	if len(fixes) > 0 {
-		if err := s.Save(); err != nil {
-			return fmt.Errorf("saving stack state: %w", err)
-		}
-		if err := stack.TrimUndo(); err != nil {
-			return fmt.Errorf("trimming undo log: %w", err)
-		}
-	} else if err := stack.DropUndo(); err != nil {
-		return fmt.Errorf("dropping empty repair undo entry: %w", err)
-	}
 	if fixes == nil {
 		fixes = []string{}
 	}
