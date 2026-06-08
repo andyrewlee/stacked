@@ -188,6 +188,33 @@ func TestFoldRollsBackParentWhenDeleteAndRestoreCheckoutFail(t *testing.T) {
 	}
 }
 
+// TestInferParentDeterministic checks inferParent picks the closest tracked
+// ancestor and returns a stable result across runs (candidates are iterated in
+// sorted order, not map order) — ENG-5. The fake git models a single-parent DAG,
+// so this exercises the closest-ancestor + stability properties; the
+// incomparable-ancestors case it guards needs a merge history git can't fake.
+func TestInferParentDeterministic(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("c"); err != nil { // untracked branch off b's tip
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 25; i++ {
+		got, err := inferParent(f, s, "c")
+		if err != nil {
+			t.Fatalf("inferParent: %v", err)
+		}
+		if got != "b" {
+			t.Fatalf("inferParent(c) = %q, want b (closest tracked ancestor)", got)
+		}
+	}
+}
+
 func TestEngineDeleteDropsCommits(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

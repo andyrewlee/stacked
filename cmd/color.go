@@ -24,7 +24,6 @@ const (
 	ansiDim    = "\x1b[2m"
 	ansiGreen  = "\x1b[32m"
 	ansiYellow = "\x1b[33m"
-	ansiCyan   = "\x1b[36m"
 )
 
 // paint wraps s in the given ANSI codes when color is enabled.

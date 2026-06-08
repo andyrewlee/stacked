@@ -839,6 +839,10 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 			candidates = append(candidates, name)
 		}
 	}
+	// Iterate in a fixed order so the choice between incomparable ancestors (two
+	// tracked branches where neither is an ancestor of the other, e.g. across a
+	// merge) is deterministic rather than dependent on map iteration order.
+	sort.Strings(candidates)
 	for _, c := range candidates {
 		if c == cur || c == best {
 			continue

@@ -158,7 +158,7 @@ st create feat-a -m "add A"
 
 #### `st log` (`ls`)
 Renders the stack as a tree with the trunk at the bottom and each branch above its
-parent. The current branch is marked `●`, others `◯`, drifted branches are tagged
+parent. The current branch is marked `◉`, others `○`, drifted branches are tagged
 `(needs restack)`, and each branch shows its top commit subject.
 
 #### `st status` (`stat`)
