@@ -373,23 +373,79 @@ func TestVersion(t *testing.T) {
 func TestHelpListsAllCommands(t *testing.T) {
 	r := newRepo(t)
 
-	commands := []string{
-		"init", "create", "checkout", "up", "down", "top", "bottom", "log",
-		"status", "track", "untrack", "modify", "restack", "continue", "abort",
-		"fold", "squash", "onto", "rename", "delete", "sync", "submit", "undo",
-		"validate", "repair", "completion", "help", "version",
+	// Derive the command set from the binary's own machine-readable help (which
+	// is generated from the registry), so this can never drift from a
+	// hand-maintained slice (TEST-8).
+	var help struct {
+		Commands []struct {
+			Name string `json:"name"`
+		} `json:"commands"`
+	}
+	res := r.stOK("help", "--json")
+	if err := json.Unmarshal([]byte(res.stdout), &help); err != nil {
+		t.Fatalf("help --json not parseable: %v\n%s", err, res.stdout)
+	}
+	if len(help.Commands) < 20 {
+		t.Fatalf("help --json listed only %d commands, expected the full registry", len(help.Commands))
 	}
 
 	for _, form := range [][]string{nil, {"help"}, {"-h"}, {"--help"}} {
 		res := r.st(form...)
 		wantExit(t, res, 0)
 		wantStdoutContains(t, res, "st - manage stacked diffs on top of git")
-		for _, c := range commands {
-			if !strings.Contains(res.stdout, c) {
-				t.Fatalf("help (%v) missing command %q\nstdout:\n%s", form, c, res.stdout)
+		for _, c := range help.Commands {
+			if !strings.Contains(res.stdout, c.Name) {
+				t.Fatalf("help (%v) missing command %q\nstdout:\n%s", form, c.Name, res.stdout)
 			}
 		}
 	}
+}
+
+// TestWorktreeSharesStackState asserts the stack metadata (kept under the common
+// git dir) is shared across linked worktrees, so st run from a second worktree
+// sees the same stack (TEST-10).
+func TestWorktreeSharesStackState(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so a worktree can check it out
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+
+	cmd := exec.Command(stBin, "log", "--json")
+	cmd.Dir = wt
+	cmd.Env = cleanEnv(r.home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st log in worktree: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "feat-a") {
+		t.Fatalf("worktree st did not see the shared stack state:\n%s", out)
+	}
+}
+
+// TestUndoAfterConflictAbort drives a conflict, aborts it (which leaves the
+// bottom branch amended), then undoes the whole mutation back to the pre-mutation
+// tip and validates clean (TEST-10).
+func TestUndoAfterConflictAbort(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "f.txt", "A\n", "a")
+	r.create("feat-b", "f.txt", "A\nB\n", "b")
+	r.stOK("checkout", "feat-a")
+	aBefore := r.git("rev-parse", "feat-a")
+
+	r.writeFile("f.txt", "X\n")
+	wantExit(t, r.st("modify", "-a"), 2) // conflict restacking feat-b
+	r.stOK("abort")
+
+	// The amend on feat-a survived the abort; undo reverts the whole modify.
+	r.stOK("undo")
+	if aAfter := r.git("rev-parse", "feat-a"); aAfter != aBefore {
+		t.Fatalf("feat-a tip = %s after undo, want pre-modify %s", aAfter, aBefore)
+	}
+	r.stOK("validate")
 }
 
 // TestUnknownCommand asserts an unrecognized command exits 1, writes the
