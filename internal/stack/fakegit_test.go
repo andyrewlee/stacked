@@ -35,6 +35,7 @@ type fakeGit struct {
 	rebaseOldBase string
 	staged        bool
 	clean         bool
+	checkoutErr   map[string]error
 	deleteErr     map[string]error
 	rebaseErr     map[string]error
 	commitErr     error
@@ -45,6 +46,7 @@ func newFakeGit() *fakeGit {
 		commits:      map[string]*fakeCommit{},
 		branches:     map[string]string{},
 		conflictNext: map[string]bool{},
+		checkoutErr:  map[string]error{},
 		deleteErr:    map[string]error{},
 		rebaseErr:    map[string]error{},
 		clean:        true,
@@ -99,6 +101,9 @@ func (f *fakeGit) Checkout(name string) error {
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
 	}
+	if err := f.checkoutErr[name]; err != nil {
+		return err
+	}
 	f.head = name
 	return nil
 }
@@ -142,6 +147,16 @@ func (f *fakeGit) ForceBranch(name, ref string) error {
 	id := f.resolve(ref)
 	if id == "" {
 		return fmt.Errorf("unknown revision %q", ref)
+	}
+	f.branches[name] = id
+	return nil
+}
+
+func (f *fakeGit) UpdateRef(ref, sha string) error {
+	name := strings.TrimPrefix(ref, "refs/heads/")
+	id := f.resolve(sha)
+	if id == "" {
+		return fmt.Errorf("unknown revision %q", sha)
 	}
 	f.branches[name] = id
 	return nil

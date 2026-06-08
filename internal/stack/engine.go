@@ -265,19 +265,39 @@ func Fold(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Capture the parent's tip first so the git side can be rolled back if a later
+	// step fails. Advancing the parent ref and only then failing to check out or
+	// delete would leave the parent silently holding cur's commits while the
+	// persisted metadata still listed cur as a separate branch — a repo/state
+	// disagreement a naive retry would compound. The metadata is therefore moved
+	// (re-parent children, untrack cur) and saved only after every git mutation
+	// has committed.
+	parentTip, err := g.RevParse(branchTipRef(parent))
+	if err != nil {
+		return nil, err
+	}
 	if err := g.ForceBranch(parent, curTip); err != nil {
 		return nil, fmt.Errorf("advancing %q to %q: %w", parent, cur, err)
+	}
+	if err := g.Checkout(parent); err != nil {
+		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
+			return nil, fmt.Errorf("checking out %q: %w; additionally failed to roll back %q: %v", parent, err, parent, rollbackErr)
+		}
+		return nil, fmt.Errorf("checking out %q: %w", parent, err)
+	}
+	if err := g.DeleteBranch(cur, true); err != nil {
+		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
+			return nil, fmt.Errorf("deleting %q: %w; additionally failed to roll back %q: %v", cur, err, parent, rollbackErr)
+		}
+		if restoreErr := g.Checkout(cur); restoreErr != nil {
+			return nil, fmt.Errorf("deleting %q: %w; rolled back %q but failed to restore %q: %v", cur, err, parent, cur, restoreErr)
+		}
+		return nil, fmt.Errorf("deleting %q: %w", cur, err)
 	}
 	for _, child := range s.Children(cur) {
 		child.Parent = parent
 	}
 	s.Untrack(cur)
-	if err := g.Checkout(parent); err != nil {
-		return nil, fmt.Errorf("checking out %q: %w", parent, err)
-	}
-	if err := g.DeleteBranch(cur, true); err != nil {
-		return nil, fmt.Errorf("deleting %q: %w", cur, err)
-	}
 	if err := env.save(); err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ type Git interface {
 	CreateBranch(name string) error
 	DeleteBranch(name string, force bool) error
 	ForceBranch(name, ref string) error
+	UpdateRef(ref, sha string) error
 	ResetSoft(ref string) error
 	Commit(message string, all bool) error
 	AmendNoEdit(all bool) error
