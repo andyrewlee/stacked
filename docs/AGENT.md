@@ -81,6 +81,10 @@ the result, stderr for the error envelope, and the exit code for the category.
 
 ## Discoverability
 
-- `st --help` lists every command. `st help <command>` prints its summary, usage,
-  and aliases. `st <command> -h` prints its flags. `st version` reports the build.
+- `st --help` lists every command; `st help <command>` prints its summary, usage,
+  and aliases. The usage line documents the command's flags, and `st <command> -h`
+  prints that same usage line. `st version` reports the build.
+- `st help`, `st help <command>`, and `st version` accept `--json` and emit the
+  same information as a machine-readable payload — the command list as
+  `{ "commands": [ { "name", "summary", "usage", "aliases" }, … ] }`.
 - `st guide` (or `st guide --json`) prints the recommended end-to-end workflow.

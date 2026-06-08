@@ -205,11 +205,12 @@ again.
 Deletes a tracked branch, re-parents its children onto the deleted branch's parent,
 and restacks them. `-f` force-deletes an unmerged branch.
 
-#### `st sync [--no-delete] [--remote <name>]` (`s`)
+#### `st sync [--no-delete] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
 the trunk (re-parenting their children), restacks every remaining stack onto the
 updated trunk, and restores your original branch. `--no-delete` keeps merged
-branches.
+branches; `--dry-run` previews the prune/restack plan without fetching or changing
+anything.
 
 #### `st submit [--remote <name>] [--dry-run]` (`ss`)
 Pushes every branch on the current stack — from the bottom branch up to the

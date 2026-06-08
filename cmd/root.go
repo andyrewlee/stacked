@@ -59,10 +59,11 @@ const exitInternal = 70
 // Execute parses os.Args, dispatches to the matching subcommand, and returns the
 // process exit code. With no arguments, or help/-h/--help, it prints help and
 // returns 0. version/-v/--version prints the version and returns 0. An unknown
-// command prints an error plus help and returns 1. A command that returns an
+// command prints an error to stderr and returns 1. A command that returns an
 // error prints "st: <err>" to stderr and returns 1. A panic in any command is
 // recovered into a structured error and exitInternal so the process never
-// crashes with a raw stack trace and the runtime's exit code 2.
+// crashes with a raw stack trace and the runtime's exit code 2. help and version
+// accept --json and emit the same information as a machine-readable payload.
 func Execute() (rc int) {
 	args := os.Args[1:]
 
@@ -74,20 +75,21 @@ func Execute() (rc int) {
 	}()
 
 	if len(args) == 0 {
-		printHelp()
+		printHelp(false)
 		return 0
 	}
 
 	name := args[0]
 	switch name {
 	case "help", "-h", "--help":
-		if len(args) > 1 {
-			return helpForCommand(args[1])
+		rest := args[1:]
+		if topic := firstNonFlag(rest); topic != "" {
+			return helpForCommand(topic, jsonRequested(rest))
 		}
-		printHelp()
+		printHelp(jsonRequested(rest))
 		return 0
 	case "version", "-v", "--version":
-		printVersion()
+		printVersion(jsonRequested(args[1:]))
 		return 0
 	}
 
@@ -110,13 +112,42 @@ func Execute() (rc int) {
 	return 0
 }
 
-// helpForCommand prints detailed help for a single command: its summary, usage
-// line (which documents its flags), and aliases.
-func helpForCommand(name string) int {
+// commandInfo is the machine-readable description of a command, emitted by the
+// help commands under --json.
+type commandInfo struct {
+	Name    string   `json:"name"`
+	Summary string   `json:"summary"`
+	Usage   string   `json:"usage"`
+	Aliases []string `json:"aliases,omitempty"`
+}
+
+// firstNonFlag returns the first argument that is not a flag token, or "" if
+// there is none, so a help topic can be found without mistaking a flag such as
+// --json for a command name.
+func firstNonFlag(args []string) string {
+	for _, a := range args {
+		if a == "--" || strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a
+	}
+	return ""
+}
+
+// helpForCommand prints help for a single command: its summary, usage line
+// (which documents its flags), and aliases — as text, or as a JSON object with
+// asJSON.
+func helpForCommand(name string, asJSON bool) int {
 	c, ok := byName[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "st: unknown command %q\n", name)
-		return 1
+		err := fmt.Errorf("unknown command %q", name)
+		renderError(err, asJSON)
+		return exitCode(err)
+	}
+	if asJSON {
+		data, _ := json.MarshalIndent(commandInfo{c.Name, c.Summary, c.Usage, c.Aliases}, "", "  ")
+		fmt.Printf("%s\n", data)
+		return 0
 	}
 	fmt.Println(c.Summary)
 	fmt.Println()
@@ -209,8 +240,22 @@ func jsonRequested(args []string) bool {
 }
 
 // printHelp writes the list of registered commands (in registration order) and
-// the general usage line to stdout.
-func printHelp() {
+// the general usage line to stdout, as text or, with asJSON, as a JSON object
+// with a "commands" array.
+func printHelp(asJSON bool) {
+	if asJSON {
+		infos := make([]commandInfo, 0, len(registry)+2)
+		for _, c := range registry {
+			infos = append(infos, commandInfo{c.Name, c.Summary, c.Usage, c.Aliases})
+		}
+		infos = append(infos,
+			commandInfo{Name: "help", Summary: "show this help", Usage: "st help [<command>] [--json]"},
+			commandInfo{Name: "version", Summary: "print the version", Usage: "st version [--json]"},
+		)
+		data, _ := json.MarshalIndent(map[string]any{"commands": infos}, "", "  ")
+		fmt.Printf("%s\n", data)
+		return
+	}
 	fmt.Println("st - manage stacked diffs on top of git")
 	fmt.Println()
 	fmt.Println("usage: st <command> [args]")
@@ -228,37 +273,50 @@ func printHelp() {
 }
 
 // printVersion prints the release version along with the embedded build/VCS
-// metadata (commit, build time, Go version) when it is available.
-func printVersion() {
-	fmt.Printf("st %s\n", version)
+// metadata (commit, build time, Go version) when it is available, as text or,
+// with asJSON, as a JSON object.
+func printVersion(asJSON bool) {
+	var rev, when, goVersion string
+	var dirty bool
+	if info, ok := debug.ReadBuildInfo(); ok {
+		goVersion = info.GoVersion
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.time":
+				when = s.Value
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if rev != "" && dirty {
+		rev += " (dirty)"
+	}
 
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+	if asJSON {
+		data, _ := json.MarshalIndent(struct {
+			Version string `json:"version"`
+			Commit  string `json:"commit,omitempty"`
+			Built   string `json:"built,omitempty"`
+			Go      string `json:"go,omitempty"`
+		}{version, rev, when, goVersion}, "", "  ")
+		fmt.Printf("%s\n", data)
 		return
 	}
-	var rev, when string
-	var dirty bool
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.time":
-			when = s.Value
-		case "vcs.modified":
-			dirty = s.Value == "true"
-		}
-	}
+
+	fmt.Printf("st %s\n", version)
 	if rev != "" {
-		if len(rev) > 12 {
-			rev = rev[:12]
-		}
-		if dirty {
-			rev += " (dirty)"
-		}
 		fmt.Printf("commit: %s\n", rev)
 	}
 	if when != "" {
 		fmt.Printf("built:  %s\n", when)
 	}
-	fmt.Printf("go:     %s\n", info.GoVersion)
+	if goVersion != "" {
+		fmt.Printf("go:     %s\n", goVersion)
+	}
 }

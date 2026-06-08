@@ -48,7 +48,7 @@ func golden(t *testing.T, name, got string) {
 }
 
 func TestGoldenHelp(t *testing.T) {
-	golden(t, "help", ansiRE.ReplaceAllString(captureStdout(t, printHelp), ""))
+	golden(t, "help", ansiRE.ReplaceAllString(captureStdout(t, func() { printHelp(false) }), ""))
 }
 
 func TestGoldenLogTree(t *testing.T) {

@@ -14,7 +14,7 @@ func init() {
 		Name:    "submit",
 		Aliases: []string{"ss"},
 		Summary: "Push every branch in the current stack to the remote (no PRs — login-free)",
-		Usage:   "st submit [--remote <name>] [--dry-run]",
+		Usage:   "st submit [--remote <name>] [--dry-run] [--json]",
 		Run:     runSubmit,
 	})
 }
