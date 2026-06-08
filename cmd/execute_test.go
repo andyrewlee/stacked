@@ -198,6 +198,53 @@ func TestJSONRequested(t *testing.T) {
 	}
 }
 
+// A panic in a command must be recovered into a structured failure with a
+// distinct exit code (not 2, the runtime's panic code, which means "conflict").
+func TestExecuteRecoversFromPanic(t *testing.T) {
+	// Register a throwaway command that panics, removing it afterward so the
+	// global registry stays clean for the other (sequential) tests.
+	register(&Command{
+		Name:    "panic-boom",
+		Summary: "test-only panicking command",
+		Usage:   "st panic-boom",
+		Run:     func([]string) error { panic("kaboom") },
+	})
+	defer func() {
+		registry = registry[:len(registry)-1]
+		delete(byName, "panic-boom")
+	}()
+
+	// JSON mode: stderr must be a parseable envelope with code "internal".
+	var code int
+	var stdout string
+	errOut := executeCapturingOutput(t, []string{"panic-boom", "--json"}, &code, &stdout)
+	if code != exitInternal {
+		t.Fatalf("Execute(panic --json) = %d, want %d", code, exitInternal)
+	}
+	if stdout != "" {
+		t.Fatalf("panic wrote stdout:\n%s", stdout)
+	}
+	var payload struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+		t.Fatalf("panic envelope not parseable: %v\n%s", err, errOut)
+	}
+	if payload.Error.Code != "internal" {
+		t.Errorf("panic error code = %q, want internal", payload.Error.Code)
+	}
+
+	// Plain mode: a human-readable message, still exit exitInternal.
+	code = 0
+	errOut = executeCapturingOutput(t, []string{"panic-boom"}, &code, &stdout)
+	if code != exitInternal {
+		t.Fatalf("Execute(panic) = %d, want %d", code, exitInternal)
+	}
+	if !strings.Contains(errOut, "internal error") {
+		t.Errorf("plain panic output missing 'internal error':\n%s", errOut)
+	}
+}
+
 func TestExecuteDispatchesSubcommand(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

@@ -26,6 +26,7 @@ Branch on the exit code; do not parse messages.
 | 2 | rebase conflict in progress | resolve + `git add`, then `st continue` (or `st abort`) |
 | 3 | repo not initialized | run `st init` |
 | 4 | working tree is dirty | commit or stash, then retry |
+| 70 | internal error (a bug in `st`) | not self-recoverable; report it |
 
 ## JSON output
 
@@ -40,8 +41,8 @@ code above:
 ```
 
 `error.code` is one of: `error` (1), `conflict` (2), `not_initialized` (3),
-`dirty` (4). So an agent can read stdout for the result, stderr for the error
-envelope, and the exit code for the category.
+`dirty` (4), `internal` (70, a recovered panic). So an agent can read stdout for
+the result, stderr for the error envelope, and the exit code for the category.
 
 ### Result shapes
 
