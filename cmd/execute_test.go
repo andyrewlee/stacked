@@ -78,6 +78,23 @@ func TestExecuteVersion(t *testing.T) {
 	}
 }
 
+func TestExecuteSubcommandHelp(t *testing.T) {
+	for _, args := range [][]string{{"status", "--help"}, {"bottom", "--help"}, {"completion", "--help"}} {
+		var code int
+		var stdout string
+		stderr := executeCapturingOutput(t, args, &code, &stdout)
+		if code != 0 {
+			t.Fatalf("Execute(%v) = %d, want 0", args, code)
+		}
+		if stderr != "" {
+			t.Fatalf("Execute(%v) wrote stderr:\n%s", args, stderr)
+		}
+		if !strings.Contains(stdout, "usage: st "+args[0]) {
+			t.Fatalf("Execute(%v) missing usage on stdout:\n%s", args, stdout)
+		}
+	}
+}
+
 func TestExecuteUnknownCommand(t *testing.T) {
 	// Plain mode: exit 1 and nothing on stdout (the diagnostic goes to stderr,
 	// verified by the e2e suite).

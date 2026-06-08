@@ -70,7 +70,13 @@ func parseFlagSet(fs *flag.FlagSet, args []string) error {
 		fs.SetOutput(output)
 		fs.Usage = usage
 	}()
-	return fs.Parse(args)
+	err := fs.Parse(args)
+	if errors.Is(err, flag.ErrHelp) && !jsonRequested(args) {
+		fs.SetOutput(os.Stdout)
+		fs.Usage = usage
+		fs.Usage()
+	}
+	return err
 }
 
 // acquireLock takes the repository stack lock; the caller must defer the
