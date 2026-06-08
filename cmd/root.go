@@ -93,9 +93,11 @@ func Execute() (rc int) {
 
 	cmd, ok := byName[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "st: unknown command %q\n\n", name)
-		printHelp()
-		return 1
+		// Report through the standard error path so --json gets the structured
+		// envelope on stderr and stdout stays clean for machine parsing.
+		err := fmt.Errorf("unknown command %q (run \"st help\" for usage)", name)
+		renderError(err, jsonRequested(args[1:]))
+		return exitCode(err)
 	}
 
 	if err := cmd.Run(args[1:]); err != nil {

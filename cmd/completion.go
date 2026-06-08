@@ -22,12 +22,12 @@ func init() {
 func runCompletion(args []string) error {
 	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st completion <bash|zsh|fish>") }
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fs.Usage()
+		usageUnlessJSON(fs, args)
 		return fmt.Errorf("completion requires one shell argument: bash, zsh, or fish")
 	}
 

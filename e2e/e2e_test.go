@@ -392,13 +392,48 @@ func TestHelpListsAllCommands(t *testing.T) {
 	}
 }
 
-// TestUnknownCommand asserts an unrecognized command exits 1 and writes the
-// "unknown command" diagnostic to stderr while still printing help.
+// TestUnknownCommand asserts an unrecognized command exits 1, writes the
+// "unknown command" diagnostic to stderr, emits a parseable JSON envelope under
+// --json, and never pollutes stdout (CLI-1).
 func TestUnknownCommand(t *testing.T) {
 	r := newRepo(t)
 	res := r.st("definitely-not-a-command")
 	wantExit(t, res, 1)
 	wantStderrContains(t, res, `st: unknown command "definitely-not-a-command"`)
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Fatalf("unknown command wrote stdout: %q", res.stdout)
+	}
+
+	res = r.st("definitely-not-a-command", "--json")
+	wantExit(t, res, 1)
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Fatalf("unknown command --json wrote stdout: %q", res.stdout)
+	}
+	var env struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
+		t.Fatalf("unknown command --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
+	}
+	if env.Error.Code != "error" {
+		t.Errorf("unknown command --json code = %q, want error", env.Error.Code)
+	}
+}
+
+// TestFlagErrorStaysOnStderr asserts a bad flag reports the error once, on
+// stderr only — stdout is the machine-readable data stream and must stay clean
+// (CLI-4, CLI-8).
+func TestFlagErrorStaysOnStderr(t *testing.T) {
+	r := newRepo(t)
+	res := r.st("status", "--bad")
+	wantExit(t, res, 1)
+	if strings.TrimSpace(res.stdout) != "" {
+		t.Fatalf("flag error wrote stdout: %q", res.stdout)
+	}
+	wantStderrContains(t, res, "not defined")
+	if n := strings.Count(res.stderr, "not defined"); n != 1 {
+		t.Fatalf("flag error reported %d times, want exactly 1:\n%s", n, res.stderr)
+	}
 }
 
 // TestLifecycle exercises the core journey end to end: init, create two stacked

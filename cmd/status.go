@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"strings"
 
 	"stacked/internal/git"
@@ -25,7 +26,7 @@ func runStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output status as JSON")
-	fs.Usage = func() { out("usage: st status [--json]\n") }
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st status [--json]") }
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

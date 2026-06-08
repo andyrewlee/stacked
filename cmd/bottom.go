@@ -24,9 +24,7 @@ func runBottom(args []string) error {
 	fs := flag.NewFlagSet("bottom", flag.ContinueOnError)
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() {
-		out("usage: st bottom [--json]\n")
-	}
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st bottom [--json]") }
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
