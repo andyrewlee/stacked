@@ -129,3 +129,57 @@ func TestLoadNotInitialized(t *testing.T) {
 		t.Errorf("Load on uninitialized repo = %v, want ErrNotInitialized", err)
 	}
 }
+
+func TestAtomicWriteFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "data.txt")
+
+	// Writes through a missing parent directory and reads back exactly.
+	if err := atomicWriteFile(path, []byte("hello\n")); err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "hello\n" {
+		t.Fatalf("read back = %q, %v; want %q", got, err, "hello\n")
+	}
+
+	// Overwriting replaces the content and leaves no temp files behind.
+	if err := atomicWriteFile(path, []byte("world\n")); err != nil {
+		t.Fatalf("atomicWriteFile overwrite: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "world\n" {
+		t.Errorf("after overwrite = %q, want %q", got, "world\n")
+	}
+	files, err := os.ReadDir(filepath.Join(dir, "nested"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		var names []string
+		for _, f := range files {
+			names = append(names, f.Name())
+		}
+		t.Errorf("directory has %d entries %v, want exactly the target file", len(files), names)
+	}
+}
+
+func TestRestoreStateRoundTrips(t *testing.T) {
+	dir := initGitRepo(t)
+
+	if err := RestoreState([]byte(`{"trunk":"main","branches":{}}`)); err != nil {
+		t.Fatalf("RestoreState: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "stacked", "state.json"))
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Error("RestoreState did not write a trailing newline")
+	}
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load after RestoreState: %v", err)
+	}
+	if s.Trunk != "main" {
+		t.Errorf("restored trunk = %q, want main", s.Trunk)
+	}
+}
