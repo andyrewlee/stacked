@@ -8,12 +8,12 @@ COVERAGE_MIN ?= 75
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet lint test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet lint check-deps golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order.
 # `cover` runs the whole suite once (race + combined in-process/e2e coverage),
 # so ci does not run the tests three times.
-ci: fmt-check lint vet build cover
+ci: check-deps fmt-check lint vet build cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -35,13 +35,34 @@ fmt-check:
 vet:
 	go vet ./...
 
+# Enforce the project's hardest invariant: the shipped tool stays standard-library
+# only. Fail if go.mod declares any dependency or a go.sum appears. Run by `make ci`
+# (and therefore by CI and the pre-push hook), so a new dependency can never land
+# green.
+check-deps:
+	@if grep -qE '^require' go.mod; then \
+		echo "go.mod declares a require directive; this project must stay standard-library only"; \
+		exit 1; \
+	fi
+	@if [ -f go.sum ]; then \
+		echo "go.sum exists; this project must have no module dependencies"; \
+		exit 1; \
+	fi
+	@echo "deps: standard library only"
+
+# Regenerate golden test fixtures after an intended, reviewed output change.
+golden:
+	go test ./cmd -run Golden -update
+
 lint:
 	golangci-lint run ./...
 
-# Sub-second inner loop for engine work: the pure stack logic over the fake git,
-# no race instrumentation, no real-git spawning, no e2e. Hit this constantly.
+# Fast inner loop for engine work: the stack engine package (fake-git model tests
+# plus fast unit tests), no race instrumentation and no e2e. Sub-second; hit this
+# constantly. The slower real-git port tests and the e2e suite run in `make test`
+# and `make ci`.
 test-fast:
-	go test ./internal/... -count=1
+	go test ./internal/stack/... -count=1
 
 # In-process suite with the race detector (cmd + internal); no e2e.
 test:

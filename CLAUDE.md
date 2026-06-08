@@ -18,9 +18,9 @@ stores stack topology locally — no host API.
 ## The feedback loop (this is the point)
 
 ```
-make test-fast   # sub-second: pure engine logic over the fake git (./internal/...)
-make ci          # full gate = pre-push hook = CI: fmt-check + lint + vet + build
-                 #   + race tests + e2e + merged-coverage gate (>=75%)
+make test-fast   # sub-second: the stack engine package over the fake git (./internal/stack)
+make ci          # full gate = pre-push hook = CI: check-deps + fmt-check + lint + vet
+                 #   + build + race tests + e2e + merged-coverage gate (>=75%)
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
