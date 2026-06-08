@@ -31,7 +31,7 @@ Branch on the exit code; do not parse messages.
 ## JSON output
 
 Every subcommand except `completion` accepts `--json`. The built-ins `help`,
-`-h`/`--help`, `version`, and `-v`/`--version` are plain-text only. Successful
+`-h`/`--help`, `version`, and `-v`/`--version` also accept `--json`. Successful
 JSON output is a single indented object on **stdout**. On failure, `--json`
 writes a structured envelope to **stderr** and the process still exits with the
 code above:

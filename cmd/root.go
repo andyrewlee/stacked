@@ -83,13 +83,23 @@ func Execute() (rc int) {
 	switch name {
 	case "help", "-h", "--help":
 		rest := args[1:]
-		if topic := firstNonFlag(rest); topic != "" {
-			return helpForCommand(topic, jsonRequested(rest))
+		topic, asJSON, err := parseHelpArgs(rest)
+		if err != nil {
+			renderError(err, jsonRequested(rest))
+			return exitCode(err)
 		}
-		printHelp(jsonRequested(rest))
+		if topic != "" {
+			return helpForCommand(topic, asJSON)
+		}
+		printHelp(asJSON)
 		return 0
 	case "version", "-v", "--version":
-		printVersion(jsonRequested(args[1:]))
+		asJSON, err := parseVersionArgs(args[1:])
+		if err != nil {
+			renderError(err, jsonRequested(args[1:]))
+			return exitCode(err)
+		}
+		printVersion(asJSON)
 		return 0
 	}
 
@@ -121,41 +131,115 @@ type commandInfo struct {
 	Aliases []string `json:"aliases,omitempty"`
 }
 
-// firstNonFlag returns the first argument that is not a flag token, or "" if
-// there is none, so a help topic can be found without mistaking a flag such as
-// --json for a command name.
-func firstNonFlag(args []string) string {
+func parseHelpArgs(args []string) (topic string, asJSON bool, err error) {
+	afterTerminator := false
 	for _, a := range args {
-		if a == "--" || strings.HasPrefix(a, "-") {
+		if !afterTerminator && a == "--" {
+			afterTerminator = true
 			continue
 		}
-		return a
+		if !afterTerminator {
+			if v, ok, err := parseJSONFlag(a); ok {
+				if err != nil {
+					return "", false, err
+				}
+				asJSON = v
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				return "", false, fmt.Errorf("unknown help flag %q", a)
+			}
+		}
+		if topic != "" {
+			return "", false, fmt.Errorf("help takes at most one command, got %q", a)
+		}
+		topic = a
 	}
-	return ""
+	return topic, asJSON, nil
+}
+
+func parseVersionArgs(args []string) (bool, error) {
+	var asJSON bool
+	afterTerminator := false
+	for _, a := range args {
+		if !afterTerminator && a == "--" {
+			afterTerminator = true
+			continue
+		}
+		if !afterTerminator {
+			if v, ok, err := parseJSONFlag(a); ok {
+				if err != nil {
+					return false, err
+				}
+				asJSON = v
+				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				return false, fmt.Errorf("unknown version flag %q", a)
+			}
+		}
+		return false, fmt.Errorf("version takes no positional arguments, got %q", a)
+	}
+	return asJSON, nil
+}
+
+func parseJSONFlag(arg string) (enabled, ok bool, err error) {
+	switch {
+	case arg == "--json" || arg == "-json":
+		return true, true, nil
+	case strings.HasPrefix(arg, "--json="):
+		v, err := strconv.ParseBool(strings.TrimPrefix(arg, "--json="))
+		if err != nil {
+			return false, true, fmt.Errorf("invalid --json value %q", strings.TrimPrefix(arg, "--json="))
+		}
+		return v, true, nil
+	case strings.HasPrefix(arg, "-json="):
+		v, err := strconv.ParseBool(strings.TrimPrefix(arg, "-json="))
+		if err != nil {
+			return false, true, fmt.Errorf("invalid -json value %q", strings.TrimPrefix(arg, "-json="))
+		}
+		return v, true, nil
+	default:
+		return false, false, nil
+	}
 }
 
 // helpForCommand prints help for a single command: its summary, usage line
 // (which documents its flags), and aliases — as text, or as a JSON object with
 // asJSON.
 func helpForCommand(name string, asJSON bool) int {
-	c, ok := byName[name]
+	info, ok := commandInfoForName(name)
 	if !ok {
 		err := fmt.Errorf("unknown command %q", name)
 		renderError(err, asJSON)
 		return exitCode(err)
 	}
 	if asJSON {
-		data, _ := json.MarshalIndent(commandInfo{c.Name, c.Summary, c.Usage, c.Aliases}, "", "  ")
+		data, _ := json.MarshalIndent(info, "", "  ")
 		fmt.Printf("%s\n", data)
 		return 0
 	}
-	fmt.Println(c.Summary)
+	fmt.Println(info.Summary)
 	fmt.Println()
-	fmt.Printf("usage: %s\n", c.Usage)
-	if len(c.Aliases) > 0 {
-		fmt.Printf("aliases: %s\n", strings.Join(c.Aliases, ", "))
+	fmt.Printf("usage: %s\n", info.Usage)
+	if len(info.Aliases) > 0 {
+		fmt.Printf("aliases: %s\n", strings.Join(info.Aliases, ", "))
 	}
 	return 0
+}
+
+func commandInfoForName(name string) (commandInfo, bool) {
+	if c, ok := byName[name]; ok {
+		return commandInfo{c.Name, c.Summary, c.Usage, c.Aliases}, true
+	}
+	switch name {
+	case "help", "-h", "--help":
+		return commandInfo{Name: "help", Summary: "show this help", Usage: "st help [<command>] [--json]", Aliases: []string{"-h", "--help"}}, true
+	case "version", "-v", "--version":
+		return commandInfo{Name: "version", Summary: "print the version", Usage: "st version [--json]", Aliases: []string{"-v", "--version"}}, true
+	default:
+		return commandInfo{}, false
+	}
 }
 
 // exitCode maps an error to a stable exit status so agents can branch on the
@@ -248,10 +332,9 @@ func printHelp(asJSON bool) {
 		for _, c := range registry {
 			infos = append(infos, commandInfo{c.Name, c.Summary, c.Usage, c.Aliases})
 		}
-		infos = append(infos,
-			commandInfo{Name: "help", Summary: "show this help", Usage: "st help [<command>] [--json]"},
-			commandInfo{Name: "version", Summary: "print the version", Usage: "st version [--json]"},
-		)
+		helpInfo, _ := commandInfoForName("help")
+		versionInfo, _ := commandInfoForName("version")
+		infos = append(infos, helpInfo, versionInfo)
 		data, _ := json.MarshalIndent(map[string]any{"commands": infos}, "", "  ")
 		fmt.Printf("%s\n", data)
 		return

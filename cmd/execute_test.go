@@ -137,6 +137,20 @@ func TestExecuteHelpJSON(t *testing.T) {
 	if info.Name != "create" {
 		t.Errorf("help create --json name = %q, want create", info.Name)
 	}
+	for _, topic := range []string{"help", "version"} {
+		out = captureStdout(t, func() {
+			withArgs(t, []string{"help", topic, "--json"}, func() { code = Execute() })
+		})
+		if code != 0 {
+			t.Fatalf("Execute(help %s --json) = %d, want 0", topic, code)
+		}
+		if err := json.Unmarshal([]byte(out), &info); err != nil {
+			t.Fatalf("help %s --json not parseable: %v\n%s", topic, err, out)
+		}
+		if info.Name != topic {
+			t.Errorf("help %s --json name = %q, want %s", topic, info.Name, topic)
+		}
+	}
 
 	// `st version --json`.
 	out = captureStdout(t, func() {
@@ -153,6 +167,39 @@ func TestExecuteHelpJSON(t *testing.T) {
 	}
 	if v.Version != version {
 		t.Errorf("version --json = %q, want %q", v.Version, version)
+	}
+}
+
+func TestExecuteBuiltInUnknownFlags(t *testing.T) {
+	cases := []struct {
+		args     []string
+		wantJSON bool
+	}{
+		{[]string{"help", "--jsno"}, false},
+		{[]string{"help", "--bad", "--json"}, true},
+		{[]string{"version", "--bad"}, false},
+		{[]string{"version", "--bad", "--json"}, true},
+	}
+	for _, tc := range cases {
+		var code int
+		var stdout string
+		stderr := executeCapturingOutput(t, tc.args, &code, &stdout)
+		if code != 1 {
+			t.Fatalf("Execute(%v) = %d, want 1", tc.args, code)
+		}
+		if stdout != "" {
+			t.Fatalf("Execute(%v) wrote stdout:\n%s", tc.args, stdout)
+		}
+		if tc.wantJSON {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(stderr), &payload); err != nil {
+				t.Fatalf("Execute(%v) stderr not JSON: %v\n%s", tc.args, err, stderr)
+			}
+			continue
+		}
+		if !strings.Contains(stderr, "unknown") {
+			t.Fatalf("Execute(%v) stderr missing unknown-flag message:\n%s", tc.args, stderr)
+		}
 	}
 }
 
