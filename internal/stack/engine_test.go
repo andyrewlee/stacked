@@ -111,6 +111,43 @@ func TestEngineFoldAbsorbs(t *testing.T) {
 	}
 }
 
+// If the branch delete fails mid-fold, the git side must roll back: the parent
+// ref must not have absorbed cur's commits, cur must survive, HEAD must be
+// restored, and the metadata must be untouched (ENG-4). Otherwise git and
+// state.json would silently disagree.
+func TestFoldRollsBackWhenDeleteFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+	errBoom := errors.New("branch checked out elsewhere")
+	f.deleteErr["b"] = errBoom
+
+	if _, err := Fold(env, s); !errors.Is(err, errBoom) {
+		t.Fatalf("Fold error = %v, want %v", err, errBoom)
+	}
+	// Parent must not have advanced.
+	if after, _ := f.RevParse("a"); after != aTip {
+		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
+	}
+	// cur must survive, stay tracked, and keep its child.
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("failed fold destroyed branch b or its metadata")
+	}
+	if cb, _ := s.Get("c"); cb.Parent != "b" {
+		t.Fatalf("c parent = %q after failed fold, want b (unchanged)", cb.Parent)
+	}
+	// HEAD must be restored to cur.
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q after failed fold, want b restored", f.head)
+	}
+}
+
 func TestEngineDeleteDropsCommits(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
