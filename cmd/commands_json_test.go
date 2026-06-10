@@ -1,0 +1,490 @@
+package cmd
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"stacked/internal/git"
+	"stacked/internal/stack"
+)
+
+// Read-only command output and the machine (JSON) contract: log, status,
+// submit, completion, guide, and the quiet-git JSON environment.
+// --- log -------------------------------------------------------------------
+
+func TestLogTextAndJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-b")
+
+	// Text output marks the current branch and lists trunk + both branches.
+	text := captureStdout(t, func() {
+		if err := runLog(nil); err != nil {
+			t.Fatalf("log: %v", err)
+		}
+	})
+	for _, want := range []string{"main", "feat-a", "feat-b"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("log text missing %q:\n%s", want, text)
+		}
+	}
+
+	// JSON output is a valid tree rooted at trunk with the documented fields.
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("log --json not valid JSON: %v\n%s", err, jsonOut)
+	}
+	if root.Name != "main" {
+		t.Fatalf("root name = %q, want main", root.Name)
+	}
+	if len(root.Children) != 1 || root.Children[0].Name != "feat-a" {
+		t.Fatalf("root children wrong: %+v", root.Children)
+	}
+	a := root.Children[0]
+	if a.Parent != "main" {
+		t.Fatalf("feat-a parent = %q, want main", a.Parent)
+	}
+	if len(a.Children) != 1 || a.Children[0].Name != "feat-b" {
+		t.Fatalf("feat-a children wrong: %+v", a.Children)
+	}
+	b := a.Children[0]
+	if !b.Current {
+		t.Fatalf("feat-b should be marked current: %+v", b)
+	}
+	if b.ParentSHA == "" {
+		t.Fatalf("feat-b should carry a parentSHA: %+v", b)
+	}
+	if b.TopCommit != "b" {
+		t.Fatalf("feat-b topCommit = %q, want b", b.TopCommit)
+	}
+}
+
+func TestLogJSONTrunkOnly(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if root.Name != "main" || len(root.Children) != 0 {
+		t.Fatalf("trunk-only tree wrong: %+v", root)
+	}
+}
+
+func TestLogNeedsRestackFlag(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b") // independent file: no conflict
+
+	// Advance feat-a with a raw git commit (no auto-restack), so feat-b's
+	// recorded parentSHA drifts and the JSON should flag needsRestack=true.
+	mustCheckout(t, "feat-a")
+	write(t, "a2.txt", "a2\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "a2")
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	// root(main) -> feat-a -> feat-b; feat-b should need a restack.
+	a := root.Children[0]
+	b := a.Children[0]
+	if !b.NeedsRestack {
+		t.Fatalf("feat-b should report needsRestack=true after parent moved: %+v", b)
+	}
+}
+
+// --- status ----------------------------------------------------------------
+
+type statusPayload struct {
+	Branch        string   `json:"branch"`
+	Role          string   `json:"role"`
+	Parent        string   `json:"parent"`
+	Children      []string `json:"children"`
+	NeedsRestack  *bool    `json:"needsRestack"`
+	WorktreeClean bool     `json:"worktreeClean"`
+}
+
+func TestStatusTextAndJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+
+	text := captureStdout(t, func() {
+		if err := runStatus(nil); err != nil {
+			t.Fatalf("status: %v", err)
+		}
+	})
+	for _, want := range []string{"branch:", "feat-a", "tracked", "feat-b"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+
+	jsonOut := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json: %v", err)
+		}
+	})
+	var p statusPayload
+	if err := json.Unmarshal([]byte(jsonOut), &p); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, jsonOut)
+	}
+	if p.Branch != "feat-a" || p.Role != "tracked" || p.Parent != "main" {
+		t.Fatalf("status payload wrong: %+v", p)
+	}
+	if len(p.Children) != 1 || p.Children[0] != "feat-b" {
+		t.Fatalf("status children wrong: %+v", p.Children)
+	}
+	if p.NeedsRestack == nil || *p.NeedsRestack {
+		t.Fatalf("status needsRestack want false-pointer, got %v", p.NeedsRestack)
+	}
+	if !p.WorktreeClean {
+		t.Fatalf("status worktreeClean want true")
+	}
+}
+
+func TestStatusTrunkJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	jsonOut := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json on trunk: %v", err)
+		}
+	})
+	var p statusPayload
+	if err := json.Unmarshal([]byte(jsonOut), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if p.Branch != "main" || p.Role != "trunk" {
+		t.Fatalf("trunk status wrong: %+v", p)
+	}
+	if p.NeedsRestack != nil {
+		t.Fatalf("trunk should have no needsRestack, got %v", *p.NeedsRestack)
+	}
+}
+
+func TestStatusUntrackedJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "checkout", "-q", "-b", "loose")
+
+	jsonOut := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json on untracked: %v", err)
+		}
+	})
+	var p statusPayload
+	if err := json.Unmarshal([]byte(jsonOut), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if p.Branch != "loose" || p.Role != "untracked" {
+		t.Fatalf("untracked status wrong: %+v", p)
+	}
+}
+
+func TestStatusDirtyWorktree(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	write(t, "a.txt", "dirty\n") // unstaged change
+
+	jsonOut := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json dirty: %v", err)
+		}
+	})
+	var p statusPayload
+	if err := json.Unmarshal([]byte(jsonOut), &p); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if p.WorktreeClean {
+		t.Fatalf("expected worktreeClean=false for a dirty tree")
+	}
+}
+
+// --- submit ----------------------------------------------------------------
+
+func TestSubmitNoRemote(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runSubmit(nil); err == nil {
+		t.Fatalf("expected error: remote origin does not exist")
+	}
+}
+
+func TestSubmitAtTrunk(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	// Configure a (file) remote so the remote-exists check passes.
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustCheckout(t, "main")
+	out := captureStdout(t, func() {
+		if err := runSubmit(nil); err != nil {
+			t.Fatalf("submit at trunk: %v", err)
+		}
+	})
+	if !strings.Contains(out, "nothing to submit") {
+		t.Fatalf("expected 'nothing to submit' at trunk, got:\n%s", out)
+	}
+}
+
+func TestSubmitDryRun(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-b")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run"}); err != nil {
+			t.Fatalf("submit --dry-run: %v", err)
+		}
+	})
+	// Bottom-up order: feat-a then feat-b, both "would push", none pushed.
+	for _, want := range []string{"would push feat-a", "would push feat-b", "dry run"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestSubmitJSONSingleShape asserts the trunk early-return and the pushed path
+// emit the same JSON object — no unknown keys in either direction.
+func TestSubmitJSONSingleShape(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	decode := func(t *testing.T, raw string) submitResult {
+		t.Helper()
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var got submitResult
+		if err := dec.Decode(&got); err != nil {
+			t.Fatalf("submit --json did not unmarshal into the single shape: %v\n%s", err, raw)
+		}
+		return got
+	}
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--json"}); err != nil {
+			t.Fatalf("submit --json: %v", err)
+		}
+	})
+	pushed := decode(t, out)
+	if pushed.Remote != "origin" || len(pushed.Pushed) != 1 || pushed.Pushed[0] != "feat-a" {
+		t.Fatalf("pushed-case payload = %+v, want feat-a pushed to origin", pushed)
+	}
+
+	mustCheckout(t, "main")
+	out = captureStdout(t, func() {
+		if err := runSubmit([]string{"--json"}); err != nil {
+			t.Fatalf("submit --json at trunk: %v", err)
+		}
+	})
+	trunk := decode(t, out)
+	if trunk.Summary != "at trunk; nothing to submit" {
+		t.Fatalf("trunk-case summary = %q, want the nothing-to-submit summary", trunk.Summary)
+	}
+	if trunk.Pushed == nil || len(trunk.Pushed) != 0 {
+		t.Fatalf("trunk-case pushed = %v, want present-but-empty", trunk.Pushed)
+	}
+}
+
+func TestSubmitUsesSelectedRemote(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	upstream := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", upstream)
+	mustRun(t, "git", "remote", "add", "upstream", upstream)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	if err := runSubmit([]string{"--remote", "upstream"}); err != nil {
+		t.Fatalf("submit --remote upstream: %v", err)
+	}
+	if out := mustRun(t, "git", "--git-dir", upstream, "rev-parse", "--verify", "refs/heads/feat-a"); out == "" {
+		t.Fatal("feat-a was not pushed to upstream")
+	}
+}
+
+func TestSubmitRejectsPositionalArgs(t *testing.T) {
+	if err := runSubmit([]string{"typo", "--dry-run"}); err == nil {
+		t.Fatal("submit accepted a positional argument")
+	}
+	if err := runSubmit([]string{"origin", "--remote"}); err == nil {
+		t.Fatal("submit accepted a positional argument before a missing-value flag")
+	}
+}
+
+func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
+	webURL, host := remoteToHTTPS("https://TOKEN@example.com/owner/repo.git?access_token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("credential URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "TOKEN") || strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "frag") || strings.Contains(host, "TOKEN") {
+		t.Fatalf("credential leaked in converted remote: %q %q", webURL, host)
+	}
+
+	webURL, host = remoteToHTTPS("git@example.com:owner/repo.git?token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("scp-like URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "token") || strings.Contains(webURL, "frag") {
+		t.Fatalf("scp-like credential leaked in converted remote: %q %q", webURL, host)
+	}
+
+	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com/owner/repo.git?token=SECRET#frag")
+	if webURL != "https://example.com/owner/repo" || host != "example.com" {
+		t.Fatalf("credential SSH URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
+	}
+	if strings.Contains(webURL, "SECRET") || strings.Contains(webURL, "user") || strings.Contains(webURL, "token") || strings.Contains(webURL, "frag") {
+		t.Fatalf("SSH credential leaked in converted remote: %q %q", webURL, host)
+	}
+
+	webURL, host = remoteToHTTPS("ssh://git@[2001:db8::1]/owner/repo.git")
+	if webURL != "https://[2001:db8::1]/owner/repo" || host != "2001:db8::1" {
+		t.Fatalf("IPv6 SSH URL converted to (%q, %q), want bracketed web URL", webURL, host)
+	}
+
+	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com:2222/owner/repo.git")
+	if webURL != "https://example.com:2222/owner/repo" || host != "example.com" {
+		t.Fatalf("credential SSH URL with port converted to (%q, %q), want sanitized example.com:2222 URL", webURL, host)
+	}
+}
+
+func TestSubmitUntracked(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustRun(t, "git", "checkout", "-q", "-b", "loose")
+	write(t, "x.txt", "x\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "x")
+	if err := runSubmit(nil); err == nil {
+		t.Fatalf("expected error submitting an untracked branch")
+	}
+}
+
+// --- completion ------------------------------------------------------------
+
+func TestCompletionShells(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		shell := shell
+		out := captureStdout(t, func() {
+			if err := runCompletion([]string{shell}); err != nil {
+				t.Fatalf("completion %s: %v", shell, err)
+			}
+		})
+		if strings.TrimSpace(out) == "" {
+			t.Fatalf("completion %s produced no output", shell)
+		}
+		// Every script should mention the "create" subcommand somewhere.
+		if !strings.Contains(out, "create") && !strings.Contains(out, "st") {
+			t.Fatalf("completion %s missing command list:\n%s", shell, out)
+		}
+	}
+}
+
+func TestCompletionErrors(t *testing.T) {
+	if err := runCompletion(nil); err == nil {
+		t.Fatalf("expected error: completion needs a shell argument")
+	}
+	if err := runCompletion([]string{"powershell"}); err == nil {
+		t.Fatalf("expected error: unsupported shell")
+	}
+	if err := runCompletion([]string{"bash", "extra"}); err == nil {
+		t.Fatalf("expected error: too many args")
+	}
+}
+
+func TestNoArgReadOnlyCommandsRejectPositionalArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func([]string) error
+	}{
+		{"guide", runGuide},
+		{"log", runLog},
+		{"status", runStatus},
+		{"validate", runValidate},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run([]string{"unexpected"}); err == nil {
+				t.Fatalf("%s accepted a positional argument", tt.name)
+			}
+		})
+	}
+}
+
+func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := runGuide([]string{"--json"}); err != nil {
+			t.Fatalf("guide --json: %v", err)
+		}
+	})
+	if strings.Contains(out, "docs/AGENT.md") {
+		t.Fatalf("guide references missing docs path:\n%s", out)
+	}
+	var payload struct {
+		Docs string `json:"docs"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("guide JSON invalid: %v\n%s", err, out)
+	}
+	if payload.Docs == "" {
+		t.Fatal("guide JSON omitted docs guidance")
+	}
+}
+
+func TestJSONStackEnvUsesQuietGit(t *testing.T) {
+	orig := gitShell
+	gitShell = git.Shell{}
+	defer func() { gitShell = orig }()
+
+	if _, ok := stackEnv(&stack.State{}, true).Git.(git.QuietShell); !ok {
+		t.Fatal("JSON stack env did not use QuietShell")
+	}
+	if _, ok := stackEnv(&stack.State{}, false).Git.(git.Shell); !ok {
+		t.Fatal("text stack env did not use Shell")
+	}
+}

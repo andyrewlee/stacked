@@ -87,9 +87,11 @@ engine and these hold, the topology bookkeeping is sound.
   unit tests**, the **model/invariant** test, fuzz. Fast; the inner loop.
 - `cmd/*_test.go` — adapters over real git (integration), dispatcher, parseArgs,
   golden output.
-- `e2e/e2e_test.go` — black-box: builds the real binary and drives it as a hermetic
-  subprocess (isolated HOME/git config). Contributes to coverage via `GOCOVERDIR`
-  (built `-cover -covermode=atomic` so it merges with the race-instrumented run).
+- `e2e/*_test.go` — black-box: builds the real binary (harness in `e2e_test.go`)
+  and drives it as a hermetic subprocess (isolated HOME/git config); journeys in
+  `e2e_journey_test.go`, CLI-contract in `e2e_contract_test.go`. Contributes to
+  coverage via `GOCOVERDIR` (built `-cover -covermode=atomic` so it merges with
+  the race-instrumented run).
 
 ## Conflicts & gotchas
 
