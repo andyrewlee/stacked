@@ -59,6 +59,8 @@ func runRepair(args []string) error {
 			}
 
 			// Branch deleted outside st: untrack it, re-parenting children.
+			// Not stack.RemoveBranch: a child with no recorded base gets a
+			// repaired ParentSHA here, rather than keeping it verbatim.
 			if !git.BranchExists(name) {
 				newParent, psha := b.Parent, trunkTip
 				if newParent != s.Trunk && !git.BranchExists(newParent) {

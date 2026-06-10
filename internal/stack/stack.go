@@ -80,6 +80,28 @@ func (s *State) Untrack(name string) {
 	delete(s.Branches, name)
 }
 
+// RemoveBranch removes name from the stack topology: every child is
+// re-parented onto name's parent — PRESERVING the child's ParentSHA, so a
+// follow-up restack drops the removed branch's commits from the child's
+// history — and name is untracked. It returns the former children's names in
+// sorted order. Removing an untracked branch is a no-op returning nil.
+// (UntrackBranch deliberately differs: an untracked branch's commits stay
+// part of the children's history, so it rewrites the children's ParentSHA.)
+func (s *State) RemoveBranch(name string) []string {
+	b, ok := s.Get(name)
+	if !ok {
+		return nil
+	}
+	children := s.Children(name)
+	former := make([]string, 0, len(children))
+	for _, child := range children {
+		child.Parent = b.Parent
+		former = append(former, child.Name)
+	}
+	s.Untrack(name)
+	return former
+}
+
 // Children returns the branches whose Parent equals name, sorted by Name.
 func (s *State) Children(name string) []*Branch {
 	var children []*Branch
