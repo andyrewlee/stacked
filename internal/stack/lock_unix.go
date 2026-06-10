@@ -14,7 +14,7 @@ import (
 // commands across concurrent processes in the same repository. The returned
 // release function unlocks and closes the lock file; the lock is also released
 // automatically if the process exits. Platforms without flock support use an
-// exclusive lock file with stale-lock reclaim instead (see lock_other.go).
+// exclusive lock file instead (see lock_other.go).
 func Lock() (func(), error) {
 	dir, err := stackedDir()
 	if err != nil {

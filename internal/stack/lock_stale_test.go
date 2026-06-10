@@ -1,37 +1,109 @@
 package stack
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-// TestLockIsStale pins the pure reclaim decision shared by the non-flock lock
-// (the syscalls stay build-tagged; this runs on every platform).
-func TestLockIsStale(t *testing.T) {
-	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	old := now.Add(-lockStaleAfter - time.Minute)
-	fresh := now.Add(-time.Minute)
+func TestRemoveLockFileIfContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock.excl")
+	if err := os.WriteFile(path, []byte("owner-a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	cases := []struct {
-		name    string
-		content string
-		mtime   time.Time
-		want    bool
-	}{
-		{"fresh recorded timestamp", lockFileContent(123, fresh), time.Time{}, false},
-		{"old recorded timestamp", lockFileContent(123, old), time.Time{}, true},
-		{"old timestamp beats fresh mtime", lockFileContent(123, old), fresh, true},
-		{"fresh timestamp beats old mtime", lockFileContent(123, fresh), old, false},
-		{"garbage content falls back to old mtime", "not a lock file", old, true},
-		{"garbage content falls back to fresh mtime", "not a lock file", fresh, false},
-		{"no timestamp at all keeps the lock", "", time.Time{}, false},
-		{"exactly at the threshold keeps the lock", lockFileContent(123, now.Add(-lockStaleAfter)), time.Time{}, false},
+	if removeLockFileIfContent(path, "owner-b") {
+		t.Fatal("removed lock with different owner content")
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := lockIsStale(c.content, c.mtime, now); got != c.want {
-				t.Fatalf("lockIsStale(%q, mtime=%v) = %v, want %v", c.content, c.mtime, got, c.want)
-			}
-		})
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("lock file should remain after mismatched remove: %v", err)
 	}
+	if !removeLockFileIfContent(path, "owner-a") {
+		t.Fatal("did not remove matching lock content")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("lock file should be removed, stat err = %v", err)
+	}
+}
+
+func TestLockOwnerIsGoneKeepsCurrentProcess(t *testing.T) {
+	content := lockFileContent(os.Getpid(), time.Now(), "token")
+	if lockOwnerIsGone(content) {
+		t.Fatal("current process should be treated as live")
+	}
+	if lockOwnerIsGone("not a lock file") {
+		t.Fatal("unparseable owner should fail closed")
+	}
+}
+
+func TestMalformedLockIsAbandonedOnlyWhenOldAndUnowned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.excl")
+	if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if malformedLockIsAbandoned(path, "partial", now) {
+		t.Fatal("fresh malformed lock should fail closed")
+	}
+	old := now.Add(-malformedLockReclaimAfter - time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if !malformedLockIsAbandoned(path, "partial", now) {
+		t.Fatal("old malformed lock should be abandoned")
+	}
+	owned := lockFileContent(os.Getpid(), old, "token")
+	if malformedLockIsAbandoned(path, owned, now) {
+		t.Fatal("parseable owner lock should not use malformed recovery")
+	}
+}
+
+func TestAcquireReclaimGuard(t *testing.T) {
+	dir := t.TempDir()
+	release, ok := acquireReclaimGuard(dir)
+	if !ok {
+		t.Fatal("first reclaim guard acquisition failed")
+	}
+	if _, ok := acquireReclaimGuard(dir); ok {
+		t.Fatal("second reclaim guard acquisition should fail")
+	}
+	release()
+	if _, err := os.Stat(filepath.Join(dir, "lock.reclaim")); !os.IsNotExist(err) {
+		t.Fatalf("guard file should be removed, stat err = %v", err)
+	}
+}
+
+func TestAcquireReclaimGuardRecoversMalformedOldFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.reclaim")
+	if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-malformedLockReclaimAfter - time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	release, ok := acquireReclaimGuard(dir)
+	if !ok {
+		t.Fatal("reclaim guard should recover old malformed file")
+	}
+	release()
+}
+
+func TestAcquireReclaimGuardRecoversDeadOwner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.reclaim")
+	deadOwner := lockFileContent(999999999, time.Now(), "dead")
+	if err := os.WriteFile(path, []byte(deadOwner), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	release, ok := acquireReclaimGuard(dir)
+	if !ok {
+		t.Fatal("reclaim guard should recover dead owner")
+	}
+	release()
 }

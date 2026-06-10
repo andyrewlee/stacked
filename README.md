@@ -316,7 +316,7 @@ st submit                     # or: st submit --dry-run
   repo starts with an empty stack until they `track` branches.
 - Mutating commands take an advisory lock so two `st` invocations don't clobber
   each other's metadata: flock on unix-like platforms, an exclusive lock file
-  with stale-lock reclaim elsewhere (e.g. Windows).
+  elsewhere (e.g. Windows).
 - On a rebase conflict during a restack, resolve it, `git add` the files, and run
   `st continue` (or `st abort` to back out). `stacked` records progress as each
   branch lands, then restacks the rest of the stack.

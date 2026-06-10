@@ -85,7 +85,7 @@ the result, stderr for the error envelope, and the exit code for the category.
   touch the working tree.
 - Concurrent `st` processes in one repo are serialized by an advisory lock (a
   second one fails fast rather than corrupting state): flock on unix-like
-  platforms, an exclusive lock file with stale-lock reclaim elsewhere.
+  platforms, an exclusive lock file elsewhere.
 
 ## Discoverability
 

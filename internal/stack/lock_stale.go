@@ -1,36 +1,93 @@
 package stack
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// lockStaleAfter is how old an exclusive lock file must be before another
-// process may assume its holder died without releasing it and reclaim the
-// lock. Deliberately conservative: no st operation should hold the lock for
-// minutes, but a false reclaim could let two mutations interleave.
-const lockStaleAfter = 10 * time.Minute
+const malformedLockReclaimAfter = 10 * time.Minute
 
-// lockFileContent renders an exclusive lock file's contents: the holder's pid
-// and the RFC3339 acquisition time, "pid timestamp\n".
-func lockFileContent(pid int, now time.Time) string {
-	return fmt.Sprintf("%d %s\n", pid, now.UTC().Format(time.RFC3339))
+// newLockToken returns an opaque per-acquisition token used to avoid removing
+// another process's replacement lock during release.
+func newLockToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 }
 
-// lockIsStale decides whether an existing exclusive lock file may be
-// reclaimed: its recorded acquisition timestamp — falling back to the file
-// mtime when the content does not parse — is older than lockStaleAfter. With
-// no usable timestamp at all the lock is kept (never reclaim on a guess).
-func lockIsStale(content string, mtime, now time.Time) bool {
-	acquired := mtime
-	if fields := strings.Fields(content); len(fields) >= 2 {
-		if ts, err := time.Parse(time.RFC3339, fields[1]); err == nil {
-			acquired = ts
-		}
-	}
-	if acquired.IsZero() {
+// lockFileContent renders an exclusive lock file's contents: the holder's pid,
+// the RFC3339 acquisition time, and a per-acquisition token.
+func lockFileContent(pid int, now time.Time, token string) string {
+	return fmt.Sprintf("%d %s %s\n", pid, now.UTC().Format(time.RFC3339), token)
+}
+
+func removeLockFileIfContent(path, want string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != want {
 		return false
 	}
-	return now.Sub(acquired) > lockStaleAfter
+	return os.Remove(path) == nil
+}
+
+func lockContentHasOwner(content string) bool {
+	fields := strings.Fields(content)
+	if len(fields) == 0 {
+		return false
+	}
+	pid, err := strconv.Atoi(fields[0])
+	return err == nil && pid > 0
+}
+
+func malformedLockIsAbandoned(path, content string, now time.Time) bool {
+	if lockContentHasOwner(content) {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return now.Sub(info.ModTime()) > malformedLockReclaimAfter
+}
+
+func acquireReclaimGuard(dir string) (func(), bool) {
+	path := filepath.Join(dir, "lock.reclaim")
+	token := newLockToken()
+	contents := lockFileContent(os.Getpid(), time.Now(), token)
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if _, err := f.WriteString(contents); err != nil {
+				_ = f.Close()
+				_ = os.Remove(path)
+				return nil, false
+			}
+			if err := f.Close(); err != nil {
+				_ = os.Remove(path)
+				return nil, false
+			}
+			return func() {
+				_ = removeLockFileIfContent(path, contents)
+			}, true
+		}
+		if attempt > 0 {
+			return nil, false
+		}
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
+			!removeLockFileIfContent(path, string(existing)) {
+			return nil, false
+		}
+	}
+	return nil, false
 }
