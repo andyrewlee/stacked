@@ -194,3 +194,44 @@ func TestRemoveBranchReparentsChildrenPreservingParentSHA(t *testing.T) {
 		t.Errorf("RemoveBranch(not-tracked) = %v, want nil", got)
 	}
 }
+
+// TestDriftAgainstMatchesNeedsRestack asserts the pure tip-map drift
+// computation agrees with the live NeedsRestack check, and treats a branch
+// missing from the map (a deleted git branch) as not-drifted.
+func TestDriftAgainstMatchesNeedsRestack(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	// Amend a so b drifts.
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.amend("rewritten")
+
+	tips, err := f.Tips()
+	if err != nil {
+		t.Fatal(err)
+	}
+	drift := s.DriftAgainst(tips)
+	for _, name := range sortedBranchNames(s) {
+		want, err := s.NeedsRestack(f, name)
+		if err != nil {
+			t.Fatalf("NeedsRestack(%s): %v", name, err)
+		}
+		if drift[name] != want {
+			t.Errorf("drift[%s] = %v, NeedsRestack = %v", name, drift[name], want)
+		}
+	}
+	if !drift["b"] {
+		t.Error("b should drift after its parent was amended")
+	}
+
+	// A branch whose parent is missing from the map reports no drift; the
+	// missing branch is its consumers' problem to report.
+	s.Track("orphan", "gone", "sha-gone")
+	drift = s.DriftAgainst(tips)
+	if drift["orphan"] {
+		t.Error("orphan with missing parent reported drift")
+	}
+}

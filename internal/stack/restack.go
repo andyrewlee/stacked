@@ -70,6 +70,22 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	return true, nil
 }
 
+// DriftAgainst computes which tracked branches need a restack purely from a
+// branch-name → tip map (one Tips() read), with no further git access. A
+// parent missing from the map means its git branch is missing; drift is
+// reported false for that branch (the missing branch itself is a problem the
+// consumers report separately). Mutation paths keep reading live tips per
+// step — correctness during restacks depends on it — this is for the
+// read-only consumers (log, validate).
+func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
+	drift := make(map[string]bool, len(s.Branches))
+	for name, b := range s.Branches {
+		parentTip, ok := tips[b.Parent]
+		drift[name] = ok && parentTip != b.ParentSHA
+	}
+	return drift
+}
+
 // restackPlan returns, in order, the branches a restack starting at `start`
 // would rebase — without changing anything. A branch is rebased if it is out of
 // date, or its parent will be rebased (which moves the parent tip and forces the

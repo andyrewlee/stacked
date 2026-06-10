@@ -43,10 +43,18 @@ func runLog(args []string) error {
 	cur, _ := currentBranch()
 	index := s.ChildIndex()
 
-	if asJSON {
-		return printLogJSON(s, index, cur)
+	// One for-each-ref read powers every drift check instead of two rev-parse
+	// spawns per branch.
+	tips, err := git.Tips()
+	if err != nil {
+		return err
 	}
-	printLogTree(s, index, cur)
+	drift := s.DriftAgainst(tips)
+
+	if asJSON {
+		return printLogJSON(s, index, cur, drift)
+	}
+	printLogTree(s, index, cur, drift)
 	return nil
 }
 
@@ -61,13 +69,13 @@ type logNode struct {
 	Children     []*logNode `json:"children,omitempty"`
 }
 
-func printLogJSON(s *stack.State, index map[string][]string, cur string) error {
+func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
 		node := &logNode{Name: name, Parent: parent, Current: name == cur}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
-			node.NeedsRestack = needsRestack(s, name)
+			node.NeedsRestack = drift[name]
 			if subject, ok := topSubject(s, b); ok {
 				node.TopCommit = subject
 			}
@@ -88,7 +96,7 @@ func printLogJSON(s *stack.State, index map[string][]string, cur string) error {
 
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
-func printLogTree(s *stack.State, index map[string][]string, cur string) {
+func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool) {
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
 		for _, child := range index[name] {
@@ -108,7 +116,7 @@ func printLogTree(s *stack.State, index map[string][]string, cur string) {
 		line := fmt.Sprintf("%s%s %s", indent, marker, label)
 
 		if b, ok := s.Get(name); ok {
-			if needsRestack(s, name) {
+			if drift[name] {
 				line += " " + paint("(needs restack)", ansiYellow)
 			}
 			if subject, ok := topSubject(s, b); ok {
@@ -118,13 +126,6 @@ func printLogTree(s *stack.State, index map[string][]string, cur string) {
 		out("%s\n", line)
 	}
 	printBranch(s.Trunk, 0)
-}
-
-// needsRestack reports whether name has drifted from its recorded parent tip.
-// Any error (e.g. a missing parent ref) is treated as "no" so log stays robust.
-func needsRestack(s *stack.State, name string) bool {
-	need, err := s.NeedsRestack(gitShell, name)
-	return err == nil && need
 }
 
 // topSubject returns the subject of b's most recent commit relative to its

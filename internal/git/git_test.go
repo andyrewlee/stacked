@@ -399,6 +399,33 @@ func TestFetchAndPush(t *testing.T) {
 	}
 }
 
+// TestTips asserts the batched ref read returns every local branch tip in one
+// spawn, keyed by name, unconfused by a tag sharing a branch's name.
+func TestTips(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "f.txt", "f\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "f")
+	featSHA := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "tag", "feat", mainSHA) // decoy tag with a branch's name
+
+	tips, err := Tips()
+	if err != nil {
+		t.Fatalf("Tips: %v", err)
+	}
+	if len(tips) != 2 {
+		t.Fatalf("Tips = %v, want exactly main and feat", tips)
+	}
+	if tips["main"] != mainSHA {
+		t.Fatalf("tips[main] = %q, want %s", tips["main"], mainSHA)
+	}
+	if tips["feat"] != featSHA {
+		t.Fatalf("tips[feat] = %q, want branch tip %s (not the tag)", tips["feat"], featSHA)
+	}
+}
+
 func TestLocalBranchesUsesFullHeadRefs(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "release")
