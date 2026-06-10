@@ -233,14 +233,11 @@ func Restack(env Env, s *State) (*OpResult, error) {
 
 	var rebased []string
 	if start != s.Trunk {
-		needs, err := s.NeedsRestack(g, start)
+		did, err := s.RestackBranch(env, start)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.RestackBranch(env, start); err != nil {
-			return nil, err
-		}
-		if needs {
+		if did {
 			rebased = append(rebased, start)
 		}
 	}
@@ -529,7 +526,7 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	}
 
 	for _, child := range formerChildren {
-		if err := s.RestackBranch(env, child); err != nil {
+		if _, err := s.RestackBranch(env, child); err != nil {
 			err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 			return nil, err
 		}
@@ -748,14 +745,11 @@ func Continue(env Env, s *State) (*OpResult, error) {
 func RestackAll(env Env, s *State) ([]string, error) {
 	var rebased []string
 	for _, root := range s.Children(s.Trunk) {
-		needs, err := s.NeedsRestack(env.Git, root.Name)
+		did, err := s.RestackBranch(env, root.Name)
 		if err != nil {
 			return rebased, err
 		}
-		if err := s.RestackBranch(env, root.Name); err != nil {
-			return rebased, err
-		}
-		if needs {
+		if did {
 			rebased = append(rebased, root.Name)
 		}
 		more, err := s.RestackUpstack(env, root.Name)

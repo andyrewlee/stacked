@@ -30,43 +30,44 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 }
 
 // RestackBranch rebases the named branch onto the current tip of its parent if
-// it is out of date; otherwise it is a no-op. On a successful rebase the
-// branch's ParentSHA is updated to the parent tip and the env is asked to
+// it is out of date; otherwise it is a no-op. It reports whether it actually
+// rebased, so callers need no NeedsRestack pre-check. On a successful rebase
+// the branch's ParentSHA is updated to the parent tip and the env is asked to
 // persist. If the rebase fails, a wrapped error explaining how to recover is
 // returned.
-func (s *State) RestackBranch(env Env, name string) error {
+func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	b, ok := s.Get(name)
 	if !ok {
-		return fmt.Errorf("branch %q is not tracked", name)
+		return false, fmt.Errorf("branch %q is not tracked", name)
 	}
 	parentTip, err := env.Git.RevParse(branchTipRef(b.Parent))
 	if err != nil {
-		return fmt.Errorf("resolve parent %q: %w", b.Parent, err)
+		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
 	if parentTip == b.ParentSHA {
-		return nil
+		return false, nil
 	}
 	start, startErr := env.Git.CurrentBranch()
 	if err := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); err != nil {
 		inProgress, progressErr := env.Git.RebaseInProgress()
 		if progressErr == nil && inProgress {
-			return fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, ErrConflict)
+			return false, fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, ErrConflict)
 		}
 		if startErr == nil {
 			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
-				return AlsoFailed(fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err), fmt.Sprintf("restore %q", start), restoreErr)
+				return false, AlsoFailed(fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err), fmt.Sprintf("restore %q", start), restoreErr)
 			}
 		}
 		if progressErr != nil {
-			return fmt.Errorf("checking rebase state after rebasing %q onto %q failed: %v (original error: %w)", name, b.Parent, progressErr, err)
+			return false, fmt.Errorf("checking rebase state after rebasing %q onto %q failed: %v (original error: %w)", name, b.Parent, progressErr, err)
 		}
-		return fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err)
+		return false, fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err)
 	}
 	b.ParentSHA = parentTip
 	if err := env.save(); err != nil {
-		return fmt.Errorf("save state after restacking %q: %w", name, err)
+		return false, fmt.Errorf("save state after restacking %q: %w", name, err)
 	}
-	return nil
+	return true, nil
 }
 
 // restackPlan returns, in order, the branches a restack starting at `start`
@@ -131,17 +132,13 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
 	var rebased []string
 	for _, child := range s.Descendants(name) {
-		needs, err := s.NeedsRestack(env.Git, child)
+		did, err := s.RestackBranch(env, child)
 		if err != nil {
 			return rebased, err
 		}
-		if !needs {
-			continue
+		if did {
+			rebased = append(rebased, child)
 		}
-		if err := s.RestackBranch(env, child); err != nil {
-			return rebased, err
-		}
-		rebased = append(rebased, child)
 	}
 	return rebased, nil
 }
