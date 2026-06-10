@@ -19,6 +19,16 @@ func init() {
 	})
 }
 
+// submitResult is the single JSON shape every submit outcome emits, so an
+// agent unmarshals one struct regardless of whether anything was pushed.
+type submitResult struct {
+	Remote  string   `json:"remote"`
+	DryRun  bool     `json:"dryRun"`
+	Pushed  []string `json:"pushed"`
+	RepoURL string   `json:"repoURL,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+}
+
 // runSubmit pushes every branch on the current stack — from the bottom branch
 // (just above trunk) up to and including the currently checked-out branch — to
 // the configured remote using --force-with-lease. stacked is login-free and does
@@ -62,11 +72,8 @@ func runSubmit(args []string) error {
 	}
 
 	if cur == state.Trunk {
-		return emit(asJSON, struct {
-			Remote  string   `json:"remote"`
-			Pushed  []string `json:"pushed"`
-			Summary string   `json:"summary"`
-		}{remote, []string{}, "at trunk; nothing to submit"}, func() {
+		payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: []string{}, Summary: "at trunk; nothing to submit"}
+		return emit(asJSON, payload, func() {
 			out("at trunk; nothing to submit\n")
 		})
 	}
@@ -112,12 +119,7 @@ func runSubmit(args []string) error {
 		repoURL, _ = remoteToHTTPS(raw)
 	}
 
-	payload := struct {
-		Remote  string   `json:"remote"`
-		DryRun  bool     `json:"dryRun"`
-		Pushed  []string `json:"pushed"`
-		RepoURL string   `json:"repoURL,omitempty"`
-	}{remote, dryRun, pushed, repoURL}
+	payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: pushed, RepoURL: repoURL}
 	return emit(asJSON, payload, func() {
 		if dryRun {
 			out("\ndry run: %d branch(es) would be pushed to %s:\n", len(pushed), remote)

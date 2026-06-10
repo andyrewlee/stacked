@@ -65,7 +65,10 @@ the result, stderr for the error envelope, and the exit code for the category.
   name, `{ "trunk", "current", "branches": [] }`
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point)
-- **`submit --json`** — `{ "remote", "dryRun", "pushed": [], "repoURL" }`; from trunk it returns `{ "remote", "pushed": [], "summary" }`.
+- **`submit --json`** — one shape for every outcome:
+  `{ "remote", "dryRun", "pushed": [], "repoURL", "summary" }` (`repoURL` and
+  `summary` are `omitempty`; from trunk, `pushed` is empty and `summary`
+  explains why).
 - **operational** (`init`, `abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
 
 ## Idempotency & safety

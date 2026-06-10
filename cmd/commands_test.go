@@ -567,6 +567,52 @@ func TestSubmitDryRun(t *testing.T) {
 	}
 }
 
+// TestSubmitJSONSingleShape asserts the trunk early-return and the pushed path
+// emit the same JSON object — no unknown keys in either direction.
+func TestSubmitJSONSingleShape(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	decode := func(t *testing.T, raw string) submitResult {
+		t.Helper()
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var got submitResult
+		if err := dec.Decode(&got); err != nil {
+			t.Fatalf("submit --json did not unmarshal into the single shape: %v\n%s", err, raw)
+		}
+		return got
+	}
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--json"}); err != nil {
+			t.Fatalf("submit --json: %v", err)
+		}
+	})
+	pushed := decode(t, out)
+	if pushed.Remote != "origin" || len(pushed.Pushed) != 1 || pushed.Pushed[0] != "feat-a" {
+		t.Fatalf("pushed-case payload = %+v, want feat-a pushed to origin", pushed)
+	}
+
+	mustCheckout(t, "main")
+	out = captureStdout(t, func() {
+		if err := runSubmit([]string{"--json"}); err != nil {
+			t.Fatalf("submit --json at trunk: %v", err)
+		}
+	})
+	trunk := decode(t, out)
+	if trunk.Summary != "at trunk; nothing to submit" {
+		t.Fatalf("trunk-case summary = %q, want the nothing-to-submit summary", trunk.Summary)
+	}
+	if trunk.Pushed == nil || len(trunk.Pushed) != 0 {
+		t.Fatalf("trunk-case pushed = %v, want present-but-empty", trunk.Pushed)
+	}
+}
+
 func TestSubmitUsesSelectedRemote(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
