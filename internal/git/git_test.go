@@ -1,7 +1,6 @@
 package git
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,22 +9,82 @@ import (
 	"testing"
 )
 
-func TestIsAlreadyUpToDate(t *testing.T) {
-	cases := []struct {
-		out  string
-		err  error
-		want bool
-	}{
-		{"Already up to date.", errors.New("boom"), true},
-		{"Already up-to-date.", errors.New("boom"), true},
-		{"Updating abc..def Fast-forward", errors.New("boom"), false},
-		{"", errors.New("git merge --ff-only refs/remotes/origin/up-to-date: fatal: missing ref"), false},
-	}
-	for _, c := range cases {
-		if got := isAlreadyUpToDate(c.out, c.err); got != c.want {
-			t.Errorf("isAlreadyUpToDate(%q) = %v, want %v", c.out, got, c.want)
+// TestFastForward drives the three fast-forward outcomes against a real remote
+// and asserts each by the trunk's SHA, never by parsing git's merge output
+// (which is localized).
+func TestFastForward(t *testing.T) {
+	setup := func(t *testing.T) (base string) {
+		t.Helper()
+		newRepo(t)
+		base = mustGit(t, "rev-parse", "HEAD")
+		bare := t.TempDir()
+		mustGit(t, "init", "-q", "--bare", bare)
+		mustGit(t, "remote", "add", "origin", bare)
+		if err := PushRemote("origin", "main", false); err != nil {
+			t.Fatalf("initial Push: %v", err)
 		}
+		return base
 	}
+	advanceMain := func(t *testing.T, name string) string {
+		t.Helper()
+		writeFile(t, name+".txt", name+"\n")
+		mustGit(t, "add", "-A")
+		mustGit(t, "commit", "-q", "-m", name)
+		return mustGit(t, "rev-parse", "HEAD")
+	}
+
+	t.Run("already up to date", func(t *testing.T) {
+		setup(t)
+		// The local trunk is ahead of the remote: nothing to advance.
+		local := advanceMain(t, "local")
+		desc, err := (RemoteShell{}).FastForward("main", "origin")
+		if err != nil {
+			t.Fatalf("FastForward: %v", err)
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != local {
+			t.Fatalf("FastForward moved main to %q, want unchanged %q", got, local)
+		}
+		if desc != "main already up to date" {
+			t.Fatalf("FastForward description = %q, want already up to date", desc)
+		}
+	})
+
+	t.Run("fast-forwards to the upstream tip", func(t *testing.T) {
+		base := setup(t)
+		remoteTip := advanceMain(t, "remote")
+		if err := PushRemote("origin", "main", false); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		mustGit(t, "reset", "--hard", base)
+		if err := Fetch("origin"); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if _, err := (RemoteShell{}).FastForward("main", "origin"); err != nil {
+			t.Fatalf("FastForward: %v", err)
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
+			t.Fatalf("FastForward moved main to %q, want upstream tip %q", got, remoteTip)
+		}
+	})
+
+	t.Run("diverged trunk returns an error", func(t *testing.T) {
+		base := setup(t)
+		advanceMain(t, "remote")
+		if err := PushRemote("origin", "main", false); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		mustGit(t, "reset", "--hard", base)
+		local := advanceMain(t, "local-divergence")
+		if err := Fetch("origin"); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		if _, err := (RemoteShell{}).FastForward("main", "origin"); err == nil {
+			t.Fatal("FastForward on a diverged trunk should error")
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != local {
+			t.Fatalf("failed FastForward moved main to %q, want unchanged %q", got, local)
+		}
+	})
 }
 
 // newRepo creates a temp git repo with one commit on main and chdirs into it.
