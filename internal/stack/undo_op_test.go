@@ -1,0 +1,203 @@
+package stack
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
+
+// mustSnapshot captures an in-memory undo entry via the port (no journal, no
+// disk).
+func mustSnapshot(t *testing.T, s *State, f *fakeGit, label string) *UndoEntry {
+	t.Helper()
+	entry, err := s.SnapshotUndo(f, label)
+	if err != nil {
+		t.Fatalf("SnapshotUndo(%s): %v", label, err)
+	}
+	return entry
+}
+
+// assertUndoRestored asserts that the live state and the fake's refs match the
+// snapshot exactly: same metadata, every recorded ref back on its recorded
+// tip, no branch that did not exist at capture time, and HEAD back on the
+// captured branch.
+func assertUndoRestored(t *testing.T, f *fakeGit, s *State, entry *UndoEntry) {
+	t.Helper()
+	var want State
+	if err := json.Unmarshal(entry.State, &want); err != nil {
+		t.Fatalf("snapshot state does not parse: %v", err)
+	}
+	if s.Trunk != want.Trunk {
+		t.Fatalf("trunk = %q after undo, want %q", s.Trunk, want.Trunk)
+	}
+	if len(s.Branches) != len(want.Branches) {
+		t.Fatalf("tracked = %v after undo, want %v", sortedBranchNames(s), sortedBranchNames(&want))
+	}
+	for name, wantBranch := range want.Branches {
+		got, ok := s.Get(name)
+		if !ok || *got != *wantBranch {
+			t.Fatalf("branch %q = %+v after undo, want %+v", name, got, wantBranch)
+		}
+	}
+	for name, sha := range entry.Refs {
+		got, err := f.RevParse(branchTipRef(name))
+		if err != nil || got != sha {
+			t.Fatalf("ref %q = %q (%v) after undo, want %q", name, got, err, sha)
+		}
+	}
+	existed := map[string]bool{}
+	for _, name := range entry.LocalBranches {
+		existed[name] = true
+	}
+	for name := range f.branches {
+		if !existed[name] {
+			t.Fatalf("branch %q survived undo but did not exist at capture time", name)
+		}
+	}
+	if entry.CurrentBranch != "" && f.head != entry.CurrentBranch {
+		t.Fatalf("HEAD = %q after undo, want %q", f.head, entry.CurrentBranch)
+	}
+}
+
+func TestUndoCreateDeletesBranchAndRestoresHEAD(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("undo left the created branch behind")
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+func TestUndoModifyRestoresEveryRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	// Amending a rewrites a's tip and restacks b — two refs move.
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+func TestUndoRenameRestoresOldNameAndChecksItOut(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "rename")
+	if _, err := Rename(env, s, "a", "z"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("z") || s.IsTracked("z") {
+		t.Fatal("undo left the renamed branch behind")
+	}
+	if !f.BranchExists("a") || !s.IsTracked("a") {
+		t.Fatal("undo did not restore the old branch name")
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q after undoing rename, want a", f.head)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+func TestUndoDeleteResurrectsBranchFromSnapshotRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+
+	entry := mustSnapshot(t, s, f, "delete")
+	if _, err := Delete(env, s, "a", true); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if got, err := f.RevParse("a"); err != nil || got != aTip {
+		t.Fatalf("a = %q (%v) after undo, want resurrected at %q", got, err, aTip)
+	}
+	if b, _ := s.Get("b"); b == nil || b.Parent != "a" {
+		t.Fatalf("b parent = %+v after undo, want a", b)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// A dirty working tree that blocks the pre-delete checkout must detach HEAD
+// (so the created branch can still be deleted) instead of failing — decided by
+// the IsClean plumbing, never by sniffing the checkout error message.
+func TestUndoCreateWithDirtyTreeDetachesHEAD(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.clean = false
+	f.checkoutErr["a"] = errors.New("your local changes would be overwritten")
+
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") {
+		t.Fatal("undo did not delete the created branch")
+	}
+	if f.head != "" || f.detachedAt == "" {
+		t.Fatalf("HEAD = (%q, %q) after blocked checkout, want detached", f.head, f.detachedAt)
+	}
+}
+
+// A clean tree whose checkout still fails must propagate the error rather than
+// detaching.
+func TestUndoPropagatesCheckoutErrorOnCleanTree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	boom := errors.New("checkout refused")
+	f.checkoutErr["a"] = boom
+
+	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+		t.Fatalf("undo error = %v, want %v", err, boom)
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("failed undo deleted the created branch anyway")
+	}
+}

@@ -11,7 +11,10 @@ import (
 // engine (over the in-memory fake git) and asserts the core invariants hold
 // after every step: the forest is acyclic with valid parents, every branch
 // contains its recorded base (parentSHA is an ancestor of its tip), a full
-// restack reconciles everything, and restack is idempotent.
+// restack reconciles everything, and restack is idempotent. Every step is also
+// an undo oracle: the op's effect is snapshotted, undone, verified equal to
+// the snapshot, and re-applied before the run continues — so stack.Undo holds
+// over thousands of random sequences, not just the spot checks.
 func TestModelInvariants(t *testing.T) {
 	for seed := int64(1); seed <= 6; seed++ {
 		t.Run(fmt.Sprintf("seed-%d", seed), func(t *testing.T) {
@@ -30,29 +33,42 @@ func runModel(t *testing.T, seed int64, steps int) {
 
 	for step := 0; step < steps; step++ {
 		tracked := sortedBranchNames(s)
+		// Build the step as a re-runnable closure so it can be applied, undone,
+		// and applied again.
+		var label string
+		var op func() error
 		switch rng.Intn(8) {
 		case 0: // create off a random branch
 			parent := pick(rng, append([]string{"main"}, tracked...))
-			mustCheckout(t, f, parent)
 			nameSeq++
-			if _, err := Create(env, s, fmt.Sprintf("b%d", nameSeq), "subj", true); err != nil {
-				t.Fatalf("create: %v", err)
+			name := fmt.Sprintf("b%d", nameSeq)
+			label = "create"
+			op = func() error {
+				mustCheckout(t, f, parent)
+				_, err := Create(env, s, name, "subj", true)
+				return err
 			}
 		case 1: // amend a random branch
 			if len(tracked) == 0 {
 				continue
 			}
-			mustCheckout(t, f, pick(rng, tracked))
-			if _, err := Modify(env, s, "", true, false); err != nil {
-				t.Fatalf("modify amend: %v", err)
+			target := pick(rng, tracked)
+			label = "modify"
+			op = func() error {
+				mustCheckout(t, f, target)
+				_, err := Modify(env, s, "", true, false)
+				return err
 			}
 		case 2: // add a commit to a random branch
 			if len(tracked) == 0 {
 				continue
 			}
-			mustCheckout(t, f, pick(rng, tracked))
-			if _, err := Modify(env, s, "extra", true, true); err != nil {
-				t.Fatalf("modify commit: %v", err)
+			target := pick(rng, tracked)
+			label = "modify"
+			op = func() error {
+				mustCheckout(t, f, target)
+				_, err := Modify(env, s, "extra", true, true)
+				return err
 			}
 		case 3: // fold a branch whose parent is not the trunk
 			var cands []string
@@ -64,9 +80,12 @@ func runModel(t *testing.T, seed int64, steps int) {
 			if len(cands) == 0 {
 				continue
 			}
-			mustCheckout(t, f, pick(rng, cands))
-			if _, err := Fold(env, s); err != nil {
-				t.Fatalf("fold: %v", err)
+			target := pick(rng, cands)
+			label = "fold"
+			op = func() error {
+				mustCheckout(t, f, target)
+				_, err := Fold(env, s)
+				return err
 			}
 		case 4: // move a branch onto a valid target
 			if len(tracked) == 0 {
@@ -86,33 +105,62 @@ func runModel(t *testing.T, seed int64, steps int) {
 			if len(targets) == 0 {
 				continue
 			}
-			mustCheckout(t, f, b)
-			if _, err := Onto(env, s, pick(rng, targets)); err != nil {
-				t.Fatalf("onto: %v", err)
+			target := pick(rng, targets)
+			label = "onto"
+			op = func() error {
+				mustCheckout(t, f, b)
+				_, err := Onto(env, s, target)
+				return err
 			}
 		case 5: // delete a random branch
 			if len(tracked) == 0 {
 				continue
 			}
-			if err := func() error { _, err := Delete(env, s, pick(rng, tracked), true); return err }(); err != nil {
-				t.Fatalf("delete: %v", err)
+			target := pick(rng, tracked)
+			label = "delete"
+			op = func() error {
+				_, err := Delete(env, s, target, true)
+				return err
 			}
 		case 6: // squash a random branch (a no-op when it has a single commit)
 			if len(tracked) == 0 {
 				continue
 			}
-			mustCheckout(t, f, pick(rng, tracked))
-			if _, err := Squash(env, s, "squashed"); err != nil {
-				t.Fatalf("squash: %v", err)
+			target := pick(rng, tracked)
+			label = "squash"
+			op = func() error {
+				mustCheckout(t, f, target)
+				_, err := Squash(env, s, "squashed")
+				return err
 			}
 		case 7: // rename a random branch to a fresh name
 			if len(tracked) == 0 {
 				continue
 			}
+			target := pick(rng, tracked)
 			nameSeq++
-			if _, err := Rename(env, s, pick(rng, tracked), fmt.Sprintf("b%d", nameSeq)); err != nil {
-				t.Fatalf("rename: %v", err)
+			newName := fmt.Sprintf("b%d", nameSeq)
+			label = "rename"
+			op = func() error {
+				_, err := Rename(env, s, target, newName)
+				return err
 			}
+		}
+
+		// The undo oracle: snapshot, apply, undo, verify, re-apply.
+		entry, err := s.SnapshotUndo(f, label)
+		if err != nil {
+			t.Fatalf("step %d: snapshot before %s: %v", step, label, err)
+		}
+		if err := op(); err != nil {
+			t.Fatalf("step %d: %s: %v", step, label, err)
+		}
+		if _, err := Undo(env, s, entry); err != nil {
+			t.Fatalf("step %d: undo %s: %v", step, label, err)
+		}
+		assertUndoRestored(t, f, s, entry)
+		if err := op(); err != nil {
+			t.Fatalf("step %d: re-apply %s: %v", step, label, err)
 		}
 
 		// Reconcile the whole forest, then assert invariants.
