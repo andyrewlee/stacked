@@ -84,7 +84,8 @@ the result, stderr for the error envelope, and the exit code for the category.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not
   touch the working tree.
 - Concurrent `st` processes in one repo are serialized by an advisory lock (a
-  second one fails fast rather than corrupting state).
+  second one fails fast rather than corrupting state): flock on unix-like
+  platforms, an exclusive lock file with stale-lock reclaim elsewhere.
 
 ## Discoverability
 

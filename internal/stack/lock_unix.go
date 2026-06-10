@@ -13,8 +13,8 @@ import (
 // Lock acquires an exclusive advisory lock that serializes mutating stacked
 // commands across concurrent processes in the same repository. The returned
 // release function unlocks and closes the lock file; the lock is also released
-// automatically if the process exits. On platforms without flock support Lock is
-// a no-op (see lock_other.go).
+// automatically if the process exits. Platforms without flock support use an
+// exclusive lock file with stale-lock reclaim instead (see lock_other.go).
 func Lock() (func(), error) {
 	dir, err := stackedDir()
 	if err != nil {
