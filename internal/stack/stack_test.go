@@ -164,3 +164,33 @@ func TestUntrack(t *testing.T) {
 		t.Errorf("Children(a) after untracking c = %v, want [b]", got)
 	}
 }
+
+func TestRemoveBranchReparentsChildrenPreservingParentSHA(t *testing.T) {
+	s := newTestState()
+
+	former := s.RemoveBranch("a")
+	if !reflect.DeepEqual(former, []string{"b", "c"}) {
+		t.Fatalf("RemoveBranch(a) = %v, want [b c]", former)
+	}
+	if s.IsTracked("a") {
+		t.Error("a still tracked after RemoveBranch")
+	}
+	for _, name := range []string{"b", "c"} {
+		got, _ := s.Get(name)
+		if got.Parent != "main" {
+			t.Errorf("%s parent = %q after RemoveBranch, want main", name, got.Parent)
+		}
+		// The invariant: the child keeps its recorded base so a follow-up
+		// restack drops the removed branch's commits.
+		if got.ParentSHA != "sha-a" {
+			t.Errorf("%s parentSHA = %q after RemoveBranch, want preserved sha-a", name, got.ParentSHA)
+		}
+	}
+	if d, _ := s.Get("d"); d.Parent != "b" || d.ParentSHA != "sha-b" {
+		t.Errorf("d = %+v after RemoveBranch(a), want untouched (b, sha-b)", d)
+	}
+
+	if got := s.RemoveBranch("not-tracked"); got != nil {
+		t.Errorf("RemoveBranch(not-tracked) = %v, want nil", got)
+	}
+}

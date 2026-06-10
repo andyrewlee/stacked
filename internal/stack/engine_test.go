@@ -242,8 +242,14 @@ func TestEngineDeleteDropsCommits(t *testing.T) {
 	mkBranch(t, env, s, f, "b", "c")
 	bTip, _ := f.RevParse("b")
 
-	if _, err := Delete(env, s, "b", true); err != nil {
+	res, err := Delete(env, s, "b", true)
+	if err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+	// Like every restacking op, delete reports the re-parented children it
+	// actually moved.
+	if len(res.Restacked) != 1 || res.Restacked[0] != "c" {
+		t.Fatalf("delete Restacked = %v, want [c]", res.Restacked)
 	}
 	if s.IsTracked("b") {
 		t.Fatal("b still tracked after delete")

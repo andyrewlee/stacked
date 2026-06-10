@@ -319,10 +319,7 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		}
 		return nil, fmt.Errorf("deleting %q: %w", cur, err)
 	}
-	for _, child := range s.Children(cur) {
-		child.Parent = parent
-	}
-	s.Untrack(cur)
+	s.RemoveBranch(cur)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
@@ -503,13 +500,6 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		start = parent
 	}
 
-	// Re-parent children onto the deleted branch's parent, PRESERVING each
-	// child's ParentSHA so the follow-up restack drops the deleted commits.
-	children := s.Children(name)
-	formerChildren := make([]string, 0, len(children))
-	for _, child := range children {
-		formerChildren = append(formerChildren, child.Name)
-	}
 	if err := g.DeleteBranch(name, true); err != nil {
 		err = fmt.Errorf("deleting branch %q: %w", name, err)
 		if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
@@ -517,29 +507,31 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		}
 		return nil, err
 	}
-	for _, child := range children {
-		child.Parent = parent
-	}
-	s.Untrack(name)
+	formerChildren := s.RemoveBranch(name)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
 
+	var restacked []string
 	for _, child := range formerChildren {
-		if _, err := s.RestackBranch(env, child); err != nil {
-			err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
-			return nil, err
+		did, err := s.RestackBranch(env, child)
+		if err != nil {
+			return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 		}
-		if _, err := s.RestackUpstack(env, child); err != nil {
-			err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
-			return nil, err
+		if did {
+			restacked = append(restacked, child)
 		}
+		more, err := s.RestackUpstack(env, child)
+		if err != nil {
+			return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
+		}
+		restacked = append(restacked, more...)
 	}
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
 		return nil, err
 	}
 
-	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}}
+	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}, Restacked: restacked}
 	if len(formerChildren) > 0 {
 		res.Summary = fmt.Sprintf("Deleted %s; re-parented %d branch(es) onto %s", name, len(formerChildren), parent)
 	}
@@ -637,12 +629,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunkRef, err)
 			}
 			if merged {
-				if b, ok := planState.Get(name); ok {
-					for _, child := range planState.Children(name) {
-						child.Parent = b.Parent
-					}
-				}
-				planState.Untrack(name)
+				planState.RemoveBranch(name)
 				deleted[name] = true
 				deletedList = append(deletedList, name)
 			}
@@ -769,8 +756,7 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 	trunk := s.Trunk
 	var deleted []string
 	for _, name := range sortedBranchNames(s) {
-		b, ok := s.Get(name)
-		if !ok {
+		if _, ok := s.Get(name); !ok {
 			continue
 		}
 		merged, err := g.IsAncestor(name, trunk)
@@ -783,10 +769,7 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 		if err := g.DeleteBranch(name, true); err != nil {
 			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)
 		}
-		for _, child := range s.Children(name) {
-			child.Parent = b.Parent
-		}
-		s.Untrack(name)
+		s.RemoveBranch(name)
 		deleted = append(deleted, name)
 		if err := env.save(); err != nil {
 			return deleted, fmt.Errorf("save state after pruning %q: %w", name, err)
@@ -910,6 +893,9 @@ func UntrackBranch(env Env, s *State, name string) (*OpResult, error) {
 			mergedIntoParent = false
 		}
 	}
+	// Not RemoveBranch: an untracked branch's commits remain part of the
+	// children's history, so the children's ParentSHA must move to the
+	// untracked branch's base (unless it merged), not stay where it was.
 	for _, child := range children {
 		parentSHA := b.ParentSHA
 		if mergedIntoParent {
