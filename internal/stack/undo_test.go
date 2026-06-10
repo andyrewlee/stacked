@@ -2,6 +2,7 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,6 +156,102 @@ func TestLoadUndoRecoversFromCorruptJournal(t *testing.T) {
 	if len(got) != 1 || got[0].Label != "after-corruption" {
 		t.Fatalf("journal after recovery = %+v, want one entry labeled after-corruption", got)
 	}
+}
+
+// TestUndoProtocol drives the no-op/finalize protocol over the in-memory fake
+// (the journal itself lives in a throwaway repo dir): tentative entries are
+// dropped after no-ops, kept and trimmed after real changes, annotated with
+// created branches, and preserved across an in-progress conflict.
+func TestUndoProtocol(t *testing.T) {
+	type protoEnv struct {
+		f *fakeGit
+		s *State
+	}
+	setup := func(t *testing.T) protoEnv {
+		t.Helper()
+		initGitRepo(t)
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := s.RecordUndo(f, "op"); err != nil {
+			t.Fatalf("RecordUndo: %v", err)
+		}
+		return protoEnv{f, s}
+	}
+	journal := func(t *testing.T) []UndoEntry {
+		t.Helper()
+		entries, err := loadUndo()
+		if err != nil {
+			t.Fatalf("loadUndo: %v", err)
+		}
+		return entries
+	}
+	boom := errors.New("op failed")
+
+	t.Run("failed op with nothing changed drops the entry", func(t *testing.T) {
+		p := setup(t)
+		if err := CleanupUndoOnError(p.f, p.s, boom); err != nil {
+			t.Fatalf("CleanupUndoOnError: %v", err)
+		}
+		if got := journal(t); len(got) != 0 {
+			t.Fatalf("journal = %d entries after no-op failure, want 0", len(got))
+		}
+	})
+
+	t.Run("failed op that moved a ref keeps the entry", func(t *testing.T) {
+		p := setup(t)
+		mustCheckout(t, p.f, "a")
+		p.f.commit("half-applied")
+		if err := CleanupUndoOnError(p.f, p.s, boom); err != nil {
+			t.Fatalf("CleanupUndoOnError: %v", err)
+		}
+		got := journal(t)
+		if len(got) != 1 || got[0].Label != "op" {
+			t.Fatalf("journal = %+v after real failure, want the kept entry", got)
+		}
+	})
+
+	t.Run("successful no-op drops the entry", func(t *testing.T) {
+		p := setup(t)
+		entry, _, _ := PeekUndo()
+		if err := FinalizeUndo(p.f, p.s, entry); err != nil {
+			t.Fatalf("FinalizeUndo: %v", err)
+		}
+		if got := journal(t); len(got) != 0 {
+			t.Fatalf("journal = %d entries after successful no-op, want 0", len(got))
+		}
+	})
+
+	t.Run("success that created a branch records it", func(t *testing.T) {
+		p := setup(t)
+		entry, _, _ := PeekUndo()
+		mustCheckout(t, p.f, "a")
+		if err := p.f.CreateBranch("fresh"); err != nil {
+			t.Fatal(err)
+		}
+		p.s.Track("fresh", "a", p.s.Branches["a"].ParentSHA)
+		if err := FinalizeUndo(p.f, p.s, entry); err != nil {
+			t.Fatalf("FinalizeUndo: %v", err)
+		}
+		got := journal(t)
+		if len(got) != 1 {
+			t.Fatalf("journal = %d entries, want 1", len(got))
+		}
+		if len(got[0].CreatedBranches) != 1 || got[0].CreatedBranches[0] != "fresh" {
+			t.Fatalf("createdBranches = %v, want [fresh]", got[0].CreatedBranches)
+		}
+	})
+
+	t.Run("conflict with a rebase in progress keeps the entry", func(t *testing.T) {
+		p := setup(t)
+		p.f.rebaseActive = true
+		if err := CleanupUndoOnError(p.f, p.s, ErrConflict); err != nil {
+			t.Fatalf("CleanupUndoOnError: %v", err)
+		}
+		got := journal(t)
+		if len(got) != 1 || got[0].Label != "op" {
+			t.Fatalf("journal = %+v after in-progress conflict, want the kept entry", got)
+		}
+	})
 }
 
 // writeUndo goes through the atomic temp+rename writer; it must not leave any

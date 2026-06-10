@@ -1220,7 +1220,7 @@ func TestFailedConflictNoopDoesNotReplacePreviousUndo(t *testing.T) {
 	if err := s.RecordUndo(gitShell, "continue"); err != nil {
 		t.Fatalf("record undo: %v", err)
 	}
-	if err := cleanupNoopUndoOnError(s, stack.ErrConflict); err != nil {
+	if err := stack.CleanupUndoOnError(gitShell, s, stack.ErrConflict); err != nil {
 		t.Fatalf("cleanup failed conflict: %v", err)
 	}
 

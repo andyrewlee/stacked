@@ -2,9 +2,11 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // maxUndoEntries bounds the size of the undo journal.
@@ -165,6 +167,146 @@ func SetLastUndoCreatedBranches(names []string) error {
 	}
 	entries[len(entries)-1].CreatedBranches = names
 	return writeUndo(entries)
+}
+
+// FinalizeUndo completes the undo protocol after a successful mutation: the
+// tentative entry is annotated with the branches the operation created,
+// dropped when the operation turned out to be a no-op (state, refs, and
+// branch set all unchanged), and otherwise kept, trimming the journal.
+func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
+	if entry == nil {
+		return TrimUndo()
+	}
+	created := createdBranchesSince(g, entry)
+	if len(created) > 0 {
+		if err := SetLastUndoCreatedBranches(created); err != nil {
+			return err
+		}
+	}
+	unchanged, err := sameState(s, entry.State)
+	if err != nil {
+		return err
+	}
+	if !unchanged {
+		return TrimUndo()
+	}
+	if refsUnchanged(g, entry) {
+		return DropUndo()
+	}
+	return TrimUndo()
+}
+
+// CleanupUndoOnError completes the undo protocol after a failed mutation: the
+// tentative entry is dropped when the failure changed nothing (so a failed
+// no-op never evicts older history), but kept — annotated with any created
+// branches — when the failure left real changes behind, including a conflict
+// that left a rebase in progress.
+func CleanupUndoOnError(g Git, s *State, opErr error) error {
+	entry, _, _ := PeekUndo()
+	dropped, err := dropNoopUndo(g, s, entry, opErr)
+	if err != nil {
+		return err
+	}
+	if !dropped {
+		created := createdBranchesSince(g, entry)
+		if len(created) > 0 {
+			if err := SetLastUndoCreatedBranches(created); err != nil {
+				return err
+			}
+		}
+	}
+	return TrimUndo()
+}
+
+// dropNoopUndo drops the tentative entry when the operation changed nothing:
+// same state, every recorded ref on its recorded tip, and no branch created.
+// A conflict with a rebase still in progress always keeps the entry — the
+// mutation is half-applied, exactly what undo protects.
+func dropNoopUndo(g Git, s *State, entry *UndoEntry, opErr error) (bool, error) {
+	if entry == nil {
+		return false, nil
+	}
+	if errors.Is(opErr, ErrConflict) {
+		if inProgress, err := g.RebaseInProgress(); err != nil {
+			return false, err
+		} else if inProgress {
+			return false, nil
+		}
+	}
+	unchanged, err := sameState(s, entry.State)
+	if err != nil || !unchanged {
+		return false, err
+	}
+	if !refsUnchanged(g, entry) {
+		return false, nil
+	}
+	if len(createdBranchesSince(g, entry)) > 0 {
+		return false, nil
+	}
+	return true, DropUndo()
+}
+
+// createdBranchesSince returns the local branches that exist now but were not
+// in the entry's captured branch list, sorted.
+func createdBranchesSince(g Git, entry *UndoEntry) []string {
+	if entry == nil || entry.LocalBranches == nil {
+		return nil
+	}
+	existed := map[string]bool{}
+	for _, name := range entry.LocalBranches {
+		existed[name] = true
+	}
+	branches, err := g.LocalBranches()
+	if err != nil {
+		return nil
+	}
+	var created []string
+	for _, name := range branches {
+		if !existed[name] {
+			created = append(created, name)
+		}
+	}
+	sort.Strings(created)
+	return created
+}
+
+// refsUnchanged reports whether every ref the entry recorded still resolves to
+// its recorded tip.
+func refsUnchanged(g Git, entry *UndoEntry) bool {
+	for name, want := range entry.Refs {
+		got, err := g.RevParse("refs/heads/" + name)
+		if err != nil || got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// sameState reports whether s is semantically equal to the snapshot raw.
+func sameState(s *State, raw []byte) (bool, error) {
+	var prev State
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return false, err
+	}
+	if s.Trunk != prev.Trunk {
+		return false, nil
+	}
+	if (s.PendingReparent == nil) != (prev.PendingReparent == nil) {
+		return false, nil
+	}
+	if s.PendingReparent != nil && *s.PendingReparent != *prev.PendingReparent {
+		return false, nil
+	}
+	if len(s.Branches) != len(prev.Branches) {
+		return false, nil
+	}
+	for name, got := range s.Branches {
+		want, ok := prev.Branches[name]
+		if !ok || got == nil || want == nil || *got != *want {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // PopUndo removes and returns the most recent undo entry. The boolean is false
