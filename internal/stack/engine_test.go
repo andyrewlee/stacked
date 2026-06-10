@@ -2,6 +2,7 @@ package stack
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,25 @@ func mkBranch(t *testing.T, env Env, s *State, f *fakeGit, parent, name string) 
 	}
 	if _, err := Create(env, s, name, "c-"+name, true); err != nil {
 		t.Fatalf("create %s: %v", name, err)
+	}
+}
+
+// TestAlsoFailedKeepsBothErrorsMatchable asserts the rollback double-error
+// helper preserves errors.Is matching for the primary AND the secondary error.
+func TestAlsoFailedKeepsBothErrorsMatchable(t *testing.T) {
+	primary := errors.New("op failed")
+	secondary := errors.New("rollback failed")
+	err := AlsoFailed(fmt.Errorf("wrapping: %w", primary), "roll back", secondary)
+
+	if !errors.Is(err, primary) {
+		t.Fatalf("errors.Is(err, primary) = false for %v", err)
+	}
+	if !errors.Is(err, secondary) {
+		t.Fatalf("errors.Is(err, secondary) = false for %v", err)
+	}
+	want := "wrapping: op failed; additionally failed to roll back: rollback failed"
+	if err.Error() != want {
+		t.Fatalf("message = %q, want %q", err.Error(), want)
 	}
 }
 
