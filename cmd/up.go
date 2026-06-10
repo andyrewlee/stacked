@@ -3,7 +3,6 @@ package cmd
 import (
 	"flag"
 	"fmt"
-	"strconv"
 
 	"stacked/internal/git"
 )
@@ -26,22 +25,9 @@ func runUp(args []string) error {
 	var asJSON bool
 	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st up [n] [--json]") }
-	if err := parseArgs(fs, args); err != nil {
+	n, err := parseCount(fs, args, "up")
+	if err != nil {
 		return err
-	}
-
-	n := 1
-	if rest := fs.Args(); len(rest) > 1 {
-		return fmt.Errorf("up takes at most one level count, got %q", rest[1])
-	} else if len(rest) > 0 {
-		parsed, err := strconv.Atoi(rest[0])
-		if err != nil {
-			return fmt.Errorf("invalid level count %q: %w", rest[0], err)
-		}
-		if parsed < 1 {
-			return fmt.Errorf("level count must be a positive integer, got %d", parsed)
-		}
-		n = parsed
 	}
 
 	state, err := loadState()

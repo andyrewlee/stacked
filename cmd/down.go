@@ -3,7 +3,6 @@ package cmd
 import (
 	"flag"
 	"fmt"
-	"strconv"
 
 	"stacked/internal/git"
 )
@@ -29,22 +28,9 @@ func runDown(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: st down [n] [--json]")
 	}
-	if err := parseArgs(fs, args); err != nil {
+	n, err := parseCount(fs, args, "down")
+	if err != nil {
 		return err
-	}
-
-	n := 1
-	if rest := fs.Args(); len(rest) > 1 {
-		return fmt.Errorf("down takes at most one step count, got %q", rest[1])
-	} else if len(rest) > 0 {
-		v, err := strconv.Atoi(rest[0])
-		if err != nil {
-			return fmt.Errorf("invalid step count %q: %w", rest[0], err)
-		}
-		if v < 1 {
-			return fmt.Errorf("step count must be at least 1, got %d", v)
-		}
-		n = v
 	}
 
 	s, err := loadState()
@@ -58,7 +44,7 @@ func runDown(args []string) error {
 	}
 
 	if cur == s.Trunk {
-		return navEmit(asJSON, s.Trunk, fmt.Sprintf("already at trunk %q", s.Trunk))
+		return navEmit(asJSON, s.Trunk, fmt.Sprintf("already at trunk: %s", s.Trunk))
 	}
 
 	for i := 0; i < n; i++ {
@@ -76,5 +62,5 @@ func runDown(args []string) error {
 		return fmt.Errorf("checking out %q: %w", cur, err)
 	}
 
-	return navEmit(asJSON, cur, fmt.Sprintf("switched to %q", cur))
+	return navEmit(asJSON, cur, fmt.Sprintf("switched to %s", cur))
 }

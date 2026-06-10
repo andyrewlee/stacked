@@ -83,7 +83,7 @@ func Execute() (rc int) {
 	switch name {
 	case "help", "-h", "--help":
 		rest := args[1:]
-		topic, asJSON, err := parseHelpArgs(rest)
+		topic, asJSON, err := parseBuiltinArgs("help", rest, true)
 		if err != nil {
 			renderError(err, jsonRequested(rest))
 			return exitCode(err)
@@ -94,7 +94,7 @@ func Execute() (rc int) {
 		printHelp(asJSON)
 		return 0
 	case "version", "-v", "--version":
-		asJSON, err := parseVersionArgs(args[1:])
+		_, asJSON, err := parseBuiltinArgs("version", args[1:], false)
 		if err != nil {
 			renderError(err, jsonRequested(args[1:]))
 			return exitCode(err)
@@ -131,7 +131,11 @@ type commandInfo struct {
 	Aliases []string `json:"aliases,omitempty"`
 }
 
-func parseHelpArgs(args []string) (topic string, asJSON bool, err error) {
+// parseBuiltinArgs is the one argument scanner for the built-in pseudo-commands
+// (help, version): it accepts the --json flag forms, rejects other flags, and —
+// only with allowTopic — accepts a single positional topic. A bare "--"
+// terminates flag parsing.
+func parseBuiltinArgs(command string, args []string, allowTopic bool) (topic string, asJSON bool, err error) {
 	afterTerminator := false
 	for _, a := range args {
 		if !afterTerminator && a == "--" {
@@ -147,40 +151,18 @@ func parseHelpArgs(args []string) (topic string, asJSON bool, err error) {
 				continue
 			}
 			if strings.HasPrefix(a, "-") {
-				return "", false, fmt.Errorf("unknown help flag %q", a)
+				return "", false, fmt.Errorf("unknown %s flag %q", command, a)
 			}
 		}
+		if !allowTopic {
+			return "", false, fmt.Errorf("%s takes no positional arguments, got %q", command, a)
+		}
 		if topic != "" {
-			return "", false, fmt.Errorf("help takes at most one command, got %q", a)
+			return "", false, fmt.Errorf("%s takes at most one command, got %q", command, a)
 		}
 		topic = a
 	}
 	return topic, asJSON, nil
-}
-
-func parseVersionArgs(args []string) (bool, error) {
-	var asJSON bool
-	afterTerminator := false
-	for _, a := range args {
-		if !afterTerminator && a == "--" {
-			afterTerminator = true
-			continue
-		}
-		if !afterTerminator {
-			if v, ok, err := parseJSONFlag(a); ok {
-				if err != nil {
-					return false, err
-				}
-				asJSON = v
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				return false, fmt.Errorf("unknown version flag %q", a)
-			}
-		}
-		return false, fmt.Errorf("version takes no positional arguments, got %q", a)
-	}
-	return asJSON, nil
 }
 
 func parseJSONFlag(arg string) (enabled, ok bool, err error) {
@@ -304,20 +286,17 @@ func renderInternalError(r any, asJSON bool) {
 }
 
 // jsonRequested reports whether --json (or -json) appears before a "--"
-// terminator in args, so the dispatcher can format errors accordingly.
+// terminator in args, so the dispatcher can format errors accordingly. It is
+// defined in terms of parseJSONFlag so the two recognizers cannot drift; a
+// malformed --json value still selects JSON output, since the user clearly
+// asked for it.
 func jsonRequested(args []string) bool {
 	for _, a := range args {
 		if a == "--" {
 			return false
 		}
-		if a == "--json" || a == "-json" {
-			return true
-		}
-		for _, prefix := range []string{"--json=", "-json="} {
-			if strings.HasPrefix(a, prefix) {
-				v, err := strconv.ParseBool(strings.TrimPrefix(a, prefix))
-				return err != nil || v
-			}
+		if v, ok, err := parseJSONFlag(a); ok {
+			return err != nil || v
 		}
 	}
 	return false
