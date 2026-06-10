@@ -70,8 +70,14 @@ func (f *fakeGit) newID() string {
 	return "c" + strconv.Itoa(f.seq)
 }
 
-// resolve turns a ref (branch name or commit id) into a commit id.
+// resolve turns a ref (branch name, commit id, or HEAD) into a commit id.
 func (f *fakeGit) resolve(ref string) string {
+	if ref == "HEAD" {
+		if f.head == "" {
+			return f.detachedAt
+		}
+		return f.branches[f.head]
+	}
 	ref = strings.TrimPrefix(ref, "refs/heads/")
 	if tip, ok := f.branches[ref]; ok {
 		return tip
