@@ -15,7 +15,9 @@ type QuietShell struct {
 func (Shell) RevParse(ref string) (string, error)          { return RevParse(ref) }
 func (Shell) RebaseOnto(newBase, oldBase, br string) error { return RebaseOnto(newBase, oldBase, br) }
 func (Shell) BranchExists(name string) bool                { return BranchExists(name) }
+func (Shell) LocalBranches() ([]string, error)             { return LocalBranches() }
 func (Shell) Checkout(name string) error                   { return Checkout(name) }
+func (Shell) CheckoutDetach(ref string) error              { return CheckoutDetach(ref) }
 func (Shell) CreateBranch(name string) error               { return CreateBranch(name) }
 func (Shell) DeleteBranch(name string, force bool) error   { return DeleteBranch(name, force) }
 func (Shell) ForceBranch(name, ref string) error           { return ForceBranch(name, ref) }

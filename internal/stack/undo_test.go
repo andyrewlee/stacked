@@ -1,11 +1,15 @@
 package stack
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"stacked/internal/git"
 )
 
 func mustStackGit(t *testing.T, args ...string) string {
@@ -47,7 +51,7 @@ func TestRecordUndoUsesLocalBranchRefs(t *testing.T) {
 
 	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
 	s.Track("feature", "main", mainSHA)
-	if err := s.RecordUndo("snapshot"); err != nil {
+	if err := s.RecordUndo(git.Shell{}, "snapshot"); err != nil {
 		t.Fatalf("RecordUndo: %v", err)
 	}
 
@@ -60,6 +64,54 @@ func TestRecordUndoUsesLocalBranchRefs(t *testing.T) {
 	}
 	if got := entry.Refs["feature"]; got != branchSHA {
 		t.Fatalf("undo ref for feature = %q, want branch tip %q", got, branchSHA)
+	}
+}
+
+// TestSnapshotUndoCapturesViaPort drives the snapshot capture against the
+// in-memory fake: the refs map, local-branch list, and current branch must all
+// come from the port, never from the concrete git package — no real git, no
+// disk.
+func TestSnapshotUndoCapturesViaPort(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	// A tracked branch whose git ref is gone must be omitted, not fatal.
+	s.Track("ghost", "main", "nope")
+
+	entry, err := s.SnapshotUndo(f, "test-op")
+	if err != nil {
+		t.Fatalf("SnapshotUndo: %v", err)
+	}
+	if entry.Label != "test-op" {
+		t.Fatalf("label = %q, want test-op", entry.Label)
+	}
+	wantRefs := map[string]string{}
+	for _, name := range []string{"main", "a", "b"} {
+		sha, err := f.RevParse(name)
+		if err != nil {
+			t.Fatalf("RevParse(%s): %v", name, err)
+		}
+		wantRefs[name] = sha
+	}
+	if !reflect.DeepEqual(entry.Refs, wantRefs) {
+		t.Fatalf("refs = %v, want %v", entry.Refs, wantRefs)
+	}
+	wantBranches, _ := f.LocalBranches()
+	if !reflect.DeepEqual(entry.LocalBranches, wantBranches) {
+		t.Fatalf("localBranches = %v, want %v", entry.LocalBranches, wantBranches)
+	}
+	if entry.CurrentBranch != "a" {
+		t.Fatalf("currentBranch = %q, want a", entry.CurrentBranch)
+	}
+	var snap State
+	if err := json.Unmarshal(entry.State, &snap); err != nil {
+		t.Fatalf("snapshot state does not parse: %v", err)
+	}
+	if snap.Trunk != "main" || len(snap.Branches) != len(s.Branches) {
+		t.Fatalf("snapshot state = %+v, want a copy of the live state", snap)
 	}
 }
 
@@ -93,7 +145,7 @@ func TestLoadUndoRecoversFromCorruptJournal(t *testing.T) {
 	}
 
 	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
-	if err := s.RecordUndo("after-corruption"); err != nil {
+	if err := s.RecordUndo(git.Shell{}, "after-corruption"); err != nil {
 		t.Fatalf("RecordUndo after corruption: %v", err)
 	}
 	got, err := loadUndo()

@@ -8,7 +8,9 @@ type Git interface {
 	RevParse(ref string) (string, error)
 	RebaseOnto(newBase, oldBase, branch string) error
 	BranchExists(name string) bool
+	LocalBranches() ([]string, error)
 	Checkout(name string) error
+	CheckoutDetach(ref string) error
 	CreateBranch(name string) error
 	DeleteBranch(name string, force bool) error
 	ForceBranch(name, ref string) error
