@@ -676,7 +676,7 @@ func TestNavigationEdges(t *testing.T) {
 	r.stOK("checkout", "feat-b1")
 	res = r.st("up", "abc")
 	wantExit(t, res, 1)
-	wantStderrContains(t, res, "invalid level count")
+	wantStderrContains(t, res, "invalid step count")
 
 	res = r.st("down", "0")
 	wantExit(t, res, 1)

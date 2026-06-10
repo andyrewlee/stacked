@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"stacked/internal/git"
@@ -30,10 +31,11 @@ func loadState() (*stack.State, error) {
 // gitShell is the production git port used by the stack engine.
 var gitShell stack.Git = git.Shell{}
 
-// stackEnv builds the engine environment for s, persisting via s.Save.
-func stackEnv(s *stack.State, asJSON ...bool) stack.Env {
+// stackEnv builds the engine environment for s, persisting via s.Save. In JSON
+// mode the quiet git port is used so rebase output cannot corrupt the payload.
+func stackEnv(s *stack.State, asJSON bool) stack.Env {
 	g := gitShell
-	if len(asJSON) > 0 && asJSON[0] {
+	if asJSON {
 		if _, ok := g.(git.Shell); ok {
 			g = git.QuietShell{}
 		}
@@ -46,6 +48,30 @@ func rejectArgs(command string, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("%s takes no positional arguments, got %q", command, args[0])
+}
+
+// parseCount parses a navigation command's arguments with fs and returns its
+// optional positional step count (default 1). It is the single implementation
+// of the count contract: at most one positional, an integer, at least 1.
+func parseCount(fs *flag.FlagSet, args []string, command string) (int, error) {
+	if err := parseArgs(fs, args); err != nil {
+		return 0, err
+	}
+	rest := fs.Args()
+	if len(rest) > 1 {
+		return 0, fmt.Errorf("%s takes at most one step count, got %q", command, rest[1])
+	}
+	if len(rest) == 0 {
+		return 1, nil
+	}
+	n, err := strconv.Atoi(rest[0])
+	if err != nil {
+		return 0, fmt.Errorf("invalid step count %q: %w", rest[0], err)
+	}
+	if n < 1 {
+		return 0, fmt.Errorf("step count must be at least 1, got %d", n)
+	}
+	return n, nil
 }
 
 func usageUnlessJSON(fs *flag.FlagSet, args []string) {

@@ -36,7 +36,7 @@ func runRestack(args []string) error {
 		if err != nil {
 			return err
 		}
-		res, err := stack.RestackPlan(stackEnv(s), s)
+		res, err := stack.RestackPlan(stackEnv(s, asJSON), s)
 		if err != nil {
 			return err
 		}

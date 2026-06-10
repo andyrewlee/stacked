@@ -53,7 +53,7 @@ func runCheckout(args []string) error {
 			Branch   string `json:"branch"`
 			Switched bool   `json:"switched"`
 		}{name, true}
-		return emit(asJSON, payload, func() { out("Switched to %s\n", name) })
+		return emit(asJSON, payload, func() { out("switched to %s\n", name) })
 	}
 
 	return listBranches(s, asJSON)
