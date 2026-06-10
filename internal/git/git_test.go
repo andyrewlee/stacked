@@ -468,6 +468,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 
 	mustGit(t, "reset", "--hard", base)
 	mustGit(t, "update-ref", "refs/heads/origin/main", decoy)
+	mustGit(t, "branch", remoteTip, base)
 	if _, err := (RemoteShell{}).FastForward("main", "origin"); err != nil {
 		t.Fatalf("FastForward: %v", err)
 	}

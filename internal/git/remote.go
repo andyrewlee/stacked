@@ -21,11 +21,7 @@ func (RemoteShell) FastForward(trunk, remote string) (string, error) {
 	}
 	localTrunk := "refs/heads/" + trunk
 	upstream := "refs/remotes/" + remote + "/" + trunk
-	upstreamSHA, err := RevParse(upstream)
-	if err != nil {
-		return "", fmt.Errorf("resolve upstream %q: %w", upstream, err)
-	}
-	upToDate, err := IsAncestor(upstreamSHA, localTrunk)
+	upToDate, err := IsAncestor(upstream, localTrunk)
 	if err != nil {
 		return "", fmt.Errorf("compare %q with %q: %w", trunk, upstream, err)
 	}
