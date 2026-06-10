@@ -150,9 +150,8 @@ func TestUndoDeleteResurrectsBranchFromSnapshotRef(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 }
 
-// A dirty working tree that blocks the pre-delete checkout must detach HEAD
-// (so the created branch can still be deleted) instead of failing — decided by
-// the IsClean plumbing, never by sniffing the checkout error message.
+// A checkout blocked by local changes must detach HEAD so the created branch
+// can still be deleted without touching the working tree.
 func TestUndoCreateWithDirtyTreeDetachesHEAD(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -178,6 +177,31 @@ func TestUndoCreateWithDirtyTreeDetachesHEAD(t *testing.T) {
 	}
 }
 
+// An unrelated checkout failure must propagate rather than being mistaken for
+// a local-change conflict, even when the tree is dirty.
+func TestUndoPropagatesCheckoutErrorOnDirtyTree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	boom := errors.New("branch is already checked out in another worktree")
+	f.clean = false
+	f.checkoutErr["a"] = boom
+
+	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+		t.Fatalf("undo error = %v, want %v", err, boom)
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("failed undo deleted the created branch anyway")
+	}
+}
+
 // A clean tree whose checkout still fails must propagate the error rather than
 // detaching.
 func TestUndoPropagatesCheckoutErrorOnCleanTree(t *testing.T) {
@@ -199,5 +223,22 @@ func TestUndoPropagatesCheckoutErrorOnCleanTree(t *testing.T) {
 	}
 	if !f.BranchExists("b") {
 		t.Fatal("failed undo deleted the created branch anyway")
+	}
+}
+
+func TestUndoPropagatesFinalCheckoutErrorOnDirtyTree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	boom := errors.New("branch is already checked out in another worktree")
+	f.clean = false
+	f.checkoutErr["a"] = boom
+
+	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+		t.Fatalf("undo error = %v, want %v", err, boom)
 	}
 }

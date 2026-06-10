@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Undo reverts the mutation recorded in entry: branches the undone command
@@ -71,7 +72,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 					}
 				}
 				if err := g.Checkout(target); err != nil {
-					if dirty := treeIsDirty(g); !dirty {
+					if !checkoutBlockedByLocalChanges(err) {
 						return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
 					}
 					// Local changes block the checkout: park HEAD on a detached
@@ -121,7 +122,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		if err := g.Checkout(checkoutAfterRestore); err != nil {
 			// Local changes blocking the final checkout are tolerated: the refs
 			// are already restored and HEAD simply stays where it is.
-			if !treeIsDirty(g) {
+			if !checkoutBlockedByLocalChanges(err) {
 				return nil, fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)
 			}
 		}
@@ -134,11 +135,9 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	}, nil
 }
 
-// treeIsDirty reports whether the working tree has uncommitted changes; a
-// failed cleanliness check counts as clean so the original error propagates.
-func treeIsDirty(g Git) bool {
-	clean, err := g.IsClean()
-	return err == nil && !clean
+func checkoutBlockedByLocalChanges(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
 }
 
 // restoredRenameTarget picks the branch to check out after undoing a rename:
