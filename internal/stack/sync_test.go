@@ -85,7 +85,7 @@ func TestRestackBranchReturnsNonConflictRebaseErrors(t *testing.T) {
 	errBoom := errors.New("pre-rebase hook rejected")
 	f.rebaseErr["feat-b"] = errBoom
 
-	err := s.RestackBranch(env, "feat-b")
+	_, err := s.RestackBranch(env, "feat-b")
 	if !errors.Is(err, errBoom) {
 		t.Fatalf("RestackBranch error = %v, want %v", err, errBoom)
 	}
