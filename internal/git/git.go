@@ -12,11 +12,21 @@ import (
 	"strings"
 )
 
+// gitEnv returns the environment for git invocations whose output is parsed:
+// the current environment with the locale pinned to C, so git's messages and
+// formatting never vary with the user's LANG/LC_* settings. Interactive
+// invocations (RunInteractive, RebaseContinue) keep the inherited environment —
+// their output goes to the user and is never parsed.
+func gitEnv() []string {
+	return append(os.Environ(), "LC_ALL=C")
+}
+
 // run executes "git args..." and returns the combined stdout/stderr output. On
 // failure it returns an error whose message includes the git stderr so callers
 // get an actionable diagnostic.
 func run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
+	cmd.Env = gitEnv()
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -37,7 +47,9 @@ func run(args ...string) (string, error) {
 // ok reports whether "git args..." exits successfully. It surfaces no error for
 // a non-zero exit, which is used by predicate helpers like IsAncestor.
 func ok(args ...string) bool {
-	return exec.Command("git", args...).Run() == nil
+	cmd := exec.Command("git", args...)
+	cmd.Env = gitEnv()
+	return cmd.Run() == nil
 }
 
 // Run runs "git args..." and returns the trimmed combined stdout. The returned
@@ -174,6 +186,7 @@ func IsClean() (bool, error) {
 // HasStagedChanges reports whether there are staged changes in the index.
 func HasStagedChanges() (bool, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--quiet")
+	cmd.Env = gitEnv()
 	err := cmd.Run()
 	if err == nil {
 		return false, nil
@@ -191,6 +204,7 @@ func HasStagedChanges() (bool, error) {
 // changes or untracked files.
 func HasUnstagedChanges() (bool, error) {
 	cmd := exec.Command("git", "diff", "--quiet")
+	cmd.Env = gitEnv()
 	err := cmd.Run()
 	if err == nil {
 		out, err := Run("ls-files", "--others", "--exclude-standard")
@@ -324,7 +338,7 @@ func RebaseContinue() error {
 func RebaseContinueQuiet() error {
 	cmd := exec.Command("git", "rebase", "--continue")
 	cmd.Stdin = os.Stdin
-	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
+	cmd.Env = append(gitEnv(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -373,6 +387,7 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	ancestorRef := localBranchRef(ancestor)
 	descendantRef := localBranchRef(descendant)
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestorRef, descendantRef)
+	cmd.Env = gitEnv()
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return true, nil
