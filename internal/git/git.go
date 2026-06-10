@@ -112,6 +112,30 @@ func LocalBranches() ([]string, error) {
 	return branches, nil
 }
 
+// Tips returns the tip SHA of every local branch, keyed by branch name, in a
+// single git invocation — so callers walking a whole forest (log, validate) do
+// one spawn instead of two per branch. Full refnames are requested and the
+// refs/heads/ prefix stripped, since short refnames can be ambiguous when a
+// tag shares a branch's name.
+func Tips() (map[string]string, error) {
+	out, err := Run("for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	tips := map[string]string{}
+	if out == "" {
+		return tips, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		ref, sha, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		tips[strings.TrimPrefix(ref, "refs/heads/")] = sha
+	}
+	return tips, nil
+}
+
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
 	_, err := Run("checkout", name)

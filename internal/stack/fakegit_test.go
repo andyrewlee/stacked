@@ -107,6 +107,14 @@ func (f *fakeGit) BranchExists(name string) bool {
 	return ok
 }
 
+func (f *fakeGit) Tips() (map[string]string, error) {
+	tips := make(map[string]string, len(f.branches))
+	for name, tip := range f.branches {
+		tips[name] = tip
+	}
+	return tips, nil
+}
+
 func (f *fakeGit) LocalBranches() ([]string, error) {
 	names := make([]string, 0, len(f.branches))
 	for name := range f.branches {

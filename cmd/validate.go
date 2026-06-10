@@ -46,7 +46,14 @@ func runValidate(args []string) error {
 
 	var problems, warnings []string
 
-	if !git.BranchExists(s.Trunk) {
+	// One for-each-ref read answers every branch-exists and drift question.
+	tips, err := git.Tips()
+	if err != nil {
+		return err
+	}
+	drift := s.DriftAgainst(tips)
+
+	if _, ok := tips[s.Trunk]; !ok {
 		problems = append(problems, fmt.Sprintf("trunk branch %q does not exist", s.Trunk))
 	}
 
@@ -59,32 +66,31 @@ func runValidate(args []string) error {
 	for _, name := range names {
 		b, _ := s.Get(name)
 
-		branchOK := git.BranchExists(name)
+		_, branchOK := tips[name]
 		if !branchOK {
 			problems = append(problems, fmt.Sprintf("%s is tracked but its git branch is missing (run: st untrack %s)", name, name))
 		}
 
 		parentOK := true
+		_, parentExists := tips[b.Parent]
 		switch {
 		case b.Parent == s.Trunk:
 			// fine
 		case !s.IsTracked(b.Parent):
 			parentOK = false
 			problems = append(problems, fmt.Sprintf("%s has parent %q which is not the trunk or a tracked branch", name, b.Parent))
-		case !git.BranchExists(b.Parent):
+		case !parentExists:
 			parentOK = false
 			problems = append(problems, fmt.Sprintf("%s has parent %q whose git branch is missing", name, b.Parent))
 		}
 
 		if path := cyclePath(s, name); path != "" {
 			problems = append(problems, fmt.Sprintf("%s is part of a parent cycle: %s", name, path))
-			continue // NeedsRestack would be unreliable on a cycle
+			continue // drift would be unreliable on a cycle
 		}
 
-		if branchOK && parentOK {
-			if needs, err := s.NeedsRestack(gitShell, name); err == nil && needs {
-				warnings = append(warnings, fmt.Sprintf("%s needs restack (run: st restack)", name))
-			}
+		if branchOK && parentOK && drift[name] {
+			warnings = append(warnings, fmt.Sprintf("%s needs restack (run: st restack)", name))
 		}
 	}
 

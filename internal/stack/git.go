@@ -9,6 +9,7 @@ type Git interface {
 	RebaseOnto(newBase, oldBase, branch string) error
 	BranchExists(name string) bool
 	LocalBranches() ([]string, error)
+	Tips() (map[string]string, error)
 	Checkout(name string) error
 	CheckoutDetach(ref string) error
 	CreateBranch(name string) error
