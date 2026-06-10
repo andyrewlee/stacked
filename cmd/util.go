@@ -123,7 +123,7 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 	undoEntry, _, _ := stack.PeekUndo()
 	if err := op(env, s); err != nil {
 		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
-			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
+			return stack.AlsoFailed(err, "clean up undo entry", cleanupErr)
 		}
 		return err
 	}

@@ -29,6 +29,13 @@ var (
 	ErrConflict = errors.New("rebase conflict — resolve the conflicts, stage them with git add, then run: st continue")
 )
 
+// AlsoFailed joins an operation error with the error of a follow-up
+// recovery/rollback step that also failed, keeping both matchable with
+// errors.Is/errors.As: "<primary>; additionally failed to <what>: <secondary>".
+func AlsoFailed(primary error, what string, secondary error) error {
+	return fmt.Errorf("%w; additionally failed to %s: %w", primary, what, secondary)
+}
+
 // requireClean returns ErrDirty when the working tree has uncommitted changes.
 func requireClean(g Git) error {
 	clean, err := g.IsClean()
@@ -66,7 +73,7 @@ func restoreHEADAfterNonConflict(env Env, target, fallback string, err error) er
 		return err
 	}
 	if restoreErr := restoreHEAD(env, target, fallback); restoreErr != nil {
-		return fmt.Errorf("%w; additionally failed to restore %q: %v", err, target, restoreErr)
+		return AlsoFailed(err, fmt.Sprintf("restore %q", target), restoreErr)
 	}
 	return err
 }
@@ -131,13 +138,14 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	}
 	if message != "" {
 		if err := g.Commit(message, all); err != nil {
+			err = fmt.Errorf("committing on %q: %w", name, err)
 			if checkoutErr := g.Checkout(cur); checkoutErr != nil {
-				return nil, fmt.Errorf("committing on %q: %w; additionally failed to restore %q: %v", name, err, cur, checkoutErr)
+				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", cur), checkoutErr)
 			}
 			if deleteErr := g.DeleteBranch(name, true); deleteErr != nil {
-				return nil, fmt.Errorf("committing on %q: %w; additionally failed to delete new branch %q: %v", name, err, name, deleteErr)
+				return nil, AlsoFailed(err, fmt.Sprintf("delete new branch %q", name), deleteErr)
 			}
-			return nil, fmt.Errorf("committing on %q: %w", name, err)
+			return nil, err
 		}
 	}
 	s.Track(name, cur, parentSHA)
@@ -299,14 +307,15 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		return nil, fmt.Errorf("advancing %q to %q: %w", parent, cur, err)
 	}
 	if err := g.Checkout(parent); err != nil {
+		err = fmt.Errorf("checking out %q: %w", parent, err)
 		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
-			return nil, fmt.Errorf("checking out %q: %w; additionally failed to roll back %q: %v", parent, err, parent, rollbackErr)
+			return nil, AlsoFailed(err, fmt.Sprintf("roll back %q", parent), rollbackErr)
 		}
-		return nil, fmt.Errorf("checking out %q: %w", parent, err)
+		return nil, err
 	}
 	if err := g.DeleteBranch(cur, true); err != nil {
 		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
-			return nil, fmt.Errorf("deleting %q: %w; additionally failed to roll back %q: %v", cur, err, parent, rollbackErr)
+			return nil, AlsoFailed(fmt.Errorf("deleting %q: %w", cur, err), fmt.Sprintf("roll back %q", parent), rollbackErr)
 		}
 		if restoreErr := g.Checkout(cur); restoreErr != nil {
 			return nil, fmt.Errorf("deleting %q: %w; rolled back %q but failed to restore %q: %v", cur, err, parent, cur, restoreErr)
@@ -379,10 +388,11 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 		return nil, fmt.Errorf("resetting %q to base: %w", cur, err)
 	}
 	if err := g.Commit(message, false); err != nil {
+		err = fmt.Errorf("creating squashed commit on %q: %w", cur, err)
 		if restoreErr := g.ResetSoft(origTip); restoreErr != nil {
-			return nil, fmt.Errorf("creating squashed commit on %q: %w; additionally failed to restore %q to %s: %v", cur, err, cur, origTip, restoreErr)
+			return nil, AlsoFailed(err, fmt.Sprintf("restore %q to %s", cur, origTip), restoreErr)
 		}
-		return nil, fmt.Errorf("creating squashed commit on %q: %w", cur, err)
+		return nil, err
 	}
 
 	rebased, err := finishUpstack(env, s, cur)
@@ -434,7 +444,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 			s.PendingReparent = &PendingReparent{Branch: cur, Parent: target, ParentSHA: newParentTip}
 			if saveErr := env.save(); saveErr != nil {
 				s.PendingReparent = nil
-				return nil, fmt.Errorf("moving %q onto %q: %w; additionally failed to record pending reparent: %v", cur, target, ErrConflict, saveErr)
+				return nil, AlsoFailed(fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict), "record pending reparent", saveErr)
 			}
 			return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
 		}
@@ -504,10 +514,11 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		formerChildren = append(formerChildren, child.Name)
 	}
 	if err := g.DeleteBranch(name, true); err != nil {
+		err = fmt.Errorf("deleting branch %q: %w", name, err)
 		if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
-			return nil, fmt.Errorf("deleting branch %q: %w; additionally failed to restore %q: %v", name, err, start, restoreErr)
+			return nil, AlsoFailed(err, fmt.Sprintf("restore %q", start), restoreErr)
 		}
-		return nil, fmt.Errorf("deleting branch %q: %w", name, err)
+		return nil, err
 	}
 	for _, child := range children {
 		child.Parent = parent
@@ -560,7 +571,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		ffResult, err = r.FastForward(s.Trunk, remote)
 		if err != nil {
 			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
-				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
 			}
 			return nil, err
 		}
@@ -573,7 +584,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		}
 		if deleted, err = PruneMerged(env, s); err != nil {
 			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
-				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
 			}
 			return nil, err
 		}
@@ -588,7 +599,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	if err != nil {
 		if !errors.Is(err, ErrConflict) {
 			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
-				return nil, fmt.Errorf("%w; additionally failed to restore %q: %v", err, orig, restoreErr)
+				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
 			}
 		}
 		return nil, err

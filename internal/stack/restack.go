@@ -54,7 +54,7 @@ func (s *State) RestackBranch(env Env, name string) error {
 		}
 		if startErr == nil {
 			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
-				return fmt.Errorf("rebasing %q onto %q: %w; additionally failed to restore %q: %v", name, b.Parent, err, start, restoreErr)
+				return AlsoFailed(fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err), fmt.Sprintf("restore %q", start), restoreErr)
 			}
 		}
 		if progressErr != nil {
