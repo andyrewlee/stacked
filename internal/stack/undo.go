@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"stacked/internal/git"
 )
 
 // maxUndoEntries bounds the size of the undo journal.
@@ -69,37 +67,49 @@ func writeUndo(entries []UndoEntry) error {
 	return atomicWriteFile(path, append(data, '\n'))
 }
 
-// RecordUndo snapshots the current state and the tips of the trunk and all
-// tracked branches under label, so the operation about to run can be reverted
-// with PopUndo. Branches whose tip cannot be resolved are omitted from the
-// snapshot rather than failing the whole record.
-func (s *State) RecordUndo(label string) error {
+// SnapshotUndo captures, through the Git port, everything needed to revert the
+// operation about to run: the encoded state, the tips of the trunk and all
+// tracked branches, the local branch list, and the current branch. It reads
+// only — nothing is written to the journal. Branches whose tip cannot be
+// resolved are omitted from the snapshot rather than failing the capture.
+func (s *State) SnapshotUndo(g Git, label string) (*UndoEntry, error) {
 	stateBytes, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode state for undo: %w", err)
+		return nil, fmt.Errorf("encode state for undo: %w", err)
 	}
 	refs := map[string]string{}
-	if sha, err := git.RevParse("refs/heads/" + s.Trunk); err == nil {
+	if sha, err := g.RevParse("refs/heads/" + s.Trunk); err == nil {
 		refs[s.Trunk] = sha
 	}
 	for name := range s.Branches {
-		if sha, err := git.RevParse("refs/heads/" + name); err == nil {
+		if sha, err := g.RevParse("refs/heads/" + name); err == nil {
 			refs[name] = sha
 		}
 	}
-	localBranches, _ := git.LocalBranches()
-	currentBranch, _ := git.CurrentBranch()
-	entries, err := loadUndo()
-	if err != nil {
-		return err
-	}
-	entries = append(entries, UndoEntry{
+	localBranches, _ := g.LocalBranches()
+	currentBranch, _ := g.CurrentBranch()
+	return &UndoEntry{
 		Label:         label,
 		State:         stateBytes,
 		Refs:          refs,
 		LocalBranches: localBranches,
 		CurrentBranch: currentBranch,
-	})
+	}, nil
+}
+
+// RecordUndo snapshots the current state via SnapshotUndo and appends the
+// entry to the undo journal, so the operation about to run can be reverted
+// with PopUndo.
+func (s *State) RecordUndo(g Git, label string) error {
+	entry, err := s.SnapshotUndo(g, label)
+	if err != nil {
+		return err
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	entries = append(entries, *entry)
 	return writeUndo(entries)
 }
 

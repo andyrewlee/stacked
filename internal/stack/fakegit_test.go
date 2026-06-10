@@ -2,6 +2,7 @@ package stack
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,6 +40,9 @@ type fakeGit struct {
 	deleteErr     map[string]error
 	rebaseErr     map[string]error
 	commitErr     error
+	// detachedAt is the commit a CheckoutDetach left HEAD on ("" when HEAD is
+	// on a branch).
+	detachedAt string
 }
 
 func newFakeGit() *fakeGit {
@@ -97,6 +101,15 @@ func (f *fakeGit) BranchExists(name string) bool {
 	return ok
 }
 
+func (f *fakeGit) LocalBranches() ([]string, error) {
+	names := make([]string, 0, len(f.branches))
+	for name := range f.branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func (f *fakeGit) Checkout(name string) error {
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
@@ -105,6 +118,17 @@ func (f *fakeGit) Checkout(name string) error {
 		return err
 	}
 	f.head = name
+	f.detachedAt = ""
+	return nil
+}
+
+func (f *fakeGit) CheckoutDetach(ref string) error {
+	id := f.resolve(ref)
+	if id == "" {
+		return fmt.Errorf("unknown revision %q", ref)
+	}
+	f.head = ""
+	f.detachedAt = id
 	return nil
 }
 

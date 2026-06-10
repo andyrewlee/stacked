@@ -117,7 +117,7 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 		return err
 	}
 	defer release()
-	if err := s.RecordUndo(label); err != nil {
+	if err := s.RecordUndo(gitShell, label); err != nil {
 		return err
 	}
 	undoEntry, _, _ := stack.PeekUndo()

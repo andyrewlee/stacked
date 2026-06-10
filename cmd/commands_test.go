@@ -1097,7 +1097,7 @@ func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	s := stateT(t)
-	if err := s.RecordUndo("rename"); err != nil {
+	if err := s.RecordUndo(gitShell, "rename"); err != nil {
 		t.Fatalf("record undo: %v", err)
 	}
 	if err := git.RenameBranch("feat-a", "renamed"); err != nil {
@@ -1217,7 +1217,7 @@ func TestFailedConflictNoopDoesNotReplacePreviousUndo(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	s := stateT(t)
-	if err := s.RecordUndo("continue"); err != nil {
+	if err := s.RecordUndo(gitShell, "continue"); err != nil {
 		t.Fatalf("record undo: %v", err)
 	}
 	if err := cleanupNoopUndoOnError(s, stack.ErrConflict); err != nil {
