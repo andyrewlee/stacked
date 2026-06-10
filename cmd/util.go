@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 
 	"stacked/internal/git"
@@ -117,12 +116,13 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 		return err
 	}
 	defer release()
-	if err := s.RecordUndo(gitShell, label); err != nil {
+	env := stackEnv(s, asJSON)
+	if err := s.RecordUndo(env.Git, label); err != nil {
 		return err
 	}
 	undoEntry, _, _ := stack.PeekUndo()
-	if err := op(stackEnv(s, asJSON), s); err != nil {
-		if cleanupErr := cleanupNoopUndoOnError(s, err); cleanupErr != nil {
+	if err := op(env, s); err != nil {
+		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
 			return fmt.Errorf("%w; additionally failed to clean up undo entry: %v", err, cleanupErr)
 		}
 		return err
@@ -130,7 +130,7 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
 	}
-	if err := finalizeUndoOnSuccess(s, undoEntry); err != nil {
+	if err := stack.FinalizeUndo(env.Git, s, undoEntry); err != nil {
 		return fmt.Errorf("finalizing undo entry: %w", err)
 	}
 	return nil
@@ -148,131 +148,6 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 		return err
 	}
 	return renderResult(res, asJSON)
-}
-
-func dropNoopUndo(s *stack.State, entry *stack.UndoEntry, opErr error) (bool, error) {
-	if entry == nil {
-		return false, nil
-	}
-	if errors.Is(opErr, stack.ErrConflict) {
-		if inProgress, err := git.RebaseInProgress(); err != nil {
-			return false, err
-		} else if inProgress {
-			return false, nil
-		}
-	}
-	unchanged, err := sameState(s, entry.State)
-	if err != nil || !unchanged {
-		return false, err
-	}
-	for name, want := range entry.Refs {
-		got, err := git.RevParse("refs/heads/" + name)
-		if err != nil || got != want {
-			return false, nil
-		}
-	}
-	if len(createdBranchesSince(entry)) > 0 {
-		return false, nil
-	}
-	return true, stack.DropUndo()
-}
-
-func finalizeUndoOnSuccess(s *stack.State, entry *stack.UndoEntry) error {
-	if entry == nil {
-		return stack.TrimUndo()
-	}
-	created := createdBranchesSince(entry)
-	if len(created) > 0 {
-		if err := stack.SetLastUndoCreatedBranches(created); err != nil {
-			return err
-		}
-	}
-	unchanged, err := sameState(s, entry.State)
-	if err != nil {
-		return err
-	}
-	if !unchanged {
-		return stack.TrimUndo()
-	}
-	if refsUnchanged(entry) {
-		return stack.DropUndo()
-	}
-	return stack.TrimUndo()
-}
-
-func cleanupNoopUndoOnError(s *stack.State, opErr error) error {
-	entry, _, _ := stack.PeekUndo()
-	dropped, err := dropNoopUndo(s, entry, opErr)
-	if err != nil {
-		return err
-	}
-	if !dropped {
-		created := createdBranchesSince(entry)
-		if len(created) > 0 {
-			if err := stack.SetLastUndoCreatedBranches(created); err != nil {
-				return err
-			}
-		}
-	}
-	return stack.TrimUndo()
-}
-
-func createdBranchesSince(entry *stack.UndoEntry) []string {
-	if entry == nil || entry.LocalBranches == nil {
-		return nil
-	}
-	existed := map[string]bool{}
-	for _, name := range entry.LocalBranches {
-		existed[name] = true
-	}
-	branches, err := git.LocalBranches()
-	if err != nil {
-		return nil
-	}
-	var created []string
-	for _, name := range branches {
-		if !existed[name] {
-			created = append(created, name)
-		}
-	}
-	sort.Strings(created)
-	return created
-}
-
-func refsUnchanged(entry *stack.UndoEntry) bool {
-	for name, want := range entry.Refs {
-		got, err := git.RevParse("refs/heads/" + name)
-		if err != nil || got != want {
-			return false
-		}
-	}
-	return true
-}
-
-func sameState(s *stack.State, raw []byte) (bool, error) {
-	var prev stack.State
-	if err := json.Unmarshal(raw, &prev); err != nil {
-		return false, err
-	}
-	if s.Trunk != prev.Trunk {
-		return false, nil
-	}
-	if (s.PendingReparent == nil) != (prev.PendingReparent == nil) {
-		return false, nil
-	}
-	if s.PendingReparent != nil && *s.PendingReparent != *prev.PendingReparent {
-		return false, nil
-	}
-	if len(s.Branches) != len(prev.Branches) {
-		return false, nil
-	}
-	for name, got := range s.Branches {
-		want, ok := prev.Branches[name]
-		if !ok || got == nil || want == nil || *got != *want {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // emit renders a command result as indented JSON when asJSON, otherwise runs
