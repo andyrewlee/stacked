@@ -8,12 +8,12 @@ COVERAGE_MIN ?= 75
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet lint check-deps golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order.
 # `cover` runs the whole suite once (race + combined in-process/e2e coverage),
 # so ci does not run the tests three times.
-ci: check-deps fmt-check lint vet build cover
+ci: check-deps fmt-check lint vet vet-cross build cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -34,6 +34,14 @@ fmt-check:
 
 vet:
 	go vet ./...
+
+# The non-flock lock fallback (lock_other.go, lock_owner_windows.go,
+# lock_owner_plan9.go) is excluded from every native build by its build tags,
+# so a plain `go vet` never compiles it. Vet the two GOOSes that select those
+# files so a breakage cannot land green.
+vet-cross:
+	GOOS=windows GOARCH=amd64 go vet ./...
+	GOOS=plan9 GOARCH=amd64 go vet ./...
 
 # Enforce the project's hardest invariant: the shipped tool stays standard-library
 # only. Fail if go.mod declares any dependency or a go.sum appears. Run by `make ci`
