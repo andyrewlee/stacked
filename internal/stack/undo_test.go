@@ -116,6 +116,42 @@ func TestSnapshotUndoCapturesViaPort(t *testing.T) {
 	}
 }
 
+type countingSnapshotGit struct {
+	Git
+	revParseCalls int
+	tipsCalls     int
+}
+
+func (g *countingSnapshotGit) RevParse(ref string) (string, error) {
+	g.revParseCalls++
+	return g.Git.RevParse(ref)
+}
+
+func (g *countingSnapshotGit) Tips() (map[string]string, error) {
+	g.tipsCalls++
+	return g.Git.Tips()
+}
+
+func TestSnapshotUndoSpawns(t *testing.T) {
+	f, s, env := newEnvState()
+	parent := "main"
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		mkBranch(t, env, s, f, parent, name)
+		parent = name
+	}
+
+	counting := &countingSnapshotGit{Git: f}
+	if _, err := s.SnapshotUndo(counting, "test-op"); err != nil {
+		t.Fatalf("SnapshotUndo: %v", err)
+	}
+	if counting.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	}
+}
+
 // A corrupt or truncated undo.json must not brick the tool: loadUndo treats it
 // as empty, and the next mutation can record over the garbage. Before this fix a
 // single bad byte in undo.json made every mutating command abort (ENG-1).
