@@ -175,6 +175,46 @@ func TestBranchLifecycle(t *testing.T) {
 	}
 }
 
+func TestFlagLikeRefNamesRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "checkout",
+			run:  func() error { return Checkout("-x") },
+		},
+		{
+			name: "delete branch",
+			run:  func() error { return DeleteBranch("--exec=true", true) },
+		},
+		{
+			name: "rebase onto",
+			run:  func() error { return RebaseOnto("HEAD", "HEAD", "--exec=true") },
+		},
+		{
+			name: "fetch",
+			run:  func() error { return Fetch("--upload-pack=true") },
+		},
+		{
+			name: "force branch",
+			run:  func() error { return ForceBranch("-b", "HEAD") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "not a valid git ref name") {
+				t.Fatalf("error = %q, want invalid ref name", err)
+			}
+		})
+	}
+}
+
 func TestCleanStagedAdd(t *testing.T) {
 	newRepo(t)
 	clean, err := IsClean()
