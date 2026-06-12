@@ -66,13 +66,13 @@ type logNode struct {
 	Current      bool       `json:"current"`
 	NeedsRestack bool       `json:"needsRestack"`
 	TopCommit    string     `json:"topCommit,omitempty"`
-	Children     []*logNode `json:"children,omitempty"`
+	Children     []*logNode `json:"children"`
 }
 
 func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
-		node := &logNode{Name: name, Parent: parent, Current: name == cur}
+		node := &logNode{Name: name, Parent: parent, Current: name == cur, Children: []*logNode{}}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
 			node.NeedsRestack = drift[name]
