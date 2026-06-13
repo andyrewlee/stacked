@@ -321,6 +321,12 @@ func AmendMessage(message string, all bool) error {
 // RebaseOnto runs "git rebase --onto newBase oldBase branch" with inherited
 // stdio so conflicts can be resolved interactively.
 func RebaseOnto(newBase, oldBase, branch string) error {
+	if err := validRefArg("ref", newBase); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", oldBase); err != nil {
+		return err
+	}
 	if err := validRefArg("branch", branch); err != nil {
 		return err
 	}
@@ -330,6 +336,12 @@ func RebaseOnto(newBase, oldBase, branch string) error {
 // RebaseOntoQuiet runs rebase without inheriting stdout/stderr, for callers that
 // need machine-readable output.
 func RebaseOntoQuiet(newBase, oldBase, branch string) error {
+	if err := validRefArg("ref", newBase); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", oldBase); err != nil {
+		return err
+	}
 	if err := validRefArg("branch", branch); err != nil {
 		return err
 	}
@@ -520,6 +532,9 @@ func RebaseAbort() error {
 // ResetSoft moves the current branch to ref without touching the index or
 // working tree ("git reset --soft").
 func ResetSoft(ref string) error {
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
 	_, err := Run("reset", "--soft", ref)
 	return err
 }
@@ -541,6 +556,9 @@ func RenameBranch(oldName, newName string) error {
 // branch, matching git's own behavior.
 func ForceBranch(name, ref string) error {
 	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", ref); err != nil {
 		return err
 	}
 	_, err := Run("branch", "-f", name, ref)

@@ -193,12 +193,32 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 			run:  func() error { return RebaseOnto("HEAD", "HEAD", "--exec=true") },
 		},
 		{
+			name: "rebase new base",
+			run:  func() error { return RebaseOnto("--root", "HEAD", "main") },
+		},
+		{
+			name: "rebase old base",
+			run:  func() error { return RebaseOnto("HEAD", "--root", "main") },
+		},
+		{
+			name: "quiet rebase old base",
+			run:  func() error { return RebaseOntoQuiet("HEAD", "--root", "main") },
+		},
+		{
 			name: "fetch",
 			run:  func() error { return Fetch("--upload-pack=true") },
 		},
 		{
 			name: "force branch",
 			run:  func() error { return ForceBranch("-b", "HEAD") },
+		},
+		{
+			name: "force branch ref",
+			run:  func() error { return ForceBranch("topic", "--force") },
+		},
+		{
+			name: "reset soft ref",
+			run:  func() error { return ResetSoft("--hard") },
 		},
 	}
 
