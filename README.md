@@ -106,7 +106,7 @@ a coverage gate, and the engine you'll touch most tests in milliseconds. See
 Run `st help` (or `st <command> -h`) at any time. Flags may be placed
 before or after the positional branch name.
 
-Every command below (and `help`/`version`) also accepts `--json`; see docs/AGENT.md.
+Every command below except `completion` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
 
 | Command | Aliases | Summary |
 | --- | --- | --- |
