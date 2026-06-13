@@ -437,8 +437,22 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 		if progressErr == nil && inProgress {
 			s.PendingReparent = &PendingReparent{Branch: cur, Parent: target, ParentSHA: newParentTip}
 			if saveErr := env.save(); saveErr != nil {
+				// The reparent intent could not be persisted, so a later `st
+				// continue` (a fresh process loading from disk) would recover
+				// against the OLD parent and silently mis-parent cur. Abort the
+				// paused rebase so git and metadata both return to the pre-Onto
+				// state instead of diverging, and drop the in-memory pending entry
+				// to match the unpersisted disk.
 				s.PendingReparent = nil
-				return nil, AlsoFailed(fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict), "record pending reparent", saveErr)
+				if abortErr := g.RebaseAbort(); abortErr != nil {
+					// Neither persisting nor aborting worked: the rebase is still
+					// paused, so keep ErrConflict (recovery via st continue/abort)
+					// and surface both failures.
+					return nil, AlsoFailed(AlsoFailed(fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict), "record pending reparent", saveErr), "abort the in-progress rebase", abortErr)
+				}
+				// The rebase was aborted and nothing changed, so do not wrap
+				// ErrConflict — there is nothing to continue.
+				return nil, fmt.Errorf("moving %q onto %q: recording the reparent failed, so the rebase was aborted: %w", cur, target, saveErr)
 			}
 			return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
 		}
@@ -676,6 +690,14 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	conflicted, err := g.RebaseHeadName()
 	if err != nil {
 		return nil, err
+	}
+	// A paused `onto` rebase is unambiguous even when git's head-name file can't
+	// be read (RebaseHeadName returns ""): there is exactly one pending reparent.
+	// Fall back to it so the reparent is still promoted and HEAD restored, rather
+	// than silently leaving cur mis-parented. This mirrors `st abort`, which
+	// already treats an empty head-name plus a pending reparent as that branch.
+	if conflicted == "" && s.PendingReparent != nil {
+		conflicted = s.PendingReparent.Branch
 	}
 	if err := g.RebaseContinue(); err != nil {
 		return nil, fmt.Errorf("rebase did not complete: %w", ErrConflict)

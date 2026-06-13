@@ -45,6 +45,7 @@ func (Shell) IsClean() (bool, error)          { return IsClean() }
 func (Shell) RebaseInProgress() (bool, error) { return RebaseInProgress() }
 func (Shell) RebaseHeadName() (string, error) { return RebaseHeadName() }
 func (Shell) RebaseContinue() error           { return RebaseContinue() }
+func (Shell) RebaseAbort() error              { return RebaseAbort() }
 
 func (QuietShell) RebaseOnto(newBase, oldBase, br string) error {
 	return RebaseOntoQuiet(newBase, oldBase, br)

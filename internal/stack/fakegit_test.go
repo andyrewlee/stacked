@@ -307,6 +307,17 @@ func (f *fakeGit) replay(newBase, oldBase, branch string) error {
 func (f *fakeGit) RebaseInProgress() (bool, error) { return f.rebaseActive, nil }
 func (f *fakeGit) RebaseHeadName() (string, error) { return f.rebaseBranch, nil }
 
+// RebaseAbort ends an in-progress rebase. The conflicting RebaseOnto never moved
+// the branch (it only paused), so clearing the rebase state restores the
+// pre-rebase tip, mirroring "git rebase --abort".
+func (f *fakeGit) RebaseAbort() error {
+	if !f.rebaseActive {
+		return fmt.Errorf("no rebase in progress")
+	}
+	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase = false, "", "", ""
+	return nil
+}
+
 // RebaseContinue resolves the modeled conflict and finishes the rebase.
 func (f *fakeGit) RebaseContinue() error {
 	if !f.rebaseActive {
