@@ -80,15 +80,22 @@ func (s *State) SnapshotUndo(g Git, label string) (*UndoEntry, error) {
 		return nil, fmt.Errorf("encode state for undo: %w", err)
 	}
 	refs := map[string]string{}
-	if sha, err := g.RevParse("refs/heads/" + s.Trunk); err == nil {
-		refs[s.Trunk] = sha
-	}
-	for name := range s.Branches {
-		if sha, err := g.RevParse("refs/heads/" + name); err == nil {
-			refs[name] = sha
+	var localBranches []string
+	if tips, err := g.Tips(); err == nil {
+		if sha, ok := tips[s.Trunk]; ok {
+			refs[s.Trunk] = sha
 		}
+		for name := range s.Branches {
+			if sha, ok := tips[name]; ok {
+				refs[name] = sha
+			}
+		}
+		localBranches = make([]string, 0, len(tips))
+		for name := range tips {
+			localBranches = append(localBranches, name)
+		}
+		sort.Strings(localBranches)
 	}
-	localBranches, _ := g.LocalBranches()
 	currentBranch, _ := g.CurrentBranch()
 	return &UndoEntry{
 		Label:         label,
@@ -273,9 +280,12 @@ func createdBranchesSince(g Git, entry *UndoEntry) []string {
 // refsUnchanged reports whether every ref the entry recorded still resolves to
 // its recorded tip.
 func refsUnchanged(g Git, entry *UndoEntry) bool {
+	tips, err := g.Tips()
+	if err != nil {
+		return false
+	}
 	for name, want := range entry.Refs {
-		got, err := g.RevParse("refs/heads/" + name)
-		if err != nil || got != want {
+		if tips[name] != want {
 			return false
 		}
 	}
