@@ -633,6 +633,13 @@ func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 // dry-run path after fetching the selected remote's trunk.
 func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResult, error) {
 	g := env.Git
+	// The real Sync requires a clean tree (engine.go Sync), so the preview must
+	// too — otherwise it reports branches it "would restack" that the real
+	// command will refuse to touch, returning exit 0 instead of the dirty-tree
+	// exit code.
+	if err := requireClean(g); err != nil {
+		return nil, err
+	}
 	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
