@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -353,6 +355,51 @@ func TestSubmitJSONSingleShape(t *testing.T) {
 	}
 	if trunk.Pushed == nil || len(trunk.Pushed) != 0 {
 		t.Fatalf("trunk-case pushed = %v, want present-but-empty", trunk.Pushed)
+	}
+}
+
+// TestSubmitPartialFailureJSON asserts that when a push fails partway up the
+// stack, --json still reports the branches pushed so far plus the one that
+// failed, so a machine consumer can observe the partial state (the command
+// still returns a non-zero error).
+func TestSubmitPartialFailureJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	// A server-side hook rejects feat-b, so feat-a is pushed but feat-b fails.
+	hook := filepath.Join(remoteDir, "hooks", "pre-receive")
+	script := "#!/bin/sh\nwhile read _ _ ref; do\n\t[ \"$ref\" = refs/heads/feat-b ] && exit 1\ndone\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runSubmit([]string{"--json"})
+	})
+	if runErr == nil {
+		t.Fatal("submit with a rejected branch should return a non-nil error")
+	}
+
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.DisallowUnknownFields()
+	var got submitResult
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("partial submit --json did not unmarshal into submitResult: %v\n%s", err, out)
+	}
+	if got.Failed != "feat-b" {
+		t.Fatalf("partial result Failed = %q, want feat-b", got.Failed)
+	}
+	if len(got.Pushed) != 1 || got.Pushed[0] != "feat-a" {
+		t.Fatalf("partial result Pushed = %v, want [feat-a]", got.Pushed)
 	}
 }
 
