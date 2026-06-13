@@ -21,10 +21,12 @@ jobs:
         with:
           fetch-depth: 0 # full history so `git describe` can produce a version
 
+      # The cache key must come from go.mod because stdlib-only means go.sum can never exist.
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache-dependency-path: go.mod
 
       # Dev tooling is installed as an external binary only; it is never added to
       # go.mod (the shipped tool stays standard-library only). golangci-lint v2
