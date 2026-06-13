@@ -152,6 +152,33 @@ func TestSnapshotUndoSpawns(t *testing.T) {
 	}
 }
 
+// tipsErrGit makes Tips fail while delegating everything else to the embedded
+// port, to exercise the undo snapshot's handling of an unreadable ref list.
+type tipsErrGit struct {
+	Git
+	err error
+}
+
+func (g tipsErrGit) Tips() (map[string]string, error) { return nil, g.err }
+
+// A Tips failure must fail the snapshot rather than recording an entry with no
+// refs: such an entry would make a later `st undo` silently restore zero branch
+// tips. Failing here aborts the mutation before anything changes.
+func TestSnapshotUndoFailsWhenTipsUnavailable(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	boom := errors.New("git for-each-ref failed")
+	g := tipsErrGit{Git: f, err: boom}
+
+	if _, err := s.SnapshotUndo(g, "op"); !errors.Is(err, boom) {
+		t.Fatalf("SnapshotUndo with failing Tips = %v, want wrapped %v", err, boom)
+	}
+	if err := s.RecordUndo(g, "op"); !errors.Is(err, boom) {
+		t.Fatalf("RecordUndo with failing Tips = %v, want wrapped %v", err, boom)
+	}
+}
+
 // A corrupt or truncated undo.json must not brick the tool: loadUndo treats it
 // as empty, and the next mutation can record over the garbage. Before this fix a
 // single bad byte in undo.json made every mutating command abort (ENG-1).

@@ -72,30 +72,33 @@ func writeUndo(entries []UndoEntry) error {
 // SnapshotUndo captures, through the Git port, everything needed to revert the
 // operation about to run: the encoded state, the tips of the trunk and all
 // tracked branches, the local branch list, and the current branch. It reads
-// only — nothing is written to the journal. Branches whose tip cannot be
-// resolved are omitted from the snapshot rather than failing the capture.
+// only — nothing is written to the journal. A failure to read branch tips fails
+// the whole snapshot: an entry without them would yield an `st undo` that
+// silently restored no refs, so the caller (RecordUndo) aborts the mutation
+// before anything changes rather than recording an un-revertible entry.
 func (s *State) SnapshotUndo(g Git, label string) (*UndoEntry, error) {
 	stateBytes, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode state for undo: %w", err)
 	}
-	refs := map[string]string{}
-	var localBranches []string
-	if tips, err := g.Tips(); err == nil {
-		if sha, ok := tips[s.Trunk]; ok {
-			refs[s.Trunk] = sha
-		}
-		for name := range s.Branches {
-			if sha, ok := tips[name]; ok {
-				refs[name] = sha
-			}
-		}
-		localBranches = make([]string, 0, len(tips))
-		for name := range tips {
-			localBranches = append(localBranches, name)
-		}
-		sort.Strings(localBranches)
+	tips, err := g.Tips()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot branch tips for undo: %w", err)
 	}
+	refs := map[string]string{}
+	if sha, ok := tips[s.Trunk]; ok {
+		refs[s.Trunk] = sha
+	}
+	for name := range s.Branches {
+		if sha, ok := tips[name]; ok {
+			refs[name] = sha
+		}
+	}
+	localBranches := make([]string, 0, len(tips))
+	for name := range tips {
+		localBranches = append(localBranches, name)
+	}
+	sort.Strings(localBranches)
 	currentBranch, _ := g.CurrentBranch()
 	return &UndoEntry{
 		Label:         label,
