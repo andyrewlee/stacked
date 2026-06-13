@@ -15,11 +15,18 @@ import (
 // adapter layer (flag parsing, output rendering, dispatch).
 
 // TestMain silences command stdout during the cmd tests (assertions read git
-// state or captured output explicitly, not the default stdout).
+// state or captured output explicitly, not the default stdout). It also keeps
+// git deterministic and non-interactive regardless of the host: the cmd suite
+// must not depend on real user config.
 func TestMain(m *testing.M) {
 	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
 		os.Stdout = devnull
 	}
+	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	os.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	os.Setenv("GIT_TERMINAL_PROMPT", "0")
+	os.Setenv("GIT_PAGER", "cat")
+	os.Setenv("GIT_EDITOR", "true")
 	os.Exit(m.Run())
 }
 
