@@ -17,7 +17,8 @@
           "parentSHA": "<sha>",
           "current": true,
           "needsRestack": false,
-          "topCommit": "add b"
+          "topCommit": "add b",
+          "children": []
         }
       ]
     }

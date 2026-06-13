@@ -106,10 +106,12 @@ a coverage gate, and the engine you'll touch most tests in milliseconds. See
 Run `st help` (or `st <command> -h`) at any time. Flags may be placed
 before or after the positional branch name.
 
+Every command below except `completion` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
+
 | Command | Aliases | Summary |
 | --- | --- | --- |
 | `st init [--trunk <name>]` | | Initialize stack tracking in this repo. |
-| `st create <name> [-m <msg>] [-a]` | `c` | Create a new branch stacked on the current branch. |
+| `st create <name> [-m|--message <msg>] [-a|--all]` | `c` | Create a new branch stacked on the current branch. |
 | `st log [--json]` | `ls` | Show the stack as a tree (trunk at the bottom); `--json` for scripting. |
 | `st status [--json]` | `stat` | Show the current branch, its parent/children, and restack state. |
 | `st checkout [name]` | `co` | Check out a tracked branch, or list branches when no name is given. |
@@ -119,15 +121,15 @@ before or after the positional branch name.
 | `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
 | `st track [--parent <branch>]` | | Start tracking the current git branch. |
 | `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
-| `st modify [-m <msg>] [-a] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
+| `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
 | `st restack [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
 | `st abort` | | Abort an in-progress restack/rebase. |
 | `st fold` | | Fold the current branch into its parent (parent absorbs its commits). |
-| `st squash [-m <msg>]` | | Squash all of the current branch's commits into one. |
+| `st squash [-m|--message <msg>]` | | Squash all of the current branch's commits into one. |
 | `st onto <target>` | `move` | Move the current branch (and its upstack) onto a new parent. |
 | `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
-| `st delete <name> [-f]` | `rm` | Delete a branch and re-parent its children. |
+| `st delete <name> [-f|--force]` | `rm` | Delete a branch and re-parent its children. |
 | `st sync [--no-delete] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--dry-run` previews). |
 | `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL (no PRs). |
 | `st undo` | | Undo the last stack-mutating command. |

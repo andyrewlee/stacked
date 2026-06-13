@@ -24,7 +24,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behind a small git **port**; `cmd/` commands are now thin adapters. `sync` and
   `continue` moved behind a `Remote` port and are fully fake-testable.
 - The feedback loop runs the suite once (race + merged in-process/e2e coverage)
-  instead of three times; `make test-fast` is a sub-second inner loop.
+  instead of three times; `make test-fast` is about a second.
+- `submit --json` emits one unified result shape instead of per-mode shapes.
+  `delete` results include the `restacked` list. `log --json` always includes
+  `children` (empty array on leaves).
+
+### Fixed
+- Non-flock platforms use a real lock file with stale-owner reclamation instead
+  of a no-op lock.
+- Git output parsing is locale-pinned, and fast-forward detection uses plumbing
+  instead of message text.
+- Parent inference (`st track`) is deterministic.
 
 ### Removed
 - Redundant slow `cmd` integration tests now covered by the engine and e2e suites;

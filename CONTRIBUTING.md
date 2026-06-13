@@ -6,7 +6,7 @@ loop, and the engine you'll touch most is tested in milliseconds.
 ## The loop
 
 ```sh
-make test-fast   # sub-second: pure engine logic over the fake git
+make test-fast   # about a second: pure engine logic over the fake git
 make ci          # the full gate (= the pre-push hook = CI)
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
