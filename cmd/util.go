@@ -265,7 +265,7 @@ func parseArgs(fs *flag.FlagSet, args []string) error {
 			positional = append(positional, args[i:]...)
 			break
 		}
-		if len(a) > 1 && a[0] == '-' {
+		if len(a) > 1 && a[0] == '-' && !looksNumeric(a) {
 			flags = append(flags, a)
 			// If this flag expects a separate value (not boolean, no "="),
 			// pull the next token along as its value.
@@ -277,7 +277,26 @@ func parseArgs(fs *flag.FlagSet, args []string) error {
 		}
 		positional = append(positional, a)
 	}
-	return parseFlagSet(fs, append(flags, positional...))
+	// A positional that looks like a flag (the negative count "-3" routed here by
+	// looksNumeric) must be shielded from fs.Parse, which would otherwise reject
+	// it as an unknown flag. A leading "--" terminates flag parsing; skip adding
+	// one when the caller already supplied it (the explicit-terminator case).
+	combined := append([]string(nil), flags...)
+	if len(positional) > 0 && positional[0] != "--" {
+		combined = append(combined, "--")
+	}
+	combined = append(combined, positional...)
+	return parseFlagSet(fs, combined)
+}
+
+// looksNumeric reports whether the token is an integer (optionally negative).
+// A negative number like "-3" is then treated as a positional argument rather
+// than an unknown flag, so a navigation command's parseCount can report its own
+// "step count must be at least 1" message instead of the stdlib's opaque "flag
+// provided but not defined: -3".
+func looksNumeric(s string) bool {
+	_, err := strconv.Atoi(s)
+	return err == nil
 }
 
 // isBoolFlag reports whether the flag named by the argument token (e.g. "-a" or
