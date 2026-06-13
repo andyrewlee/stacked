@@ -334,6 +334,23 @@ func TestResetSoftAndUpdateRef(t *testing.T) {
 	}
 }
 
+// A ref beginning with "-" (e.g. a corrupt or hostile state.json branch name)
+// must be rejected at the boundary so git never parses it as an option.
+func TestRevParseRejectsFlagLikeRef(t *testing.T) {
+	newRepo(t)
+	if _, err := RevParse("--git-dir"); err == nil {
+		t.Fatal("RevParse accepted a flag-like ref")
+	}
+}
+
+func TestUpdateRefRejectsFlagLikeRef(t *testing.T) {
+	newRepo(t)
+	first := mustGit(t, "rev-parse", "HEAD")
+	if err := UpdateRef("--foo", first); err == nil {
+		t.Fatal("UpdateRef accepted a flag-like ref")
+	}
+}
+
 func TestCommitSubjects(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "feat")
