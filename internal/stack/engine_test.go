@@ -670,6 +670,28 @@ func TestContinuePromotesPendingReparentWhenHeadNameEmpty(t *testing.T) {
 	}
 }
 
+// The dry-run previews must enforce the same clean-tree precondition as the real
+// ops, so they don't promise restacks the real command would refuse.
+func TestRestackPlanRefusesDirtyTree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.clean = false
+
+	if _, err := RestackPlan(env, s); !errors.Is(err, ErrDirty) {
+		t.Fatalf("RestackPlan on dirty tree = %v, want ErrDirty", err)
+	}
+}
+
+func TestSyncPlanRefusesDirtyTree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.clean = false
+
+	if _, err := SyncPlanAgainst(env, s, false, branchTipRef("main")); !errors.Is(err, ErrDirty) {
+		t.Fatalf("SyncPlanAgainst on dirty tree = %v, want ErrDirty", err)
+	}
+}
+
 func TestRestackConflictContinueRecovers(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

@@ -124,6 +124,12 @@ func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, err
 // RestackPlan previews the branches a restack from the current branch would
 // rebase, without mutating anything.
 func RestackPlan(env Env, s *State) (*OpResult, error) {
+	// The real Restack requires a clean tree, so the preview must too — otherwise
+	// it lists branches it "would restack" that the real command refuses to
+	// touch, exiting 0 instead of the dirty-tree exit code.
+	if err := requireClean(env.Git); err != nil {
+		return nil, err
+	}
 	start, err := env.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
