@@ -60,6 +60,26 @@ func TestMalformedLockIsAbandonedOnlyWhenOldAndUnowned(t *testing.T) {
 	}
 }
 
+func TestAcquireReclaimGuardDoesNotRecoverOldLockWithLiveOwner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.reclaim")
+	oldLiveOwner := lockFileContent(os.Getpid(), time.Now().Add(-2*time.Hour), "token")
+	if err := os.WriteFile(path, []byte(oldLiveOwner), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if release, ok := acquireReclaimGuard(dir); ok {
+		release()
+		t.Fatal("reclaim guard should not recover an old lock while its owner pid is live")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("old live-owner lock should remain: %v", err)
+	}
+	if string(got) != oldLiveOwner {
+		t.Fatalf("old live-owner lock changed:\n got %q\nwant %q", got, oldLiveOwner)
+	}
+}
+
 func TestAcquireReclaimGuard(t *testing.T) {
 	dir := t.TempDir()
 	release, ok := acquireReclaimGuard(dir)
