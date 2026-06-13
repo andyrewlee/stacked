@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,6 +187,35 @@ func TestExitCodeContract(t *testing.T) {
 		r.writeFile("a.txt", "dirty\n") // unstaged change
 		wantExit(t, r.st("restack"), 4)
 	})
+}
+
+func TestHostileStateBranchNameRefused(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.git("checkout", "-q", "main")
+
+	state := []byte(`{
+  "trunk": "main",
+  "branches": {
+    "--exec=touch pwned": {
+      "name": "--exec=touch pwned",
+      "parent": "main",
+      "parentSHA": "0000000000000000000000000000000000000000"
+    }
+  }
+}
+`)
+	if err := os.WriteFile(filepath.Join(r.dir, ".git", "stacked", "state.json"), state, 0o644); err != nil {
+		t.Fatalf("write hostile state: %v", err)
+	}
+
+	res := r.st("restack")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "not a valid git ref name")
+	if _, err := os.Stat(filepath.Join(r.dir, "pwned")); !os.IsNotExist(err) {
+		t.Fatalf("pwned file exists or could not be checked: %v", err)
+	}
 }
 
 // TestSubmitDryRunAndURL asserts submit prints the planned pushes, exits 0 in

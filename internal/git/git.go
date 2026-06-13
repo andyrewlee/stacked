@@ -76,6 +76,21 @@ func RunInteractive(args ...string) error {
 // ErrDetachedHEAD is returned by CurrentBranch when HEAD is not on a branch.
 var ErrDetachedHEAD = errors.New("not on a branch (detached HEAD); check out a branch first")
 
+// validRefArg guards branch/remote names that are passed to git as bare
+// positional arguments. Git itself forbids ref components that begin with "-"
+// (check-ref-format), so any such value here is either corrupt state or an
+// attempt to smuggle a flag (e.g. a state.json branch named "--exec=...").
+// Rejecting it before exec keeps git from parsing data as options.
+func validRefArg(kind, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s name is empty", kind)
+	}
+	if name[0] == '-' {
+		return fmt.Errorf("%s name %q is not a valid git ref name", kind, name)
+	}
+	return nil
+}
+
 // CurrentBranch returns the name of the currently checked-out branch. It returns
 // ErrDetachedHEAD when HEAD is detached (for example, mid-rebase or sitting on a
 // raw commit).
@@ -138,18 +153,27 @@ func Tips() (map[string]string, error) {
 
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
+	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
 	_, err := Run("checkout", name)
 	return err
 }
 
 // CheckoutDetach detaches HEAD at ref without switching to a branch.
 func CheckoutDetach(ref string) error {
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
 	_, err := Run("checkout", "--detach", ref)
 	return err
 }
 
 // CreateBranch creates a new branch off the current HEAD and switches to it.
 func CreateBranch(name string) error {
+	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
 	_, err := Run("checkout", "-b", name)
 	return err
 }
@@ -157,6 +181,9 @@ func CreateBranch(name string) error {
 // DeleteBranch deletes the named local branch. When force is true the branch is
 // removed even if it is not fully merged.
 func DeleteBranch(name string, force bool) error {
+	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
 	flag := "-d"
 	if force {
 		flag = "-D"
@@ -294,12 +321,30 @@ func AmendMessage(message string, all bool) error {
 // RebaseOnto runs "git rebase --onto newBase oldBase branch" with inherited
 // stdio so conflicts can be resolved interactively.
 func RebaseOnto(newBase, oldBase, branch string) error {
+	if err := validRefArg("ref", newBase); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", oldBase); err != nil {
+		return err
+	}
+	if err := validRefArg("branch", branch); err != nil {
+		return err
+	}
 	return RunInteractive("rebase", "--onto", newBase, oldBase, branch)
 }
 
 // RebaseOntoQuiet runs rebase without inheriting stdout/stderr, for callers that
 // need machine-readable output.
 func RebaseOntoQuiet(newBase, oldBase, branch string) error {
+	if err := validRefArg("ref", newBase); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", oldBase); err != nil {
+		return err
+	}
+	if err := validRefArg("branch", branch); err != nil {
+		return err
+	}
 	_, err := run("rebase", "--quiet", "--onto", newBase, oldBase, branch)
 	return err
 }
@@ -376,6 +421,9 @@ func RebaseContinueQuiet() error {
 
 // Fetch updates remote-tracking refs for the named remote.
 func Fetch(remote string) error {
+	if err := validRefArg("remote", remote); err != nil {
+		return err
+	}
 	_, err := Run("fetch", remote)
 	return err
 }
@@ -384,6 +432,9 @@ func Fetch(remote string) error {
 // upstream (-u) so ahead/behind tracking works after the first publish. When
 // force is true it uses --force-with-lease for a safe force push.
 func PushRemote(remote, branch string, force bool) error {
+	if err := validRefArg("remote", remote); err != nil {
+		return err
+	}
 	args := []string{"push", "-u"}
 	if force {
 		args = append(args, "--force-with-lease")
@@ -401,6 +452,12 @@ func RemoteExists(name string) bool {
 
 // MergeBase returns the best common ancestor commit of the two given refs.
 func MergeBase(a, b string) (string, error) {
+	if err := validRefArg("ref", a); err != nil {
+		return "", err
+	}
+	if err := validRefArg("ref", b); err != nil {
+		return "", err
+	}
 	return Run("merge-base", localBranchRef(a), localBranchRef(b))
 }
 
@@ -408,6 +465,12 @@ func MergeBase(a, b string) (string, error) {
 // negative answer returns false, nil; invalid refs and other git failures return
 // an error.
 func IsAncestor(ancestor, descendant string) (bool, error) {
+	if err := validRefArg("ref", ancestor); err != nil {
+		return false, err
+	}
+	if err := validRefArg("ref", descendant); err != nil {
+		return false, err
+	}
 	ancestorRef := localBranchRef(ancestor)
 	descendantRef := localBranchRef(descendant)
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestorRef, descendantRef)
@@ -469,12 +532,21 @@ func RebaseAbort() error {
 // ResetSoft moves the current branch to ref without touching the index or
 // working tree ("git reset --soft").
 func ResetSoft(ref string) error {
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
 	_, err := Run("reset", "--soft", ref)
 	return err
 }
 
 // RenameBranch renames a local branch ("git branch -m old new").
 func RenameBranch(oldName, newName string) error {
+	if err := validRefArg("branch", oldName); err != nil {
+		return err
+	}
+	if err := validRefArg("branch", newName); err != nil {
+		return err
+	}
 	_, err := Run("branch", "-m", oldName, newName)
 	return err
 }
@@ -483,6 +555,12 @@ func RenameBranch(oldName, newName string) error {
 // ("git branch -f name ref"). It refuses to move the currently checked-out
 // branch, matching git's own behavior.
 func ForceBranch(name, ref string) error {
+	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
 	_, err := Run("branch", "-f", name, ref)
 	return err
 }
