@@ -847,8 +847,26 @@ func TrackBranch(env Env, s *State, parent string) (*OpResult, error) {
 	return &OpResult{Summary: fmt.Sprintf("Tracking %s (parent: %s)", cur, parent), Branch: cur}, nil
 }
 
-// inferParent picks the closest tracked ancestor (or the trunk) of cur.
+// inferParent picks the closest tracked ancestor (or the trunk) of cur. The two
+// per-candidate ancestry questions ("is c an ancestor of cur?" and "is c merged
+// into trunk?") are answered from precomputed reachability sets — one rev-list
+// for cur and one for the trunk — instead of a `merge-base --is-ancestor` spawn
+// per candidate. Only the closest-ancestor tie-break still spawns, and just for
+// the few candidates that are actual ancestors of cur.
 func inferParent(g Git, s *State, cur string) (string, error) {
+	curAncestors, err := g.AncestorSet(cur)
+	if err != nil {
+		return "", fmt.Errorf("list ancestors of %q: %w", cur, err)
+	}
+	trunkAncestors, err := g.AncestorSet(s.Trunk)
+	if err != nil {
+		return "", fmt.Errorf("list ancestors of %q: %w", s.Trunk, err)
+	}
+	tips, err := g.Tips()
+	if err != nil {
+		return "", fmt.Errorf("read branch tips: %w", err)
+	}
+
 	best := s.Trunk
 	candidates := []string{s.Trunk}
 	for name := range s.Branches {
@@ -864,19 +882,15 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 		if c == cur || c == best {
 			continue
 		}
-		ancestor, err := g.IsAncestor(c, cur)
-		if err != nil {
-			return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", c, cur, err)
+		tip, ok := tips[c]
+		if !ok {
+			continue // candidate's git branch is gone; it cannot be a parent
 		}
-		if !ancestor {
-			continue
+		if !curAncestors[tip] {
+			continue // not an ancestor of cur
 		}
-		mergedIntoTrunk, err := g.IsAncestor(c, s.Trunk)
-		if err != nil {
-			return "", fmt.Errorf("check whether %q is merged into %q: %w", c, s.Trunk, err)
-		}
-		if mergedIntoTrunk {
-			continue
+		if trunkAncestors[tip] {
+			continue // already merged into the trunk
 		}
 		if best != s.Trunk {
 			bestIsAncestor, err := g.IsAncestor(best, c)

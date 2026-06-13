@@ -33,6 +33,9 @@ type Git interface {
 	RebaseHeadName() (string, error)
 	RebaseContinue() error
 	RebaseAbort() error
+	// AncestorSet returns the set of commit SHAs reachable from ref, so callers
+	// can answer many ancestry questions about ref with map lookups.
+	AncestorSet(ref string) (map[string]bool, error)
 }
 
 // Remote is the port the engine uses to interact with a git remote during sync.
