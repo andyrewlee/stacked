@@ -260,6 +260,85 @@ func TestConflictAbort(t *testing.T) {
 	wantStderrContains(t, res, "no rebase in progress")
 }
 
+func TestOntoConflictContinue(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "f.txt", "A\n", "a")
+	r.create("feat-b", "f.txt", "A\nB\n", "b")
+
+	res := r.st("onto", "main")
+	wantExit(t, res, 2)
+	wantStderrContains(t, res, "st continue")
+
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); err != nil {
+		t.Fatalf("expected a rebase in progress after onto conflict: %v", err)
+	}
+
+	r.writeFile("f.txt", "B\n")
+	r.git("add", "f.txt")
+	r.stOK("continue")
+	r.stOK("validate")
+
+	data, err := os.ReadFile(filepath.Join(r.dir, ".git", "stacked", "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	if strings.Contains(string(data), "pendingReparent") {
+		t.Fatalf("state.json still contains pendingReparent after continue:\n%s", data)
+	}
+	var state struct {
+		Branches map[string]struct {
+			Parent string `json:"parent"`
+		} `json:"branches"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("state.json invalid: %v\n%s", err, data)
+	}
+	if got := state.Branches["feat-b"].Parent; got != "main" {
+		t.Fatalf("feat-b parent after continue = %q, want main", got)
+	}
+}
+
+func TestOntoConflictAbort(t *testing.T) {
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "f.txt", "A\n", "a")
+	r.create("feat-b", "f.txt", "A\nB\n", "b")
+
+	res := r.st("onto", "main")
+	wantExit(t, res, 2)
+	wantStderrContains(t, res, "st continue")
+
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); err != nil {
+		t.Fatalf("expected a rebase in progress after onto conflict: %v", err)
+	}
+
+	r.stOK("abort")
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); !os.IsNotExist(err) {
+		t.Fatalf("rebase should be gone after abort, stat err = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(r.dir, ".git", "stacked", "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	if strings.Contains(string(data), "pendingReparent") {
+		t.Fatalf("state.json still contains pendingReparent after abort:\n%s", data)
+	}
+	var state struct {
+		Branches map[string]struct {
+			Parent string `json:"parent"`
+		} `json:"branches"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("state.json invalid: %v\n%s", err, data)
+	}
+	if got := state.Branches["feat-b"].Parent; got != "feat-a" {
+		t.Fatalf("feat-b parent after abort = %q, want feat-a", got)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncConflictContinue drives a conflict that occurs *during* sync's restack
 // (the trunk advances under a stacked branch), then resolves it (TEST-2).
 func TestSyncConflictContinue(t *testing.T) {

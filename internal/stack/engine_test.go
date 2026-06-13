@@ -589,6 +589,100 @@ func TestOntoConflictRecordsPendingReparentWithoutChangingParent(t *testing.T) {
 	}
 }
 
+func TestRestackConflictContinueRecovers(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a2")
+	f.conflictOn("b")
+
+	if _, err := Restack(env, s); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restack error = %v, want %v", err, ErrConflict)
+	}
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
+func TestFoldConflictContinueRecovers(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("b2")
+	f.conflictOn("c")
+
+	if _, err := Fold(env, s); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Fold error = %v, want %v", err, ErrConflict)
+	}
+	if s.IsTracked("b") {
+		t.Fatal("b still tracked after conflicted fold")
+	}
+	if cb, _ := s.Get("c"); cb.Parent != "a" {
+		t.Fatalf("c parent=%q after conflicted fold, want a", cb.Parent)
+	}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
+func TestSquashConflictContinueRecovers(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a2")
+	f.conflictOn("b")
+
+	if _, err := Squash(env, s, "squashed"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Squash error = %v, want %v", err, ErrConflict)
+	}
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
+func TestDeleteConflictContinueRecovers(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.conflictOn("b")
+
+	if _, err := Delete(env, s, "a", true); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Delete error = %v, want %v", err, ErrConflict)
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a still tracked after conflicted delete")
+	}
+	if bb, _ := s.Get("b"); bb.Parent != "main" {
+		t.Fatalf("b parent=%q after conflicted delete, want main", bb.Parent)
+	}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
 func TestOntoPersistsReparentBeforeRestackingDescendants(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
