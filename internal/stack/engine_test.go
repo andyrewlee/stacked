@@ -589,6 +589,82 @@ func TestOntoConflictRecordsPendingReparentWithoutChangingParent(t *testing.T) {
 	}
 }
 
+// emptyHeadNameGit forces RebaseHeadName to "" while a rebase is in progress,
+// modeling git's head-name file being unreadable, so Continue must fall back to
+// the pending reparent to decide which branch finished.
+type emptyHeadNameGit struct{ *fakeGit }
+
+func (emptyHeadNameGit) RebaseHeadName() (string, error) { return "", nil }
+
+// When the pending reparent checkpoint cannot be persisted mid-conflict, Onto
+// must abort the paused rebase so git and metadata both return to the pre-Onto
+// state instead of diverging — otherwise a later `st continue` would recover
+// against the old parent.
+func TestOntoAbortsWhenPendingReparentCannotPersist(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("b")
+	oldParent, oldParentSHA := b.Parent, b.ParentSHA
+	f.conflictOn("b")
+	saveErr := errors.New("disk full")
+	env.Save = func() error { return saveErr }
+
+	_, err := Onto(env, s, "c")
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Onto error = %v, want wrapped %v", err, saveErr)
+	}
+	// Aborted, so there is nothing to continue: the error must not pose as a
+	// resolvable conflict.
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto error = %v, should not wrap ErrConflict after a successful abort", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); inProgress {
+		t.Fatal("rebase left in progress after failed reparent persist; want aborted")
+	}
+	if s.PendingReparent != nil {
+		t.Fatalf("PendingReparent = %+v, want nil (matches unpersisted disk)", s.PendingReparent)
+	}
+	if b.Parent != oldParent || b.ParentSHA != oldParentSHA {
+		t.Fatalf("b metadata = (%s, %s), want unchanged (%s, %s)", b.Parent, b.ParentSHA, oldParent, oldParentSHA)
+	}
+}
+
+// Continue must still promote a pending reparent (and restore HEAD) when git's
+// head-name file is unreadable: a paused onto rebase is unambiguous.
+func TestContinuePromotesPendingReparentWhenHeadNameEmpty(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("b")
+	targetSHA, _ := f.RevParse("c")
+	f.conflictOn("b")
+
+	if _, err := Onto(env, s, "c"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto error = %v, want %v", err, ErrConflict)
+	}
+	// Simulate git's head-name file being unreadable during continue.
+	env.Git = emptyHeadNameGit{f}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	if b.Parent != "c" || b.ParentSHA != targetSHA {
+		t.Fatalf("b after continue = (%s, %s), want (c, %s)", b.Parent, b.ParentSHA, targetSHA)
+	}
+	if s.PendingReparent != nil {
+		t.Fatalf("PendingReparent after continue = %+v, want nil", s.PendingReparent)
+	}
+}
+
 func TestRestackConflictContinueRecovers(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

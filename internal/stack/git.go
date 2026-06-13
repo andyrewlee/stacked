@@ -32,6 +32,7 @@ type Git interface {
 	RebaseInProgress() (bool, error)
 	RebaseHeadName() (string, error)
 	RebaseContinue() error
+	RebaseAbort() error
 }
 
 // Remote is the port the engine uses to interact with a git remote during sync.
