@@ -192,8 +192,13 @@ func DeleteBranch(name string, force bool) error {
 	return err
 }
 
-// RevParse returns the full commit SHA that the given ref resolves to.
+// RevParse returns the full commit SHA that the given ref resolves to. The ref
+// is rejected if it begins with "-" so a corrupt or hostile state.json value
+// (e.g. a branch named "--git-dir") cannot be parsed by git as an option.
 func RevParse(ref string) (string, error) {
+	if err := validRefArg("ref", ref); err != nil {
+		return "", err
+	}
 	return Run("rev-parse", ref)
 }
 
@@ -566,9 +571,14 @@ func ForceBranch(name, ref string) error {
 }
 
 // UpdateRef sets a ref (e.g. "refs/heads/feature") to the given commit SHA,
-// creating it if it does not yet exist.
+// creating it if it does not yet exist. The ref is rejected if it begins with
+// "-", and "--" terminates option parsing so neither the ref nor the SHA can be
+// interpreted by git as an option.
 func UpdateRef(ref, sha string) error {
-	_, err := Run("update-ref", ref, sha)
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
+	_, err := Run("update-ref", "--", ref, sha)
 	return err
 }
 
