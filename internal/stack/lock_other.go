@@ -64,7 +64,8 @@ func Lock() (func(), error) {
 		if readErr != nil {
 			continue
 		}
-		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
+		now := time.Now()
+		if (!lockOwnerIsGone(string(existing)) && !ownedLockIsStale(string(existing), now) && !malformedLockIsAbandoned(path, string(existing), now)) ||
 			!removeLockFileIfContent(path, string(existing)) {
 			return nil, errors.New("another st command is running in this repository")
 		}

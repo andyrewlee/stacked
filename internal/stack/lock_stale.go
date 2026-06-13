@@ -13,6 +13,14 @@ import (
 
 const malformedLockReclaimAfter = 10 * time.Minute
 
+// ownedLockReclaimAfter bounds how long a well-formed lock whose recorded owner
+// still resolves to a live process is honored. A single mutating command
+// finishes in seconds, so a lock older than this was almost certainly left by a
+// process that died (without running its release) whose pid has since been
+// reused by an unrelated live process — which defeats the signal-0 liveness
+// check and would otherwise make the lock permanently un-reclaimable.
+const ownedLockReclaimAfter = time.Hour
+
 // newLockToken returns an opaque per-acquisition token used to avoid removing
 // another process's replacement lock during release.
 func newLockToken() string {
@@ -57,6 +65,37 @@ func malformedLockIsAbandoned(path, content string, now time.Time) bool {
 	return now.Sub(info.ModTime()) > malformedLockReclaimAfter
 }
 
+// lockContentAcquiredAt parses the RFC3339 acquisition time embedded as the
+// second field of a lock file's contents. The boolean is false when the
+// timestamp is absent or unparseable.
+func lockContentAcquiredAt(content string) (time.Time, bool) {
+	fields := strings.Fields(content)
+	if len(fields) < 2 {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, fields[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// ownedLockIsStale reports whether a well-formed (owned) lock is old enough to
+// reclaim despite its pid currently resolving to a live process. This bounds
+// the pid-reuse hazard the way malformedLockIsAbandoned bounds malformed files:
+// without it, a dead holder whose pid was recycled to an unrelated live process
+// would leave the lock un-reclaimable forever.
+func ownedLockIsStale(content string, now time.Time) bool {
+	if !lockContentHasOwner(content) {
+		return false
+	}
+	acquired, ok := lockContentAcquiredAt(content)
+	if !ok {
+		return false
+	}
+	return now.Sub(acquired) > ownedLockReclaimAfter
+}
+
 func acquireReclaimGuard(dir string) (func(), bool) {
 	path := filepath.Join(dir, "lock.reclaim")
 	token := newLockToken()
@@ -84,7 +123,8 @@ func acquireReclaimGuard(dir string) (func(), bool) {
 		if readErr != nil {
 			continue
 		}
-		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
+		now := time.Now()
+		if (!lockOwnerIsGone(string(existing)) && !ownedLockIsStale(string(existing), now) && !malformedLockIsAbandoned(path, string(existing), now)) ||
 			!removeLockFileIfContent(path, string(existing)) {
 			return nil, false
 		}

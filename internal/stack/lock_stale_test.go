@@ -60,6 +60,40 @@ func TestMalformedLockIsAbandonedOnlyWhenOldAndUnowned(t *testing.T) {
 	}
 }
 
+func TestOwnedLockIsStale(t *testing.T) {
+	now := time.Now()
+	if fresh := lockFileContent(os.Getpid(), now, "token"); ownedLockIsStale(fresh, now) {
+		t.Fatal("fresh owned lock should not be stale")
+	}
+	old := lockFileContent(os.Getpid(), now.Add(-ownedLockReclaimAfter-time.Minute), "token")
+	if !ownedLockIsStale(old, now) {
+		t.Fatal("owned lock past the age bound should be stale (guards against pid reuse)")
+	}
+	if ownedLockIsStale("partial", now) {
+		t.Fatal("malformed content should not be treated as a stale owned lock")
+	}
+	if ownedLockIsStale("123 not-a-timestamp token", now) {
+		t.Fatal("owned lock with an unparseable timestamp should not be treated as stale")
+	}
+}
+
+// A live-looking owner (our own pid) whose recorded acquisition time is past the
+// bound is the pid-reuse case the age bound exists to recover: the original
+// holder died and its pid was recycled.
+func TestAcquireReclaimGuardRecoversStaleOwnedLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.reclaim")
+	stale := lockFileContent(os.Getpid(), time.Now().Add(-ownedLockReclaimAfter-time.Minute), "token")
+	if err := os.WriteFile(path, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, ok := acquireReclaimGuard(dir)
+	if !ok {
+		t.Fatal("reclaim guard should recover a stale owned lock with a live pid")
+	}
+	release()
+}
+
 func TestAcquireReclaimGuard(t *testing.T) {
 	dir := t.TempDir()
 	release, ok := acquireReclaimGuard(dir)
