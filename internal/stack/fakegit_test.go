@@ -318,6 +318,20 @@ func (f *fakeGit) RebaseAbort() error {
 	return nil
 }
 
+// AncestorSet returns the commit ids reachable from ref (ref and its ancestors),
+// mirroring "git rev-list ref" over the in-memory DAG.
+func (f *fakeGit) AncestorSet(ref string) (map[string]bool, error) {
+	start := f.resolve(ref)
+	if start == "" {
+		return nil, fmt.Errorf("unknown revision %q", ref)
+	}
+	set := map[string]bool{}
+	for cur := start; cur != ""; cur = f.commits[cur].parent {
+		set[cur] = true
+	}
+	return set, nil
+}
+
 // RebaseContinue resolves the modeled conflict and finishes the rebase.
 func (f *fakeGit) RebaseContinue() error {
 	if !f.rebaseActive {

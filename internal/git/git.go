@@ -495,6 +495,30 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestorRef, descendantRef, err)
 }
 
+// AncestorSet returns the set of commit SHAs reachable from ref (ref itself and
+// all its ancestors) in one git invocation, so a caller can answer many
+// ancestry questions about the same ref with map lookups instead of one
+// `merge-base --is-ancestor` spawn per question.
+func AncestorSet(ref string) (map[string]bool, error) {
+	if err := validRefArg("ref", ref); err != nil {
+		return nil, err
+	}
+	out, err := Run("rev-list", localBranchRef(ref))
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]bool{}
+	if out == "" {
+		return set, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line != "" {
+			set[line] = true
+		}
+	}
+	return set, nil
+}
+
 // GitDir returns the absolute path to the repository's .git directory.
 func GitDir() (string, error) {
 	return Run("rev-parse", "--absolute-git-dir")
