@@ -92,11 +92,13 @@ func (s *State) Save() error {
 }
 
 // atomicWriteFile writes data to path so a reader never observes a half-written
-// file: it writes a temporary file in the same directory, then renames it over
-// path (rename is atomic within a filesystem). The parent directory is created
-// if necessary. A crash or full disk mid-write leaves either the old file or the
-// new one intact, never a truncated mix. This is the single writer used for all
-// on-disk stacked metadata (state.json and undo.json).
+// file and the result survives an OS/power crash: it writes a temporary file in
+// the same directory, fsyncs it, renames it over path (rename is atomic within a
+// filesystem), and best-effort fsyncs the parent directory so the rename entry
+// itself is durable. The parent directory is created if necessary. A crash or
+// full disk mid-write leaves either the old file or the new one intact, never a
+// truncated mix. This is the single writer used for all on-disk stacked metadata
+// (state.json and undo.json).
 func atomicWriteFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -113,11 +115,34 @@ func atomicWriteFile(path string, data []byte) error {
 		tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)
 	}
+	// Flush the file's data before the rename: without it, most filesystems can
+	// make the rename durable while the new file's bytes are still in the page
+	// cache, so a power loss could resurrect a zero-length or partial file —
+	// exactly the truncated mix the rename is meant to rule out.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
+	syncDir(dir)
 	return nil
+}
+
+// syncDir flushes a directory entry to disk so a rename within it is durable
+// across an OS/power crash, not merely visible to readers in the running
+// kernel. Best-effort: directory fsync is not supported on every platform (for
+// example Windows), and a failure here does not make the freshly written file
+// wrong — only less crash-durable.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
