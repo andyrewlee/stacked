@@ -37,13 +37,15 @@ func runRepair(args []string) error {
 
 	var fixes []string
 	if err := mutateState("repair", asJSON, func(_ stack.Env, s *stack.State) error {
-		if !git.BranchExists(s.Trunk) {
-			return fmt.Errorf("trunk branch %q does not exist; cannot repair", s.Trunk)
-		}
-
-		trunkTip, err := git.RevParse(s.Trunk)
+		// One for-each-ref read answers every branch-exists and tip question for
+		// the whole forest, instead of a show-ref/rev-parse spawn per branch.
+		tips, err := git.Tips()
 		if err != nil {
 			return err
+		}
+		trunkTip, ok := tips[s.Trunk]
+		if !ok {
+			return fmt.Errorf("trunk branch %q does not exist; cannot repair", s.Trunk)
 		}
 
 		names := make([]string, 0, len(s.Branches))
@@ -61,11 +63,11 @@ func runRepair(args []string) error {
 			// Branch deleted outside st: untrack it, re-parenting children.
 			// Not stack.RemoveBranch: a child with no recorded base gets a
 			// repaired ParentSHA here, rather than keeping it verbatim.
-			if !git.BranchExists(name) {
+			if _, exists := tips[name]; !exists {
 				newParent, psha := b.Parent, trunkTip
-				if newParent != s.Trunk && !git.BranchExists(newParent) {
+				if _, parentExists := tips[newParent]; newParent != s.Trunk && !parentExists {
 					newParent = s.Trunk
-				} else if sha, err := git.RevParse(newParent); err == nil {
+				} else if sha, ok := tips[newParent]; ok {
 					psha = sha
 				}
 				for _, child := range s.Children(name) {
@@ -80,7 +82,7 @@ func runRepair(args []string) error {
 			}
 
 			// Parent no longer valid: re-parent onto the trunk.
-			if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !git.BranchExists(b.Parent)) {
+			if _, parentExists := tips[b.Parent]; b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !parentExists) {
 				b.Parent = s.Trunk
 				b.ParentSHA = repairedParentSHA(s.Trunk, name, trunkTip)
 				fixes = append(fixes, fmt.Sprintf("re-parented %s onto trunk (its parent was invalid)", name))
