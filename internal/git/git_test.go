@@ -351,6 +351,25 @@ func TestUpdateRefRejectsFlagLikeRef(t *testing.T) {
 	}
 }
 
+func TestTipSubjects(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "t.txt", "t\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "feat subject line")
+
+	subjects, err := TipSubjects()
+	if err != nil {
+		t.Fatalf("TipSubjects: %v", err)
+	}
+	if subjects["feat"] != "feat subject line" {
+		t.Fatalf("TipSubjects[feat] = %q, want %q", subjects["feat"], "feat subject line")
+	}
+	if _, ok := subjects["main"]; !ok {
+		t.Fatalf("TipSubjects missing main: %v", subjects)
+	}
+}
+
 func TestCommitSubjects(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "feat")

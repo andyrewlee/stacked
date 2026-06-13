@@ -43,18 +43,23 @@ func runLog(args []string) error {
 	cur, _ := currentBranch()
 	index := s.ChildIndex()
 
-	// One for-each-ref read powers every drift check instead of two rev-parse
-	// spawns per branch.
+	// Two for-each-ref reads power the whole render regardless of stack size: one
+	// for tips (drift) and one for tip subjects, instead of a `git log` spawn per
+	// branch.
 	tips, err := git.Tips()
+	if err != nil {
+		return err
+	}
+	subjects, err := git.TipSubjects()
 	if err != nil {
 		return err
 	}
 	drift := s.DriftAgainst(tips)
 
 	if asJSON {
-		return printLogJSON(s, index, cur, drift)
+		return printLogJSON(s, index, cur, drift, tips, subjects)
 	}
-	printLogTree(s, index, cur, drift)
+	printLogTree(s, index, cur, drift, tips, subjects)
 	return nil
 }
 
@@ -69,14 +74,14 @@ type logNode struct {
 	Children     []*logNode `json:"children"`
 }
 
-func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool) error {
+func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
 		node := &logNode{Name: name, Parent: parent, Current: name == cur, Children: []*logNode{}}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
 			node.NeedsRestack = drift[name]
-			if subject, ok := topSubject(s, b); ok {
+			if subject, ok := topSubject(b, tips, subjects); ok {
 				node.TopCommit = subject
 			}
 		}
@@ -96,7 +101,7 @@ func printLogJSON(s *stack.State, index map[string][]string, cur string, drift m
 
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
-func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool) {
+func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string) {
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
 		for _, child := range index[name] {
@@ -119,7 +124,7 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 			if drift[name] {
 				line += " " + paint("(needs restack)", ansiYellow)
 			}
-			if subject, ok := topSubject(s, b); ok {
+			if subject, ok := topSubject(b, tips, subjects); ok {
 				line += "  " + paint(subject, ansiDim)
 			}
 		}
@@ -128,12 +133,21 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 	printBranch(s.Trunk, 0)
 }
 
-// topSubject returns the subject of b's most recent commit relative to its
-// parent branch, and whether one was found.
-func topSubject(s *stack.State, b *stack.Branch) (string, bool) {
-	subjects, err := git.CommitSubjects(b.Parent, b.Name)
-	if err != nil || len(subjects) == 0 {
+// topSubject returns the subject of b's tip commit and whether one should be
+// shown, from the prefetched tip and subject maps (no per-branch git spawn). A
+// branch with no commits beyond its parent shows nothing — matching the old
+// per-branch `git log parent..branch`, which returned an empty range there.
+func topSubject(b *stack.Branch, tips, subjects map[string]string) (string, bool) {
+	tip, ok := tips[b.Name]
+	if !ok {
 		return "", false
 	}
-	return subjects[0], true
+	if parentTip, ok := tips[b.Parent]; ok && parentTip == tip {
+		return "", false
+	}
+	subject, ok := subjects[b.Name]
+	if !ok || subject == "" {
+		return "", false
+	}
+	return subject, true
 }

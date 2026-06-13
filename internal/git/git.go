@@ -151,6 +151,30 @@ func Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+// TipSubjects returns the subject line of every local branch's tip commit,
+// keyed by branch name, in a single git invocation — so a caller rendering a
+// whole forest (log) does one spawn instead of one `git log` per branch. A NUL
+// byte separates the refname from the subject so subjects containing spaces are
+// parsed unambiguously.
+func TipSubjects() (map[string]string, error) {
+	out, err := Run("for-each-ref", "--format=%(refname)%00%(contents:subject)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	subjects := map[string]string{}
+	if out == "" {
+		return subjects, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		ref, subject, ok := strings.Cut(line, "\x00")
+		if !ok {
+			continue
+		}
+		subjects[strings.TrimPrefix(ref, "refs/heads/")] = subject
+	}
+	return subjects, nil
+}
+
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
 	if err := validRefArg("branch", name); err != nil {
