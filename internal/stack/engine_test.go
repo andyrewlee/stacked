@@ -191,6 +191,11 @@ func TestFoldRollsBackParentWhenDeleteAndRestoreCheckoutFail(t *testing.T) {
 	if !errors.Is(err, deleteErr) {
 		t.Fatalf("Fold error = %v, want wrapped %v", err, deleteErr)
 	}
+	// The secondary restore failure must stay matchable with errors.Is (wrapped
+	// with %w via AlsoFailed), not merely rendered into the message with %v.
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Fold error = %v, want restore checkout error matchable with errors.Is", err)
+	}
 	if !strings.Contains(err.Error(), checkoutErr.Error()) {
 		t.Fatalf("Fold error = %v, want restore checkout failure", err)
 	}

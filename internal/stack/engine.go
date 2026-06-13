@@ -315,7 +315,7 @@ func Fold(env Env, s *State) (*OpResult, error) {
 			return nil, AlsoFailed(fmt.Errorf("deleting %q: %w", cur, err), fmt.Sprintf("roll back %q", parent), rollbackErr)
 		}
 		if restoreErr := g.Checkout(cur); restoreErr != nil {
-			return nil, fmt.Errorf("deleting %q: %w; rolled back %q but failed to restore %q: %v", cur, err, parent, cur, restoreErr)
+			return nil, AlsoFailed(fmt.Errorf("deleting %q: %w", cur, err), fmt.Sprintf("restore %q after rolling back %q", cur, parent), restoreErr)
 		}
 		return nil, fmt.Errorf("deleting %q: %w", cur, err)
 	}
