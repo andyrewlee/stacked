@@ -4,11 +4,12 @@ import "stacked/internal/stack"
 
 func init() {
 	register(&Command{
-		Name:    "restack",
-		Aliases: []string{"r"},
-		Summary: "Rebase the current branch and everything above it onto their parents",
-		Usage:   "st restack [--dry-run] [--json]",
-		Run:     runRestack,
+		Name:       "restack",
+		Aliases:    []string{"r"},
+		Summary:    "Rebase the current branch and everything above it onto their parents",
+		Usage:      "st restack [--dry-run] [--json]",
+		Run:        runRestack,
+		NewFlagSet: restackFlagSet,
 	})
 }
 

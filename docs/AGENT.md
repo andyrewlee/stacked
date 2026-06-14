@@ -109,5 +109,8 @@ message.
   reports the build.
 - `st help`, `st help <command>`, and `st version` accept `--json` and emit the
   same information as a machine-readable payload — the command list as
-  `{ "commands": [ { "name", "summary", "usage", "aliases" }, … ] }`.
+  `{ "commands": [ { "name", "summary", "usage", "aliases", "flags" }, … ] }`.
+  Each `flags` entry is `{ "name", "type": "bool"|"string", "default", "summary" }`
+  and lists *declared* flags, so `-m`, `--message`, and `--json` each appear
+  separately; positionals remain described only by the prose `usage`.
 - `st guide` (or `st guide --json`) prints the recommended end-to-end workflow.

@@ -7,11 +7,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "sync",
-		Aliases: []string{"s"},
-		Summary: "Fetch trunk, fast-forward it, restack everything, and prune merged branches",
-		Usage:   "st sync [--no-delete] [--remote <name>] [--dry-run] [--json]",
-		Run:     runSync,
+		Name:       "sync",
+		Aliases:    []string{"s"},
+		Summary:    "Fetch trunk, fast-forward it, restack everything, and prune merged branches",
+		Usage:      "st sync [--no-delete] [--remote <name>] [--dry-run] [--json]",
+		Run:        runSync,
+		NewFlagSet: syncFlagSet,
 	})
 }
 

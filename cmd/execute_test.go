@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -294,6 +295,78 @@ func TestRenderErrorConflictFields(t *testing.T) {
 	}
 	if env.Error.Branch != "feat-b" || env.Error.Onto != "feat-a" {
 		t.Errorf("branch/onto = %q/%q, want feat-b/feat-a", env.Error.Branch, env.Error.Onto)
+	}
+}
+
+// TestHelpReportsOnlyRealFlags asserts every flag help advertises for a command
+// is actually accepted by it, so the introspection flag sets in flagsets.go
+// cannot drift into listing a flag the command rejects.
+func TestHelpReportsOnlyRealFlags(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, c := range registry {
+		for _, f := range commandFlags(c) {
+			var err error
+			_ = captureStdout(t, func() { err = c.Run([]string{"--" + f.Name, "x"}) })
+			if err != nil && strings.Contains(err.Error(), "provided but not defined") {
+				t.Errorf("help lists flag --%s for %q but Run rejects it: %v", f.Name, c.Name, err)
+			}
+		}
+	}
+}
+
+// TestCommandFlagsMatchExpected pins each command's reported flag set to a
+// maintained table, so a change to flagsets.go (or a new command) that drifts the
+// help-reported flags fails loudly. TestHelpReportsOnlyRealFlags covers the
+// over-report direction (a listed flag the command rejects); this pins the set
+// itself. Every command also reports --json; completion has none.
+func TestCommandFlagsMatchExpected(t *testing.T) {
+	expected := map[string][]string{
+		"create":  {"a", "all", "json", "m", "message"},
+		"modify":  {"a", "all", "commit", "json", "m", "message"},
+		"delete":  {"f", "force", "json"},
+		"init":    {"json", "trunk"},
+		"track":   {"json", "parent"},
+		"submit":  {"dry-run", "json", "remote"},
+		"sync":    {"dry-run", "json", "no-delete", "remote"},
+		"restack": {"dry-run", "json"},
+		"squash":  {"json", "m", "message"},
+	}
+	for _, c := range registry {
+		got := make([]string, 0)
+		for _, f := range commandFlags(c) { // VisitAll order is lexicographical
+			got = append(got, f.Name)
+		}
+		want, ok := expected[c.Name]
+		if !ok {
+			want = []string{"json"} // every command without its own flag set has exactly --json
+			if c.Name == "completion" {
+				want = []string{} // completion declares no flags
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("commandFlags(%q) = %v, want %v (update flagsets.go or this table)", c.Name, got, want)
+		}
+	}
+}
+
+// TestHelpJSONIncludesFlags pins the structured flag list: help <cmd> --json
+// reports each declared flag with its type.
+func TestHelpJSONIncludesFlags(t *testing.T) {
+	out := captureStdout(t, func() {
+		withArgs(t, []string{"help", "submit", "--json"}, func() { _ = Execute() })
+	})
+	var info commandInfo
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		t.Fatalf("help submit --json not parseable: %v\n%s", err, out)
+	}
+	got := map[string]string{}
+	for _, f := range info.Flags {
+		got[f.Name] = f.Type
+	}
+	for name, typ := range map[string]string{"remote": "string", "dry-run": "bool", "json": "bool"} {
+		if got[name] != typ {
+			t.Errorf("submit flag %q type = %q, want %q (flags: %+v)", name, got[name], typ, info.Flags)
+		}
 	}
 }
 
