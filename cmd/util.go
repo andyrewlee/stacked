@@ -50,6 +50,29 @@ func rejectArgs(command string, args []string) error {
 	return fmt.Errorf("%s takes no positional arguments, got %q", command, args[0])
 }
 
+// usageLine returns a command's "usage: ..." line, derived from its single
+// registered Command.Usage so the printed and registered usage cannot drift.
+func usageLine(name string) string {
+	if c, ok := byName[name]; ok {
+		return "usage: " + c.Usage
+	}
+	return "usage: st " + name
+}
+
+// newFlagSet builds a command's flag set: a ContinueOnError set whose Usage prints
+// the registry-derived usage line, with the standard --json boolean already wired
+// in. The command adds its own flags afterward. This makes "every command speaks
+// --json" true by construction and removes the per-command usage-string copy that
+// could drift from the registered Usage. (completion has no --json and builds its
+// flag set directly; commands that show flag defaults override Usage to add
+// fs.PrintDefaults after the derived line.)
+func newFlagSet(name string, asJSON *bool) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprintln(fs.Output(), usageLine(name)) }
+	fs.BoolVar(asJSON, "json", false, "output the result as JSON")
+	return fs
+}
+
 // parseCount parses a navigation command's arguments with fs and returns its
 // optional positional step count (default 1). It is the single implementation
 // of the count contract: at most one positional, an integer, at least 1.

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/git"
@@ -21,10 +20,8 @@ func init() {
 // links, and checks out the resulting branch. It stops at a branch point with
 // multiple children.
 func runUp(args []string) error {
-	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st up [n] [--json]") }
+	fs := newFlagSet("up", &asJSON)
 	n, err := parseCount(fs, args, "up")
 	if err != nil {
 		return err

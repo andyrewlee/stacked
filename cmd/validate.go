@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 	"sort"
 	"strings"
@@ -26,12 +25,8 @@ func init() {
 // cycles) as well as warnings (branches that have drifted and need a restack).
 // It exits non-zero when any problem is found so it is usable in scripts.
 func runValidate(args []string) error {
-	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st validate [--json]")
-	}
+	fs := newFlagSet("validate", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

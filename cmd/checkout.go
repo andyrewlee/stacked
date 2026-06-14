@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"sort"
 
@@ -23,10 +22,8 @@ func init() {
 // runCheckout checks out a tracked branch (or the trunk) by name, or, when no
 // name is given, lists the trunk and all tracked branches.
 func runCheckout(args []string) error {
-	fs := flag.NewFlagSet("checkout", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st checkout [name] [--json]") }
+	fs := newFlagSet("checkout", &asJSON)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}

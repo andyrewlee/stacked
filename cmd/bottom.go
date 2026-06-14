@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/git"
@@ -21,10 +20,8 @@ func init() {
 // branch whose parent is the trunk). If the current branch is the trunk, there
 // is nothing below it and a notice is printed instead.
 func runBottom(args []string) error {
-	fs := flag.NewFlagSet("bottom", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st bottom [--json]") }
+	fs := newFlagSet("bottom", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 	"sort"
 
@@ -24,10 +23,8 @@ func init() {
 // parent cycles by re-parenting onto the trunk. Re-parented branches may then
 // need `st restack`.
 func runRepair(args []string) error {
-	fs := flag.NewFlagSet("repair", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st repair [--json]") }
+	fs := newFlagSet("repair", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

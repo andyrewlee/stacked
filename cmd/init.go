@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"strings"
 
@@ -23,13 +22,12 @@ func init() {
 // the trunk branch from the --trunk flag, falling back to the remote default
 // branch, the current branch, and finally "main".
 func runInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("init", &asJSON)
 	var trunk string
 	fs.StringVar(&trunk, "trunk", "", "name of the trunk branch (default: detected)")
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st init [--trunk <name>] [--json]")
+		fmt.Fprintln(fs.Output(), usageLine("init"))
 		fs.PrintDefaults()
 	}
 	if err := parseFlagSet(fs, args); err != nil {

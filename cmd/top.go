@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/git"
@@ -21,10 +20,8 @@ func init() {
 // reaches the leaf of the stack, then checks that leaf out. A branch point (more
 // than one child) stops the walk and directs the user to st checkout.
 func runTop(args []string) error {
-	fs := flag.NewFlagSet("top", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st top [--json]") }
+	fs := newFlagSet("top", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

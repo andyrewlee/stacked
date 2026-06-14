@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -18,9 +17,10 @@ func init() {
 }
 
 func runModify(args []string) error {
-	fs := flag.NewFlagSet("modify", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("modify", &asJSON)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st modify [-m <msg>] [-a|--all] [--commit] [--json]")
+		fmt.Fprintln(fs.Output(), usageLine("modify"))
 		fs.PrintDefaults()
 	}
 	var message string
@@ -33,8 +33,6 @@ func runModify(args []string) error {
 	fs.BoolVar(&all, "all", true, "stage all tracked changes before amending/committing")
 	var commit bool
 	fs.BoolVar(&commit, "commit", false, "create a new commit instead of amending the tip")
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

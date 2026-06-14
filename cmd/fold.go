@@ -1,11 +1,6 @@
 package cmd
 
-import (
-	"flag"
-	"fmt"
-
-	"stacked/internal/stack"
-)
+import "stacked/internal/stack"
 
 func init() {
 	register(&Command{
@@ -17,10 +12,8 @@ func init() {
 }
 
 func runFold(args []string) error {
-	fs := flag.NewFlagSet("fold", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st fold [--json]") }
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
+	fs := newFlagSet("fold", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

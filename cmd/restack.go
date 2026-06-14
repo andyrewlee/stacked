@@ -1,11 +1,6 @@
 package cmd
 
-import (
-	"flag"
-	"fmt"
-
-	"stacked/internal/stack"
-)
+import "stacked/internal/stack"
 
 func init() {
 	register(&Command{
@@ -18,12 +13,10 @@ func init() {
 }
 
 func runRestack(args []string) error {
-	fs := flag.NewFlagSet("restack", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
+	fs := newFlagSet("restack", &asJSON)
 	var dryRun bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show what would be restacked without changing anything")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st restack [--dry-run] [--json]") }
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

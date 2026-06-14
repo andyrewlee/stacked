@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -17,13 +16,12 @@ func init() {
 }
 
 func runUntrack(args []string) error {
-	fs := flag.NewFlagSet("untrack", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("untrack", &asJSON)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st untrack [name] [--json]")
+		fmt.Fprintln(fs.Output(), usageLine("untrack"))
 		fs.PrintDefaults()
 	}
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}

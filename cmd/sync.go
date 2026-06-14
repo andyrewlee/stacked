@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"flag"
-	"fmt"
-
 	"stacked/internal/git"
 	"stacked/internal/stack"
 )
@@ -19,18 +16,14 @@ func init() {
 }
 
 func runSync(args []string) error {
-	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("sync", &asJSON)
 	var noDelete bool
 	fs.BoolVar(&noDelete, "no-delete", false, "do not delete merged branches")
 	remote := "origin"
 	fs.StringVar(&remote, "remote", "origin", "remote to fetch and fast-forward from")
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	var dryRun bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st sync [--no-delete] [--remote <name>] [--dry-run] [--json]")
-	}
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

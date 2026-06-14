@@ -1,10 +1,5 @@
 package cmd
 
-import (
-	"flag"
-	"fmt"
-)
-
 func init() {
 	register(&Command{
 		Name:    "guide",
@@ -30,10 +25,8 @@ var guideSteps = []string{
 
 // runGuide prints the recommended workflow for driving st (handy for agents).
 func runGuide(args []string) error {
-	fs := flag.NewFlagSet("guide", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the steps as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st guide [--json]") }
+	fs := newFlagSet("guide", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
