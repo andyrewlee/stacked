@@ -29,12 +29,7 @@ func runBottom(args []string) error {
 		return err
 	}
 
-	s, err := loadState()
-	if err != nil {
-		return err
-	}
-
-	cur, err := currentBranch()
+	s, cur, err := loadStateAndCurrent()
 	if err != nil {
 		return err
 	}
