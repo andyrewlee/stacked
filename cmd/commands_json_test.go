@@ -605,6 +605,44 @@ func TestJSONStackEnvUsesQuietGit(t *testing.T) {
 	}
 }
 
+// TestStatusJSONSurfacesConflict drives a restack into a conflict and asserts
+// status --json reports the paused rebase (branch + conflicted files) instead of
+// failing on the detached HEAD a rebase leaves behind.
+func TestStatusJSONSurfacesConflict(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	mustCreate(t, "feat-b", "f.txt", "A\nB\n", "b")
+	mustCheckout(t, "feat-a")
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatal("expected a conflict restacking feat-b onto the amended feat-a")
+	}
+
+	out := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json during a conflict: %v", err)
+		}
+	})
+	var st struct {
+		RebaseInProgress bool     `json:"rebaseInProgress"`
+		RebaseBranch     string   `json:"rebaseBranch"`
+		ConflictedFiles  []string `json:"conflictedFiles"`
+	}
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatalf("status --json not parseable: %v\n%s", err, out)
+	}
+	if !st.RebaseInProgress {
+		t.Error("status should report rebaseInProgress during a conflict")
+	}
+	if st.RebaseBranch != "feat-b" {
+		t.Errorf("rebaseBranch = %q, want feat-b", st.RebaseBranch)
+	}
+	if len(st.ConflictedFiles) == 0 {
+		t.Error("status should list the conflicted files during a conflict")
+	}
+}
+
 // --- AGENT.md result-shape contract ----------------------------------------
 //
 // docs/AGENT.md is the machine interface agents script against. There is
@@ -722,6 +760,19 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 	collect("bottom --json", func() error { return runBottom([]string{"--json"}) })
 	collect("up --json", func() error { return runUp([]string{"--json"}) })
 	collect("down --json", func() error { return runDown([]string{"--json"}) })
+
+	// Drive status into a paused rebase so its omitempty conflict keys
+	// (rebaseInProgress/rebaseBranch/conflictedFiles) are emitted and checked too.
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "conf-a", "f.txt", "A\n", "a")
+	mustCreate(t, "conf-b", "f.txt", "A\nB\n", "b")
+	mustCheckout(t, "conf-a")
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatal("expected a conflict restacking conf-b onto the amended conf-a")
+	}
+	collect("status --json (conflict)", func() error { return runStatus([]string{"--json"}) })
 
 	for k := range keys {
 		if !documentsKey(doc, k) {
