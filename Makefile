@@ -5,6 +5,11 @@ LDFLAGS := -X stacked/cmd.version=$(VERSION)
 # Coverage gate threshold (percent). Overridable: `make cover COVERAGE_MIN=80`.
 COVERAGE_MIN ?= 75
 
+# golangci-lint is an external binary, never a go.mod dependency. v2 is required:
+# .golangci.yml uses the v2 schema and its bundled gofumpt formatter. Keep this
+# in sync with the version pinned in .github/workflows/ci.yml.
+GOLANGCI_VERSION := v2.12.2
+
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
@@ -63,6 +68,16 @@ golden:
 	go test ./cmd -run Golden -update
 
 lint:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint not found on PATH."; \
+		echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
+		exit 1; \
+	}
+	@golangci-lint version 2>&1 | grep -qE '(version |v)2\.' || { \
+		echo "golangci-lint v2 required (have: $$(golangci-lint version 2>&1 | head -1))."; \
+		echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
+		exit 1; \
+	}
 	golangci-lint run ./...
 
 # Fast inner loop for engine work: the stack engine package (fake-git model tests
