@@ -3,6 +3,7 @@ package stack
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,4 +91,63 @@ func acquireReclaimGuard(dir string) (func(), bool) {
 		}
 	}
 	return nil, false
+}
+
+// acquireExclLock takes an exclusive O_CREATE|O_EXCL lock file in dir — the
+// serialization primitive for platforms without flock — and returns a release
+// that removes the file only while it still holds this process's token. A held
+// lock is reclaimed only after proving the recorded owner is gone (or a
+// malformed lock is abandoned), guarded by lock.reclaim so two reclaimers cannot
+// race. It carries no build tag so the composed path is exercised by the unix
+// test suite, even though lock_other.go's Lock wrapper only ships off-flock.
+func acquireExclLock(dir string) (func(), error) {
+	busy := errors.New("another st command is running in this repository")
+	path := filepath.Join(dir, "lock.excl")
+	token := newLockToken()
+	contents := lockFileContent(os.Getpid(), time.Now(), token)
+	// The reclaim guard, once taken, is released however we leave the function.
+	var guardRelease func()
+	defer func() {
+		if guardRelease != nil {
+			guardRelease()
+		}
+	}()
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if _, err := f.WriteString(contents); err != nil {
+				_ = f.Close()
+				_ = os.Remove(path)
+				return nil, fmt.Errorf("write lock file: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				_ = os.Remove(path)
+				return nil, fmt.Errorf("close lock file: %w", err)
+			}
+			return func() {
+				// Best-effort cleanup; remove only the lock this process owns.
+				_ = removeLockFileIfContent(path, contents)
+			}, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("open lock file: %w", err)
+		}
+		if attempt > 0 {
+			return nil, busy
+		}
+		gr, ok := acquireReclaimGuard(dir)
+		if !ok {
+			return nil, busy
+		}
+		guardRelease = gr
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
+			!removeLockFileIfContent(path, string(existing)) {
+			return nil, busy
+		}
+	}
+	return nil, busy
 }
