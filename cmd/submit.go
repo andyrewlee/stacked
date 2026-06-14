@@ -27,6 +27,9 @@ type submitResult struct {
 	Pushed  []string `json:"pushed"`
 	RepoURL string   `json:"repoURL,omitempty"`
 	Summary string   `json:"summary,omitempty"`
+	// Failed names the branch whose push failed; set only on a partial failure,
+	// alongside the branches that were pushed before it (in Pushed).
+	Failed string `json:"failed,omitempty"`
 }
 
 // runSubmit pushes every branch on the current stack — from the bottom branch
@@ -96,21 +99,31 @@ func runSubmit(args []string) error {
 	}
 	stackBranches = append(stackBranches, cur)
 
+	pushed := []string{}
 	for _, name := range stackBranches {
-		if !dryRun {
-			if err := git.PushRemote(remote, name, true); err != nil {
-				return fmt.Errorf("pushing %q: %w", name, err)
-			}
-		}
-		if !asJSON {
-			if dryRun {
+		if dryRun {
+			pushed = append(pushed, name)
+			if !asJSON {
 				out("would push %s\n", name)
-			} else {
-				out("pushed %s\n", name)
 			}
+			continue
+		}
+		if err := git.PushRemote(remote, name, true); err != nil {
+			// Earlier branches were already pushed to the remote. In --json mode
+			// the per-branch lines are suppressed, so emit a partial result (the
+			// branches pushed so far plus the one that failed) before returning,
+			// so a machine consumer can see the partial state — the non-zero exit
+			// and error envelope on stderr still signal the failure.
+			if asJSON {
+				_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
+			}
+			return fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(stackBranches), err)
+		}
+		pushed = append(pushed, name)
+		if !asJSON {
+			out("pushed %s\n", name)
 		}
 	}
-	pushed := stackBranches
 
 	// stacked never opens PRs (it is login-free). Print the repository's web URL
 	// so the user can open pull requests on their host by hand.
