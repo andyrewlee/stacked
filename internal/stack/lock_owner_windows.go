@@ -5,8 +5,6 @@ package stack
 import (
 	"errors"
 	"os"
-	"strconv"
-	"strings"
 	"syscall"
 )
 
@@ -30,13 +28,4 @@ func lockOwnerIsGone(content string) bool {
 		return false
 	}
 	return gone
-}
-
-func lockOwnerPID(content string) (int, bool) {
-	fields := strings.Fields(content)
-	if len(fields) == 0 {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(fields[0])
-	return pid, err == nil && pid > 0
 }

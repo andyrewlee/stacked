@@ -38,13 +38,21 @@ func removeLockFileIfContent(path, want string) bool {
 	return os.Remove(path) == nil
 }
 
-func lockContentHasOwner(content string) bool {
+// lockOwnerPID parses the holder pid recorded on a lock file's first line,
+// reporting ok=false for a malformed or non-positive pid. It is the single
+// parser shared by lockContentHasOwner and every platform's lockOwnerIsGone.
+func lockOwnerPID(content string) (int, bool) {
 	fields := strings.Fields(content)
 	if len(fields) == 0 {
-		return false
+		return 0, false
 	}
 	pid, err := strconv.Atoi(fields[0])
-	return err == nil && pid > 0
+	return pid, err == nil && pid > 0
+}
+
+func lockContentHasOwner(content string) bool {
+	_, ok := lockOwnerPID(content)
+	return ok
 }
 
 func malformedLockIsAbandoned(path, content string, now time.Time) bool {
