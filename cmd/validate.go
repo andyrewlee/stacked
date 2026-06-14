@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"stacked/internal/git"
 	"stacked/internal/stack"
@@ -79,7 +78,7 @@ func runValidate(args []string) error {
 			problems = append(problems, fmt.Sprintf("%s has parent %q whose git branch is missing", name, b.Parent))
 		}
 
-		if path := cyclePath(s, name); path != "" {
+		if path := stack.CyclePath(s, name); path != "" {
 			problems = append(problems, fmt.Sprintf("%s is part of a parent cycle: %s", name, path))
 			continue // drift would be unreliable on a cycle
 		}
@@ -127,25 +126,4 @@ func runValidate(args []string) error {
 		return fmt.Errorf("validate found %d problem(s)", len(problems))
 	}
 	return nil
-}
-
-// cyclePath walks the parent chain from name and returns a human-readable path
-// (e.g. "a -> b -> a") if a cycle is reached before the trunk, or "" if the
-// chain is sound or ends at an untracked parent (reported separately).
-func cyclePath(s *stack.State, name string) string {
-	seen := map[string]bool{name: true}
-	path := []string{name}
-	cur := name
-	for {
-		b, ok := s.Get(cur)
-		if !ok || b.Parent == s.Trunk {
-			return ""
-		}
-		path = append(path, b.Parent)
-		if seen[b.Parent] {
-			return strings.Join(path, " -> ")
-		}
-		seen[b.Parent] = true
-		cur = b.Parent
-	}
 }
