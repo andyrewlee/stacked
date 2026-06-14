@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -100,7 +101,12 @@ func TestSnapshotUndoCapturesViaPort(t *testing.T) {
 	if !reflect.DeepEqual(entry.Refs, wantRefs) {
 		t.Fatalf("refs = %v, want %v", entry.Refs, wantRefs)
 	}
-	wantBranches, _ := f.LocalBranches()
+	tips, _ := f.Tips()
+	wantBranches := make([]string, 0, len(tips))
+	for name := range tips {
+		wantBranches = append(wantBranches, name)
+	}
+	sort.Strings(wantBranches)
 	if !reflect.DeepEqual(entry.LocalBranches, wantBranches) {
 		t.Fatalf("localBranches = %v, want %v", entry.LocalBranches, wantBranches)
 	}

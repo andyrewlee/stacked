@@ -266,12 +266,12 @@ func createdBranchesSince(g Git, entry *UndoEntry) []string {
 	for _, name := range entry.LocalBranches {
 		existed[name] = true
 	}
-	branches, err := g.LocalBranches()
+	tips, err := g.Tips()
 	if err != nil {
 		return nil
 	}
 	var created []string
-	for _, name := range branches {
+	for name := range tips {
 		if !existed[name] {
 			created = append(created, name)
 		}
