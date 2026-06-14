@@ -34,25 +34,34 @@ func TestParseArgs(t *testing.T) {
 		in       []string
 		want     result
 		wantArgs []string
+		wantErr  string
 	}{
-		{"flag before positional", []string{"-m", "msg", "feat"}, result{message: "msg"}, []string{"feat"}},
-		{"value flag after positional", []string{"feat", "-m", "msg"}, result{message: "msg"}, []string{"feat"}},
-		{"long value flag after positional", []string{"feat", "--message", "msg"}, result{message: "msg"}, []string{"feat"}},
-		{"bool flag after positional", []string{"feat", "-a"}, result{all: true}, []string{"feat"}},
-		{"bool flag before positional", []string{"-a", "feat"}, result{all: true}, []string{"feat"}},
-		{"equals form keeps value", []string{"feat", "-m=msg"}, result{message: "msg"}, []string{"feat"}},
-		{"value flag does not swallow positional", []string{"feat", "-m", "msg", "bar"}, result{message: "msg"}, []string{"feat", "bar"}},
-		{"double dash escapes a flag-like positional", []string{"--", "-m"}, result{}, []string{"-m"}},
-		{"only bool flags", []string{"-a", "--commit"}, result{all: true, commit: true}, nil},
-		{"negative number is positional", []string{"-3"}, result{}, []string{"-3"}},
-		{"no args", nil, result{}, nil},
+		{"flag before positional", []string{"-m", "msg", "feat"}, result{message: "msg"}, []string{"feat"}, ""},
+		{"value flag after positional", []string{"feat", "-m", "msg"}, result{message: "msg"}, []string{"feat"}, ""},
+		{"long value flag after positional", []string{"feat", "--message", "msg"}, result{message: "msg"}, []string{"feat"}, ""},
+		{"bool flag after positional", []string{"feat", "-a"}, result{all: true}, []string{"feat"}, ""},
+		{"bool flag before positional", []string{"-a", "feat"}, result{all: true}, []string{"feat"}, ""},
+		{"equals form keeps value", []string{"feat", "-m=msg"}, result{message: "msg"}, []string{"feat"}, ""},
+		{"value flag does not swallow positional", []string{"feat", "-m", "msg", "bar"}, result{message: "msg"}, []string{"feat", "bar"}, ""},
+		{"double dash escapes a flag-like positional", []string{"--", "-m"}, result{}, []string{"-m"}, ""},
+		{"only bool flags", []string{"-a", "--commit"}, result{all: true, commit: true}, nil, ""},
+		{"negative number is positional", []string{"-3"}, result{}, []string{"-3"}, ""},
+		{"missing value flag after positional", []string{"feat", "-m"}, result{}, nil, "flag needs an argument"},
+		{"no args", nil, result{}, nil, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var r result
 			fs := newFS(&r)
-			if err := parseArgs(fs, tt.in); err != nil {
+			err := parseArgs(fs, tt.in)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseArgs(%q) error = %v, want containing %q", tt.in, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("parseArgs(%q) error: %v", tt.in, err)
 			}
 			if r != tt.want {

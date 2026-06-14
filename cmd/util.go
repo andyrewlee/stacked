@@ -269,7 +269,10 @@ func parseArgs(fs *flag.FlagSet, args []string) error {
 			flags = append(flags, a)
 			// If this flag expects a separate value (not boolean, no "="),
 			// pull the next token along as its value.
-			if !strings.Contains(a, "=") && !isBoolFlag(fs, a) && i+1 < len(args) {
+			if !strings.Contains(a, "=") && !isBoolFlag(fs, a) {
+				if i+1 >= len(args) {
+					return parseFlagSet(fs, flags)
+				}
 				i++
 				flags = append(flags, args[i])
 			}
