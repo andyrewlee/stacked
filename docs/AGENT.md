@@ -46,14 +46,16 @@ the result, stderr for the error envelope, and the exit code for the category.
 
 ### Result shapes
 
-- **Stack-mutating commands** (`create`, `modify`, `restack`, `fold`, `squash`,
-  `onto`, `delete`, `track`, `untrack`, `rename`) share one shape:
+- **Stack-mutating commands** (`create`, `modify`, `restack`, `continue`, `fold`,
+  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`) share one shape:
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
   `branch`, `restacked`, `deleted`, `notes`, and `dryRun` are all `omitempty` —
   absent when empty or false. Preview-capable commands (`restack`, `sync`) add
-  `"dryRun": true` under `--dry-run`.
+  `"dryRun": true` under `--dry-run`. `continue` resumes an interrupted restack,
+  emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
+  `notes` entry naming the branch whose conflict was just completed.
 - **`log --json`** — a recursive tree rooted at the trunk:
   ```json
   { "name": "main", "current": false, "needsRestack": false,
@@ -66,9 +68,12 @@ the result, stderr for the error envelope, and the exit code for the category.
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point)
 - **`submit --json`** — one shape for every outcome:
-  `{ "remote", "dryRun", "pushed": [], "repoURL", "summary" }` (`repoURL` and
-  `summary` are `omitempty`; from trunk, `pushed` is empty and `summary`
-  explains why).
+  `{ "remote", "dryRun", "pushed": [], "repoURL", "summary", "failed" }`
+  (`repoURL`, `summary`, and `failed` are `omitempty`; from trunk, `pushed` is
+  empty and `summary` explains why). On a partial push failure the result is the
+  same shape carrying `{ "remote", "dryRun", "pushed", "failed" }`: `failed` names the
+  branch whose push failed, the branches in `pushed` were already pushed to the
+  remote, and the process still exits non-zero with the error envelope on stderr.
 - **operational** (`init`, `abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
 
 ## Idempotency & safety

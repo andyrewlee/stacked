@@ -15,6 +15,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   envelope on stderr. Documented in `docs/AGENT.md`.
 - **Semantic exit codes**: `0` ok, `1` usage/generic, `2` conflict (run
   `st continue`), `3` not initialized, `4` dirty working tree.
+- `submit --json` reports a partial-push failure through a `failed` field naming
+  the branch whose push failed (the branches in `pushed` were already pushed);
+  documented in `docs/AGENT.md`.
 - `st help <command>` prints a command's summary, usage, and aliases.
 - Conflict and sync logic is exercised by millisecond fake-git tests, including a
   property/invariant model test over thousands of random operation sequences.
