@@ -37,12 +37,17 @@ writes a structured envelope to **stderr** and the process still exits with the
 code above:
 
 ```json
-{ "error": { "code": "conflict", "message": "rebasing \"feat-b\" ... : st continue" } }
+{ "error": { "code": "conflict",
+             "message": "rebasing \"feat-b\" onto \"feat-a\": rebase conflict …",
+             "branch": "feat-b", "onto": "feat-a" } }
 ```
 
 `error.code` is one of: `error` (1), `conflict` (2), `not_initialized` (3),
 `dirty` (4), `internal` (70, a recovered panic). So an agent can read stdout for
 the result, stderr for the error envelope, and the exit code for the category.
+On a `conflict` the envelope also carries `branch` (the branch whose rebase
+stopped) and `onto` (its parent), so you can re-orient without parsing the
+message.
 
 ### Result shapes
 

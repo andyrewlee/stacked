@@ -31,6 +31,7 @@ type fakeGit struct {
 	// RebaseContinue.
 	conflictNext  map[string]bool
 	rebaseActive  bool
+	rebaseRestall bool // when set, RebaseContinue fails and leaves the rebase paused
 	rebaseBranch  string
 	rebaseNewBase string
 	rebaseOldBase string
@@ -336,6 +337,9 @@ func (f *fakeGit) AncestorSet(ref string) (map[string]bool, error) {
 func (f *fakeGit) RebaseContinue() error {
 	if !f.rebaseActive {
 		return fmt.Errorf("no rebase in progress")
+	}
+	if f.rebaseRestall {
+		return fmt.Errorf("rebase still has conflicts") // re-stall: leaves rebaseActive set
 	}
 	branch, newBase, oldBase := f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase
 	delete(f.conflictNext, branch)

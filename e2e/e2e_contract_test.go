@@ -172,7 +172,22 @@ func TestExitCodeContract(t *testing.T) {
 		r.create("feat-b", "f.txt", "A\nB\n", "b")
 		r.stOK("checkout", "feat-a")
 		r.writeFile("f.txt", "X\n")
-		wantExit(t, r.st("modify", "-a"), 2)
+		res := r.st("modify", "-a", "--json")
+		wantExit(t, res, 2)
+		// The conflict envelope names the branch (and parent) it stopped on, so
+		// an agent can re-orient without parsing the message.
+		var env struct {
+			Error struct{ Code, Branch, Onto string }
+		}
+		if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
+			t.Fatalf("conflict --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
+		}
+		if env.Error.Code != "conflict" {
+			t.Errorf("conflict code = %q, want conflict", env.Error.Code)
+		}
+		if env.Error.Branch != "feat-b" {
+			t.Errorf("conflict branch = %q, want feat-b", env.Error.Branch)
+		}
 	})
 	t.Run("3_not_initialized", func(t *testing.T) {
 		r := newRepo(t)

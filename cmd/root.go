@@ -340,11 +340,19 @@ func errorCodeSummary() string {
 // --json mode, or "st: <err>" otherwise.
 func renderError(err error, asJSON bool) {
 	if asJSON {
+		obj := map[string]any{"code": errorCode(err), "message": err.Error()}
+		// A rebase conflict carries the branch (and parent) it stopped on; surface
+		// them as structured fields so an agent need not parse the message.
+		var ce *stack.ConflictError
+		if errors.As(err, &ce) {
+			obj["branch"] = ce.Branch
+			if ce.Onto != "" {
+				obj["onto"] = ce.Onto
+			}
+		}
 		enc := json.NewEncoder(os.Stderr)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(map[string]any{
-			"error": map[string]string{"code": errorCode(err), "message": err.Error()},
-		})
+		_ = enc.Encode(map[string]any{"error": obj})
 		return
 	}
 	fmt.Fprintf(os.Stderr, "st: %s\n", err)

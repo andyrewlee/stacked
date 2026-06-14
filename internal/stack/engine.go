@@ -29,6 +29,28 @@ var (
 	ErrConflict = errors.New("rebase conflict — resolve the conflicts, stage them with git add, then run: st continue")
 )
 
+// ConflictError reports a rebase that stopped on a conflict, naming the branch
+// being rebased and the parent it was moving onto. It Unwraps to ErrConflict, so
+// errors.Is(err, ErrConflict) — and the exit-2 / "conflict" mappings — still
+// hold, while errors.As lets the CLI surface Branch and Onto as structured JSON
+// fields instead of leaving them buried in the message prose.
+type ConflictError struct {
+	Action string // the verb, e.g. "rebasing" or "moving"
+	Branch string // the branch whose rebase stopped
+	Onto   string // the parent it was being rebased onto
+}
+
+func (e *ConflictError) Error() string {
+	// Onto is empty only on the rare re-stall of an untracked branch; drop the
+	// "onto …" clause then rather than render an empty quoted parent.
+	if e.Onto == "" {
+		return fmt.Sprintf("%s %q: %s", e.Action, e.Branch, ErrConflict.Error())
+	}
+	return fmt.Sprintf("%s %q onto %q: %s", e.Action, e.Branch, e.Onto, ErrConflict.Error())
+}
+
+func (e *ConflictError) Unwrap() error { return ErrConflict }
+
 // AlsoFailed joins an operation error with the error of a follow-up
 // recovery/rollback step that also failed, keeping both matchable with
 // errors.Is/errors.As: "<primary>; additionally failed to <what>: <secondary>".
@@ -445,13 +467,13 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 					// Neither persisting nor aborting worked: the rebase is still
 					// paused, so keep ErrConflict (recovery via st continue/abort)
 					// and surface both failures.
-					return nil, AlsoFailed(AlsoFailed(fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict), "record pending reparent", saveErr), "abort the in-progress rebase", abortErr)
+					return nil, AlsoFailed(AlsoFailed(&ConflictError{Action: "moving", Branch: cur, Onto: target}, "record pending reparent", saveErr), "abort the in-progress rebase", abortErr)
 				}
 				// The rebase was aborted and nothing changed, so do not wrap
 				// ErrConflict — there is nothing to continue.
 				return nil, fmt.Errorf("moving %q onto %q: recording the reparent failed, so the rebase was aborted: %w", cur, target, saveErr)
 			}
-			return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, ErrConflict)
+			return nil, &ConflictError{Action: "moving", Branch: cur, Onto: target}
 		}
 		if progressErr != nil {
 			return nil, fmt.Errorf("checking rebase state after moving %q onto %q failed: %v (original error: %w)", cur, target, progressErr, err)
@@ -701,6 +723,18 @@ func Continue(env Env, s *State) (*OpResult, error) {
 		conflicted = s.PendingReparent.Branch
 	}
 	if err := g.RebaseContinue(); err != nil {
+		// Surface the branch the rebase re-stalled on as structured fields, like
+		// the other conflict paths (RestackBranch/Onto), so a `st continue --json`
+		// that re-stalls carries branch/onto instead of only the prose message.
+		if conflicted != "" {
+			onto := ""
+			if pending := s.PendingReparent; pending != nil && pending.Branch == conflicted {
+				onto = pending.Parent // an Onto-originated reparent: report the intended target, not the old parent
+			} else if b, ok := s.Get(conflicted); ok {
+				onto = b.Parent
+			}
+			return nil, &ConflictError{Action: "continuing", Branch: conflicted, Onto: onto}
+		}
 		return nil, fmt.Errorf("rebase did not complete: %w", ErrConflict)
 	}
 

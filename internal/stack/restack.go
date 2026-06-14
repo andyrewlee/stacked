@@ -51,7 +51,7 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	if err := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); err != nil {
 		inProgress, progressErr := env.Git.RebaseInProgress()
 		if progressErr == nil && inProgress {
-			return false, fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, ErrConflict)
+			return false, &ConflictError{Action: "rebasing", Branch: name, Onto: b.Parent}
 		}
 		if startErr == nil {
 			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
