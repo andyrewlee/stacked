@@ -416,6 +416,19 @@ func TestExitCodeAndErrorCodeMapping(t *testing.T) {
 			t.Errorf("errorCode(%v) = %q, want %q", c.err, got, c.json)
 		}
 	}
+
+	// st guide advertises these same codes via errorCodeSummary; assert each
+	// table name actually appears in the guide text so the two cannot drift.
+	guideText := captureStdout(t, func() { _ = runGuide(nil) })
+	for _, c := range errorClasses {
+		// Assert the code=name pair errorCodeSummary() renders, not the bare name:
+		// the word "conflict" already appears elsewhere in the guide, so a bare-name
+		// check would not catch the conflict row drifting from the table.
+		want := fmt.Sprintf("%d=%s", c.code, c.name)
+		if !strings.Contains(guideText, want) {
+			t.Errorf("st guide text missing error code %q:\n%s", want, guideText)
+		}
+	}
 }
 
 func TestJSONRequested(t *testing.T) {

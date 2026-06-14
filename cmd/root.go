@@ -283,33 +283,50 @@ func editDistance(a, b string) int {
 	return prev[len(rb)]
 }
 
+// errorClasses is the single source of truth for the semantic error sentinels:
+// their stable exit code and short machine name. exitCode, errorCode, and the
+// codes st guide advertises all derive from it, so the three cannot drift. The
+// generic default (1, "error") and the recovered-panic case (exitInternal,
+// "internal") are explicit special cases, not rows.
+var errorClasses = []struct {
+	err  error
+	code int
+	name string
+}{
+	{stack.ErrConflict, 2, "conflict"},
+	{stack.ErrNotInitialized, 3, "not_initialized"},
+	{stack.ErrDirty, 4, "dirty"},
+}
+
 // exitCode maps an error to a stable exit status so agents can branch on the
 // category without parsing messages.
 func exitCode(err error) int {
-	switch {
-	case errors.Is(err, stack.ErrNotInitialized):
-		return 3
-	case errors.Is(err, stack.ErrConflict):
-		return 2
-	case errors.Is(err, stack.ErrDirty):
-		return 4
-	default:
-		return 1
+	for _, c := range errorClasses {
+		if errors.Is(err, c.err) {
+			return c.code
+		}
 	}
+	return 1
 }
 
 // errorCode returns the short machine code for an error, used in --json output.
 func errorCode(err error) string {
-	switch {
-	case errors.Is(err, stack.ErrNotInitialized):
-		return "not_initialized"
-	case errors.Is(err, stack.ErrConflict):
-		return "conflict"
-	case errors.Is(err, stack.ErrDirty):
-		return "dirty"
-	default:
-		return "error"
+	for _, c := range errorClasses {
+		if errors.Is(err, c.err) {
+			return c.name
+		}
 	}
+	return "error"
+}
+
+// errorCodeSummary renders the semantic exit codes as "2=conflict, 3=...,…" for
+// st guide, so the guide text and the real codes stay in lockstep.
+func errorCodeSummary() string {
+	parts := make([]string, len(errorClasses))
+	for i, c := range errorClasses {
+		parts[i] = fmt.Sprintf("%d=%s", c.code, c.name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // renderError writes a command failure: a structured JSON envelope on stderr in
