@@ -74,7 +74,10 @@ the result, stderr for the error envelope, and the exit code for the category.
   same shape carrying `{ "remote", "dryRun", "pushed", "failed" }`: `failed` names the
   branch whose push failed, the branches in `pushed` were already pushed to the
   remote, and the process still exits non-zero with the error envelope on stderr.
-- **operational** (`init`, `abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
+- **`init --json`** — one shape for both outcomes:
+  `{ "trunk", "initialized": bool, "alreadyInitialized": bool }` (a fresh init
+  sets `initialized`; an already-initialized repo sets `alreadyInitialized`).
+- **operational** (`abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
 
 ## Idempotency & safety
 

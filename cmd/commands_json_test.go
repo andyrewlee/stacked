@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -600,5 +602,130 @@ func TestJSONStackEnvUsesQuietGit(t *testing.T) {
 	}
 	if _, ok := stackEnv(&stack.State{}, false).Git.(git.Shell); !ok {
 		t.Fatal("text stack env did not use Shell")
+	}
+}
+
+// --- AGENT.md result-shape contract ----------------------------------------
+//
+// docs/AGENT.md is the machine interface agents script against. There is
+// exit-code drift protection (TestExitCodeAndErrorCodeMapping); these two tests
+// are the equivalent guard for the JSON result-shape contract — the drift that
+// shipped submitResult.Failed undocumented. They check the *forward* direction:
+// every field the code emits must be documented (a documented-but-unemitted key
+// is allowed, e.g. an omitempty field absent on a happy path).
+
+// agentDoc reads docs/AGENT.md relative to this source file (the cmd package
+// sits one directory below the repo root), mirroring testdataDir's
+// runtime.Caller trick so the lookup survives a test that has t.Chdir'd into a
+// temp repo.
+func agentDoc(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(file), "..", "docs", "AGENT.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+// documentsKey reports whether AGENT.md documents key as a JSON key ("key") or a
+// backticked code span (`key`) — the two forms the doc uses — so an incidental
+// prose word does not count as documentation.
+func documentsKey(doc, key string) bool {
+	return strings.Contains(doc, `"`+key+`"`) || strings.Contains(doc, "`"+key+"`")
+}
+
+// TestAgentDocDocumentsContractStructs pins the central named result structs to
+// AGENT.md. Their omitempty fields (failed, branch, restacked, deleted, notes,
+// dryRun) do not appear on a happy-path run, so reflection — not execution — is
+// the only way to catch a new undocumented field.
+func TestAgentDocDocumentsContractStructs(t *testing.T) {
+	doc := agentDoc(t)
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(submitResult{}),
+		reflect.TypeOf(stack.OpResult{}),
+		reflect.TypeOf(initResult{}),
+	} {
+		for i := 0; i < typ.NumField(); i++ {
+			tag := typ.Field(i).Tag.Get("json")
+			if tag == "" || tag == "-" {
+				continue
+			}
+			key := strings.Split(tag, ",")[0]
+			if key == "" {
+				continue
+			}
+			if !documentsKey(doc, key) {
+				t.Errorf("docs/AGENT.md does not document %s JSON key %q", typ.Name(), key)
+			}
+		}
+	}
+}
+
+// collectJSONKeys records every object key at any depth of a decoded JSON value.
+func collectJSONKeys(v any, into map[string]bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			into[k] = true
+			collectJSONKeys(val, into)
+		}
+	case []any:
+		for _, e := range t {
+			collectJSONKeys(e, into)
+		}
+	}
+}
+
+// TestAgentDocDocumentsEmittedKeys runs the read/navigation commands that emit
+// anonymous inline structs (status, checkout, validate, navigation, log) — which
+// reflection cannot reach by name — and asserts every JSON key they actually
+// emit is documented in AGENT.md. The fixture surfaces status's omitempty keys
+// (parent, needsRestack) by running on a tracked branch with a parent and child.
+func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
+	doc := agentDoc(t)
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "add a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "add b")
+	mustCheckout(t, "feat-a") // tracked, parent main, child feat-b
+
+	keys := map[string]bool{}
+	collect := func(label string, run func() error) {
+		var perr error
+		got := captureStdout(t, func() { perr = run() })
+		if perr != nil {
+			t.Fatalf("%s: %v", label, perr)
+		}
+		got = strings.TrimSpace(got)
+		if got == "" {
+			t.Fatalf("%s: emitted no JSON", label)
+		}
+		var v any
+		if err := json.Unmarshal([]byte(got), &v); err != nil {
+			t.Fatalf("%s: emitted invalid JSON %q: %v", label, got, err)
+		}
+		collectJSONKeys(v, keys)
+	}
+
+	collect("status --json", func() error { return runStatus([]string{"--json"}) })
+	collect("checkout --json", func() error { return runCheckout([]string{"--json"}) })
+	collect("checkout feat-a --json", func() error { return runCheckout([]string{"feat-a", "--json"}) })
+	collect("validate --json", func() error { return runValidate([]string{"--json"}) })
+	collect("log --json", func() error { return runLog([]string{"--json"}) })
+	// Navigation moves HEAD; the emitted keys do not depend on the destination.
+	collect("top --json", func() error { return runTop([]string{"--json"}) })
+	collect("bottom --json", func() error { return runBottom([]string{"--json"}) })
+	collect("up --json", func() error { return runUp([]string{"--json"}) })
+	collect("down --json", func() error { return runDown([]string{"--json"}) })
+
+	for k := range keys {
+		if !documentsKey(doc, k) {
+			t.Errorf("docs/AGENT.md does not document emitted JSON key %q", k)
+		}
 	}
 }
