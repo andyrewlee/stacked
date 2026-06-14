@@ -47,10 +47,7 @@ func runInit(args []string) error {
 	// If already initialized, report the existing trunk rather than erroring out
 	// with a low-level message.
 	if existing, err := stack.Load(); err == nil {
-		return emit(asJSON, struct {
-			Trunk              string `json:"trunk"`
-			AlreadyInitialized bool   `json:"alreadyInitialized"`
-		}{existing.Trunk, true}, func() {
+		return emit(asJSON, initResult{Trunk: existing.Trunk, AlreadyInitialized: true}, func() {
 			out("stacked already initialized (trunk: %s)\n", existing.Trunk)
 		})
 	} else if !errors.Is(err, stack.ErrNotInitialized) {
@@ -68,13 +65,20 @@ func runInit(args []string) error {
 		return fmt.Errorf("initializing stacked: %w", err)
 	}
 
-	return emit(asJSON, struct {
-		Trunk       string `json:"trunk"`
-		Initialized bool   `json:"initialized"`
-	}{trunk, true}, func() {
+	return emit(asJSON, initResult{Trunk: trunk, Initialized: true}, func() {
 		out("initialized stacked (trunk: %s)\n", trunk)
 		out("next: st create <name>\n")
 	})
+}
+
+// initResult is the single JSON shape both init outcomes emit, so an agent
+// unmarshals one struct and reads the booleans rather than probing for which
+// key is present: a fresh init sets initialized, an already-initialized repo
+// sets alreadyInitialized.
+type initResult struct {
+	Trunk              string `json:"trunk"`
+	Initialized        bool   `json:"initialized"`
+	AlreadyInitialized bool   `json:"alreadyInitialized"`
 }
 
 // detectTrunk determines the trunk branch name. It prefers the remote default
