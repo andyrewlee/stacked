@@ -133,10 +133,19 @@ func parseFlagSet(fs *flag.FlagSet, args []string) error {
 		fs.Usage = usage
 	}()
 	err := fs.Parse(args)
-	if errors.Is(err, flag.ErrHelp) && !jsonRequested(args) {
-		fs.SetOutput(os.Stdout)
-		fs.Usage = usage
-		fs.Usage()
+	if errors.Is(err, flag.ErrHelp) {
+		if !jsonRequested(args) {
+			fs.SetOutput(os.Stdout)
+			fs.Usage = usage
+			fs.Usage()
+		}
+		return err
+	}
+	if err != nil && fs.Name() != "" {
+		// An unknown/malformed flag otherwise dead-ends on the raw stdlib message;
+		// point at the command's help, like unknownCommandErr does for commands.
+		// %w preserves the sentinel chain and the "provided but not defined" text.
+		return fmt.Errorf("%w (run \"st help %s\" for usage)", err, fs.Name())
 	}
 	return err
 }

@@ -370,6 +370,23 @@ func TestHelpJSONIncludesFlags(t *testing.T) {
 	}
 }
 
+// TestUnknownFlagPointsAtHelp asserts an unknown flag's error points at the
+// command's help, mirroring the unknown-command path (the raw stdlib message is
+// a dead end otherwise).
+func TestUnknownFlagPointsAtHelp(t *testing.T) {
+	t.Chdir(t.TempDir())
+	err := byName["status"].Run([]string{"--nope"})
+	if err == nil {
+		t.Fatal("unknown flag should error")
+	}
+	if !strings.Contains(err.Error(), `provided but not defined`) {
+		t.Errorf("expected the stdlib flag error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `run "st help status"`) {
+		t.Errorf("unknown-flag error should point at st help status: %v", err)
+	}
+}
+
 func TestSuggestCommand(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"creat", "create"},   // distance 1
