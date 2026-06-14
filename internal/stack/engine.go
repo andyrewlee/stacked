@@ -597,12 +597,9 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 
 	rebased, err := RestackAll(env, s)
 	if err != nil {
-		if !errors.Is(err, ErrConflict) {
-			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
-				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
-			}
-		}
-		return nil, err
+		// Leaves a conflict's rebase in progress for `st continue`; restores HEAD
+		// otherwise. Same guard the other mutations use.
+		return nil, restoreHEADAfterNonConflict(env, orig, s.Trunk, err)
 	}
 	if err := env.save(); err != nil {
 		return nil, err
