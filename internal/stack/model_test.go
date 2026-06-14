@@ -83,6 +83,42 @@ func runModel(t *testing.T, seed int64, steps int) {
 			checkInvariants(t, f, s, step)
 			continue
 		}
+		// Occasionally inject a conflict and resolve it with Continue. The random
+		// walk otherwise only takes the clean restack path, so ErrConflict /
+		// PendingReparent / Continue are never reached; this makes "a conflict
+		// resolved at any random point still reconciles invariant-clean" a
+		// property. Runs outside the undo oracle (the mutation is half-applied).
+		if len(tracked) > 0 && rng.Intn(12) == 0 {
+			var cands []string
+			for _, n := range tracked {
+				if s.Branches[n].Parent != s.Trunk { // amend the parent -> upstack restack hits n
+					cands = append(cands, n)
+				}
+			}
+			if len(cands) > 0 {
+				victim := pick(rng, cands)
+				parent := s.Branches[victim].Parent
+				f.conflictOn(victim)
+				mustCheckout(t, f, parent)
+				if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+					t.Fatalf("step %d: want ErrConflict injecting on %s, got %v", step, victim, err)
+				}
+				if inProgress, _ := f.RebaseInProgress(); !inProgress {
+					t.Fatalf("step %d: expected a rebase in progress after the injected conflict", step)
+				}
+				if _, err := Continue(env, s); err != nil {
+					t.Fatalf("step %d: continue after injected conflict: %v", step, err)
+				}
+				f.head = "main"
+				if res, err := Restack(env, s); err != nil {
+					t.Fatalf("step %d: restack after continue: %v", step, err)
+				} else if len(res.Restacked) != 0 {
+					t.Fatalf("step %d: restack after continue not idempotent, rebased %v", step, res.Restacked)
+				}
+				checkInvariants(t, f, s, step)
+				continue
+			}
+		}
 		// Build the step as a re-runnable closure so it can be applied, undone,
 		// and applied again.
 		var label string
