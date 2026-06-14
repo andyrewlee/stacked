@@ -70,12 +70,13 @@ func runStatus(args []string) error {
 	if asJSON {
 		payload := struct {
 			Branch        string   `json:"branch"`
+			Trunk         string   `json:"trunk"`
 			Role          string   `json:"role"`
 			Parent        string   `json:"parent,omitempty"`
 			Children      []string `json:"children"`
 			NeedsRestack  *bool    `json:"needsRestack,omitempty"`
 			WorktreeClean bool     `json:"worktreeClean"`
-		}{cur, role, parent, children, needs, clean}
+		}{cur, s.Trunk, role, parent, children, needs, clean}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err
