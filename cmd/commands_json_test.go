@@ -403,6 +403,45 @@ func TestSubmitPartialFailureJSON(t *testing.T) {
 	}
 }
 
+func TestSubmitPartialFailureJSONFirstBranchKeepsPushedArray(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	hook := filepath.Join(remoteDir, "hooks", "pre-receive")
+	script := "#!/bin/sh\nexit 1\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runSubmit([]string{"--json"})
+	})
+	if runErr == nil {
+		t.Fatal("submit with a rejected first branch should return a non-nil error")
+	}
+
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.DisallowUnknownFields()
+	var got submitResult
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("partial submit --json did not unmarshal into submitResult: %v\n%s", err, out)
+	}
+	if got.Failed != "feat-a" {
+		t.Fatalf("partial result Failed = %q, want feat-a", got.Failed)
+	}
+	if got.Pushed == nil || len(got.Pushed) != 0 {
+		t.Fatalf("partial result Pushed = %v, want present-but-empty", got.Pushed)
+	}
+}
+
 func TestSubmitUsesSelectedRemote(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

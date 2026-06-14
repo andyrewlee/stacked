@@ -99,7 +99,7 @@ func runSubmit(args []string) error {
 	}
 	stackBranches = append(stackBranches, cur)
 
-	var pushed []string
+	pushed := []string{}
 	for _, name := range stackBranches {
 		if dryRun {
 			pushed = append(pushed, name)
