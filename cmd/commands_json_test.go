@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -675,6 +676,34 @@ func agentDoc(t *testing.T) string {
 // prose word does not count as documentation.
 func documentsKey(doc, key string) bool {
 	return strings.Contains(doc, `"`+key+`"`) || strings.Contains(doc, "`"+key+"`")
+}
+
+// TestAgentDocDocumentsExitCodes pins docs/AGENT.md's exit-code table and prose
+// to errorClasses (plus the two codes defined outside it: 1=error and
+// exitInternal=70). AGENT.md is the machine contract agents branch on, yet only
+// st guide's copy was drift-checked before; adding or renaming a code without
+// updating the doc now fails here.
+func TestAgentDocDocumentsExitCodes(t *testing.T) {
+	doc := agentDoc(t)
+	type ec struct {
+		code int
+		name string
+	}
+	want := make([]ec, 0, len(errorClasses)+2)
+	for _, c := range errorClasses {
+		want = append(want, ec{c.code, c.name})
+	}
+	want = append(want, ec{1, "error"}, ec{exitInternal, "internal"})
+	for _, w := range want {
+		if cell := fmt.Sprintf("| %d |", w.code); !strings.Contains(doc, cell) {
+			t.Errorf("docs/AGENT.md exit-code table missing row %q", cell)
+		}
+		// Bind the name TO the code; a bare "error"/"conflict" appears elsewhere
+		// as prose, so match the doc's own "`name` (code" pairing instead.
+		if prose := fmt.Sprintf("`%s` (%d", w.name, w.code); !strings.Contains(doc, prose) {
+			t.Errorf("docs/AGENT.md does not bind error code to name: missing %q", prose)
+		}
+	}
 }
 
 // TestAgentDocDocumentsContractStructs pins the central named result structs to
