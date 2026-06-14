@@ -53,7 +53,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 		// and applied again.
 		var label string
 		var op func() error
-		switch rng.Intn(8) {
+		switch rng.Intn(10) {
 		case 0: // create off a random branch
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			nameSeq++
@@ -159,6 +159,30 @@ func runModel(t *testing.T, seed int64, steps int) {
 			label = "rename"
 			op = func() error {
 				_, err := Rename(env, s, target, newName)
+				return err
+			}
+		case 8: // untrack a random branch (re-parents its children)
+			if len(tracked) == 0 {
+				continue
+			}
+			target := pick(rng, tracked)
+			label = "untrack"
+			op = func() error {
+				_, err := UntrackBranch(env, s, target)
+				return err
+			}
+		case 9: // track a freshly-minted untracked branch (exercises inferParent)
+			parent := pick(rng, append([]string{"main"}, tracked...))
+			nameSeq++
+			name := fmt.Sprintf("b%d", nameSeq)
+			label = "track"
+			op = func() error {
+				mustCheckout(t, f, parent)
+				if err := f.CreateBranch(name); err != nil {
+					return err
+				}
+				f.commit("subj")
+				_, err := TrackBranch(env, s, "")
 				return err
 			}
 		}
