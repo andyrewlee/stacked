@@ -13,6 +13,7 @@ import (
 // TestVersion asserts `st version` prints build info and exits 0, and that the
 // -v/--version aliases behave the same.
 func TestVersion(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	for _, arg := range []string{"version", "-v", "--version"} {
 		res := r.st(arg)
@@ -27,6 +28,7 @@ func TestVersion(t *testing.T) {
 // exits 0 and lists every documented subcommand plus the help/version pseudo
 // commands.
 func TestHelpListsAllCommands(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 
 	// Derive the command set from the binary's own machine-readable help (which
@@ -61,6 +63,7 @@ func TestHelpListsAllCommands(t *testing.T) {
 // "unknown command" diagnostic to stderr, emits a parseable JSON envelope under
 // --json, and never pollutes stdout (CLI-1).
 func TestUnknownCommand(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	res := r.st("definitely-not-a-command")
 	wantExit(t, res, 1)
@@ -89,6 +92,7 @@ func TestUnknownCommand(t *testing.T) {
 // stderr only — stdout is the machine-readable data stream and must stay clean
 // (CLI-4, CLI-8).
 func TestFlagErrorStaysOnStderr(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	res := r.st("status", "--bad")
 	wantExit(t, res, 1)
@@ -104,6 +108,7 @@ func TestFlagErrorStaysOnStderr(t *testing.T) {
 // TestNavigationEdges covers the ambiguous-up fork, top branch-point error, the
 // "already at the top/bottom/trunk" notices, and invalid count arguments.
 func TestNavigationEdges(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	// Build a fork: feat-a has two children feat-b1 and feat-b2.
@@ -155,6 +160,7 @@ func TestNavigationEdges(t *testing.T) {
 // TestExitCodeContract maps each documented exit code (docs/AGENT.md) to a
 // triggering scenario, guarding the exit-code contract against drift (LOOP-3).
 func TestExitCodeContract(t *testing.T) {
+	t.Parallel()
 	t.Run("0_success", func(t *testing.T) {
 		r := newRepo(t)
 		r.initStack()
@@ -205,6 +211,7 @@ func TestExitCodeContract(t *testing.T) {
 }
 
 func TestHostileStateBranchNameRefused(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -237,6 +244,7 @@ func TestHostileStateBranchNameRefused(t *testing.T) {
 // dry-run, and emits the repository URL; it also covers the at-trunk no-op and
 // the no-remote error.
 func TestSubmitDryRunAndURL(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -263,6 +271,7 @@ func TestSubmitDryRunAndURL(t *testing.T) {
 // TestSubmitRealPushSetsUpstream pushes to a real bare remote and confirms the
 // branch landed on the remote with an upstream set.
 func TestSubmitRealPushSetsUpstream(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 
 	// Create a bare remote and wire it as origin.
@@ -297,6 +306,7 @@ func TestSubmitRealPushSetsUpstream(t *testing.T) {
 // TestCompletion asserts each supported shell emits a non-empty script and an
 // unsupported shell errors.
 func TestCompletion(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		res := r.stOK("completion", shell)
@@ -319,6 +329,7 @@ func TestCompletion(t *testing.T) {
 // TestUninitialized asserts commands that require initialization fail cleanly in
 // a repo where `st init` has not been run.
 func TestUninitialized(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	res := r.st("status")
 	// "not initialized" maps to the dedicated exit code 3 (see docs/AGENT.md).
@@ -329,6 +340,7 @@ func TestUninitialized(t *testing.T) {
 // TestJSONError asserts that in --json mode a failure is emitted as a structured
 // envelope on stderr with a stable machine code, and the exit code still applies.
 func TestJSONError(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	res := r.st("status", "--json")
 	wantExit(t, res, 3)
@@ -337,6 +349,7 @@ func TestJSONError(t *testing.T) {
 
 // TestGuide asserts the agent guide prints text and JSON and exits 0.
 func TestGuide(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	wantStdoutContains(t, r.stOK("guide"), "recommended workflow")
 	wantStdoutContains(t, r.stOK("guide", "--json"), `"steps"`)
