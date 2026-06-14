@@ -99,7 +99,9 @@ the result, stderr for the error envelope, and the exit code for the category.
 
 - `st --help` lists every command; `st help <command>` prints its summary, usage,
   and aliases. The usage line documents the command's flags, and `st <command> -h`
-  prints that same usage line. `st version` reports the build.
+  prints that same usage line — or, with `--json`, the same machine-readable
+  object as `st help <command> --json` (aliases resolve identically). `st version`
+  reports the build.
 - `st help`, `st help <command>`, and `st version` accept `--json` and emit the
   same information as a machine-readable payload — the command list as
   `{ "commands": [ { "name", "summary", "usage", "aliases" }, … ] }`.
