@@ -785,24 +785,12 @@ func Continue(env Env, s *State) (*OpResult, error) {
 }
 
 // RestackAll restacks every stack rooted on the trunk, parents before children,
-// reading live tips at each step. Used by sync and continue.
+// reading live tips at each step. Used by sync and continue. The whole forest is
+// exactly the trunk's upstack (every tracked branch descends from the trunk), so
+// it delegates to the one canonical restack path — RestackUpstack — which
+// Descendants(trunk) walks in the same sorted, parents-first order.
 func RestackAll(env Env, s *State) ([]string, error) {
-	var rebased []string
-	for _, root := range s.Children(s.Trunk) {
-		did, err := s.RestackBranch(env, root.Name)
-		if err != nil {
-			return rebased, err
-		}
-		if did {
-			rebased = append(rebased, root.Name)
-		}
-		more, err := s.RestackUpstack(env, root.Name)
-		if err != nil {
-			return rebased, err
-		}
-		rebased = append(rebased, more...)
-	}
-	return rebased, nil
+	return s.RestackUpstack(env, s.Trunk)
 }
 
 // PruneMerged deletes tracked branches whose commits are already contained in
