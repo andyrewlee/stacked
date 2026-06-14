@@ -107,7 +107,7 @@ func Execute() (rc int) {
 	if !ok {
 		// Report through the standard error path so --json gets the structured
 		// envelope on stderr and stdout stays clean for machine parsing.
-		err := fmt.Errorf("unknown command %q (run \"st help\" for usage)", name)
+		err := unknownCommandErr(name)
 		renderError(err, jsonRequested(args[1:]))
 		return exitCode(err)
 	}
@@ -192,7 +192,7 @@ func parseJSONFlag(arg string) (enabled, ok bool, err error) {
 func helpForCommand(name string, asJSON bool) int {
 	info, ok := commandInfoForName(name)
 	if !ok {
-		err := fmt.Errorf("unknown command %q", name)
+		err := unknownCommandErr(name)
 		renderError(err, asJSON)
 		return exitCode(err)
 	}
@@ -222,6 +222,65 @@ func commandInfoForName(name string) (commandInfo, bool) {
 	default:
 		return commandInfo{}, false
 	}
+}
+
+// unknownCommandErr builds the error for an unrecognized command name, shared by
+// the dispatcher and `st help <topic>` so both not-found paths give the same
+// message. It appends a "did you mean" suggestion when a known command is within
+// edit distance 2.
+func unknownCommandErr(name string) error {
+	if s := suggestCommand(name); s != "" {
+		return fmt.Errorf("unknown command %q, did you mean %q? (run \"st help\" for usage)", name, s)
+	}
+	return fmt.Errorf("unknown command %q (run \"st help\" for usage)", name)
+}
+
+// suggestCommand returns the known command name closest to name within edit
+// distance 2, or "" if none is that close. It considers every registered name
+// and alias plus the built-in help/version, skips the dashed alias forms
+// (-h/--help/-v/--version), and prefers a primary command name on ties.
+func suggestCommand(name string) string {
+	best, bestDist, bestPrimary := "", 3, false
+	consider := func(cand string, primary bool) {
+		if strings.HasPrefix(cand, "-") {
+			return
+		}
+		d := editDistance(name, cand)
+		if d <= 2 && (d < bestDist || (d == bestDist && primary && !bestPrimary)) {
+			best, bestDist, bestPrimary = cand, d, primary
+		}
+	}
+	for _, c := range registry {
+		consider(c.Name, true)
+		for _, a := range c.Aliases {
+			consider(a, false)
+		}
+	}
+	consider("help", true)
+	consider("version", true)
+	return best
+}
+
+// editDistance returns the Levenshtein distance between a and b (single-row DP).
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
 }
 
 // exitCode maps an error to a stable exit status so agents can branch on the
