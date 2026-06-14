@@ -116,6 +116,34 @@ func TestLogNeedsRestackFlag(t *testing.T) {
 	}
 }
 
+func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	if err := runCreate([]string{"feat-b"}); err != nil {
+		t.Fatalf("create feat-b: %v", err)
+	}
+
+	mustCheckout(t, "feat-a")
+	write(t, "a2.txt", "a2\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "a2")
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	b := root.Children[0].Children[0]
+	if b.TopCommit != "" {
+		t.Fatalf("feat-b topCommit = %q, want empty for branch behind parent", b.TopCommit)
+	}
+}
+
 // --- status ----------------------------------------------------------------
 
 type statusPayload struct {
