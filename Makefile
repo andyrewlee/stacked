@@ -15,10 +15,12 @@ GOLANGCI_VERSION := v2.12.2
 
 .PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps golden test test-fast e2e cover hooks clean release snapshot
 
-# Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order.
-# `cover` runs the whole suite once (race + combined in-process/e2e coverage),
-# so ci does not run the tests three times.
-ci: check-deps fmt-check lint vet vet-cross build cover
+# Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
+# Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
+# wrong golangci-lint never hides a compile/vet failure; lint still precedes the
+# slow `cover` step. `cover` runs the whole suite once (race + combined
+# in-process/e2e coverage), so ci does not run the tests three times.
+ci: check-deps fmt-check vet vet-cross build lint cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
