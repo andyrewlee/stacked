@@ -698,6 +698,35 @@ func cloneState(s *State) *State {
 	return cp
 }
 
+// Abort rolls back an in-progress restack/rebase (git rebase --abort) and clears
+// any pending reparent it was promoting — the engine counterpart of Continue.
+// Branches restacked before the conflict keep their new positions; only the
+// branch git was mid-rebase on is rolled back. s may be nil when stacked is not
+// initialized in the repo, in which case the rebase is still aborted.
+func Abort(env Env, s *State) (*OpResult, error) {
+	g := env.Git
+	inProgress, err := g.RebaseInProgress()
+	if err != nil {
+		return nil, err
+	}
+	if !inProgress {
+		return nil, errors.New("no rebase in progress; nothing to abort")
+	}
+	// Like Continue, fall back to the lone pending reparent when git's head-name
+	// file can't be read.
+	conflicted, _ := g.RebaseHeadName()
+	if conflicted == "" && s != nil && s.PendingReparent != nil {
+		conflicted = s.PendingReparent.Branch
+	}
+	if err := g.RebaseAbort(); err != nil {
+		return nil, fmt.Errorf("aborting rebase: %w", err)
+	}
+	if s != nil && s.PendingReparent != nil && (conflicted == "" || s.PendingReparent.Branch == conflicted) {
+		s.PendingReparent = nil
+	}
+	return &OpResult{Summary: "aborted the in-progress rebase"}, nil
+}
+
 // Continue resumes a restack interrupted by a conflict: it completes the
 // in-progress rebase, records the rebased branch's new base, and restacks the
 // rest of the stack.

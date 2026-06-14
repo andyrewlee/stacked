@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
-	"stacked/internal/git"
 	"stacked/internal/stack"
 )
 
@@ -16,10 +16,10 @@ func init() {
 	})
 }
 
-// runAbort aborts an in-progress rebase (git rebase --abort). Branches that had
-// already been restacked before the conflict keep their new positions; only the
-// branch git was mid-rebase on is rolled back, and the stack metadata already
-// reflects that it still needs a restack.
+// runAbort aborts an in-progress rebase via the engine (stack.Abort). Branches
+// that had already been restacked before the conflict keep their new positions;
+// only the branch git was mid-rebase on is rolled back. It works even when
+// stacked is not initialized in this repo.
 func runAbort(args []string) error {
 	var asJSON bool
 	fs := newFlagSet("abort", &asJSON)
@@ -36,32 +36,29 @@ func runAbort(args []string) error {
 	}
 	defer release()
 
-	inProgress, err := git.RebaseInProgress()
+	// Tolerate an uninitialized repo: the rebase abort must still run, so load
+	// state best-effort and pass nil when stacked was never initialized here.
+	s, err := loadState()
+	if err != nil {
+		if !errors.Is(err, stack.ErrNotInitialized) {
+			return err
+		}
+		s = nil
+	}
+	res, err := stack.Abort(stackEnv(s, asJSON), s)
 	if err != nil {
 		return err
 	}
-	if !inProgress {
-		return fmt.Errorf("no rebase in progress; nothing to abort")
-	}
-	conflicted, _ := git.RebaseHeadName()
-	if err := git.RebaseAbort(); err != nil {
-		return fmt.Errorf("aborting rebase: %w", err)
-	}
-	if s, err := stack.Load(); err == nil && s.PendingReparent != nil {
-		if conflicted == "" || s.PendingReparent.Branch == conflicted {
-			s.PendingReparent = nil
-			if err := s.Save(); err != nil {
-				return fmt.Errorf("saving stack state after abort: %w", err)
-			}
+	if s != nil {
+		if err := s.Save(); err != nil {
+			return fmt.Errorf("saving stack state after abort: %w", err)
 		}
-	} else if err != nil && err != stack.ErrNotInitialized {
-		return err
 	}
 
 	payload := struct {
 		Aborted bool   `json:"aborted"`
 		Summary string `json:"summary"`
-	}{true, "aborted the in-progress rebase"}
+	}{true, res.Summary}
 	return emit(asJSON, payload, func() {
 		out("Aborted the in-progress rebase.\n")
 		out("Branches that already restacked keep their new positions; the conflicted branch still needs a restack (run: st restack).\n")
