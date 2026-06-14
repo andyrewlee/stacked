@@ -69,13 +69,12 @@ e2e/                 black-box tests driving the real binary as a subprocess
 3. Add `cmd/frob.go` — a thin adapter that parses flags and calls
    `mutate("frob", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) { return stack.Frobnicate(env, s, arg) })`,
    self-registering via `init()` → `register(&Command{...})`. Add a `--json` flag.
-   If `frob` parses any flag beyond `--json`, also add a `frobFlagSet()` constructor
-   to `cmd/flagsets.go` declaring those flags, set `NewFlagSet: frobFlagSet` in its
-   `register(&Command{...})`, and list `frob`'s flags in `TestCommandFlagsMatchExpected`
-   (`cmd/execute_test.go`). `Run` parses the flags either way; this wiring keeps
-   `st help --json` (and the declared-flags contract in `docs/AGENT.md`) reporting
-   exactly what `Run` accepts — skip it and `make ci` fails with "update flagsets.go
-   or this table".
+   If `frob` parses any flag beyond `--json`, declare those flags once in
+   `cmd/flagsets.go`: a `frobOpts` struct and `newFrobFlags(o *frobOpts)` (the single
+   declaration site), plus a no-arg `frobFlagSet()` wrapper. `runFrob` calls
+   `fs := newFrobFlags(&o)` and reads `o.<field>`; `register` sets
+   `NewFlagSet: frobFlagSet`. `Run` and `st help --json` then build the flags from
+   the same constructor, so the declared-flags contract in `docs/AGENT.md` can't drift.
 4. If it has interesting CLI output, add a golden test (`cmd/golden_test.go`,
    regenerate with `go test ./cmd -run Golden -update`).
 5. `make ci`. Adding the command shifts the help golden — regenerate it deliberately.

@@ -14,16 +14,15 @@ func init() {
 }
 
 func runRestack(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("restack", &asJSON)
-	var dryRun bool
-	fs.BoolVar(&dryRun, "dry-run", false, "show what would be restacked without changing anything")
+	var o restackOpts
+	fs := newRestackFlags(&o)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("restack", fs.Args()); err != nil {
 		return err
 	}
+	asJSON, dryRun := o.asJSON, o.dryRun
 
 	if dryRun {
 		s, err := loadState()

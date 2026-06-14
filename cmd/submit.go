@@ -39,20 +39,15 @@ type submitResult struct {
 // PRs on their host afterwards. With --dry-run no branches are pushed and the
 // planned pushes are printed instead.
 func runSubmit(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("submit", &asJSON)
-
-	var remote string
-	fs.StringVar(&remote, "remote", "origin", "remote to push to")
-
-	var dryRun bool
-	fs.BoolVar(&dryRun, "dry-run", false, "print what would be pushed without pushing")
+	var o submitOpts
+	fs := newSubmitFlags(&o)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("submit", fs.Args()); err != nil {
 		return err
 	}
+	asJSON, remote, dryRun := o.asJSON, o.remote, o.dryRun
 
 	state, err := loadState()
 	if err != nil {

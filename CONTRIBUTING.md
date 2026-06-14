@@ -42,10 +42,10 @@ interface (JSON, exit codes).
 3. **Adapter** — `cmd/frob.go`, a thin wrapper that self-registers and calls
    `mutate("frob", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) { return stack.Frobnicate(env, s, arg) })`.
    Add a `--json` flag (see `docs/AGENT.md` — every command speaks JSON). For any
-   flag beyond `--json`, also add a `frobFlagSet()` to `cmd/flagsets.go`, set
-   `NewFlagSet: frobFlagSet` in `register()`, and list `frob`'s flags in
-   `TestCommandFlagsMatchExpected` — this keeps `help --json` reporting exactly
-   what `Run` accepts (or `make ci` fails with "update flagsets.go or this table").
+   flag beyond `--json`, declare it once in `cmd/flagsets.go` (a `frobOpts` struct +
+   `newFrobFlags(o)` constructor + a no-arg `frobFlagSet()` wrapper); `runFrob` reads
+   `o.<field>` and `register` sets `NewFlagSet: frobFlagSet`, so `help --json` reports
+   exactly what `Run` parses, from the same declaration.
 4. **Golden output** (optional) — `cmd/golden_test.go`; regenerate with
    `go test ./cmd -run Golden -update`.
 5. `make ci`. Adding a command shifts the `--help` golden — regenerate it

@@ -23,20 +23,15 @@ func init() {
 // the trunk branch from the --trunk flag, falling back to the remote default
 // branch, the current branch, and finally "main".
 func runInit(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("init", &asJSON)
-	var trunk string
-	fs.StringVar(&trunk, "trunk", "", "name of the trunk branch (default: detected)")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), usageLine("init"))
-		fs.PrintDefaults()
-	}
+	var o initOpts
+	fs := newInitFlags(&o)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("init", fs.Args()); err != nil {
 		return err
 	}
+	asJSON, trunk := o.asJSON, o.trunk
 
 	// Ensure we are inside a git repository.
 	if _, err := git.RepoRoot(); err != nil {
