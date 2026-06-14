@@ -47,8 +47,12 @@ func runValidate(args []string) error {
 	}
 	drift := s.DriftAgainst(tips)
 
-	if _, ok := tips[s.Trunk]; !ok {
-		problems = append(problems, fmt.Sprintf("trunk branch %q does not exist", s.Trunk))
+	// The engine is the single source of truth for what an inconsistent stack is
+	// (the same classifier st repair fixes); this command just renders it.
+	problemBranch := map[string]bool{}
+	for _, p := range s.Inconsistencies(tips) {
+		problems = append(problems, formatProblem(p))
+		problemBranch[p.Branch] = true
 	}
 
 	names := make([]string, 0, len(s.Branches))
@@ -57,33 +61,10 @@ func runValidate(args []string) error {
 	}
 	sort.Strings(names)
 
+	// A branch warns about drift only when it is otherwise consistent (no missing
+	// branch, a valid parent, no cycle) — the same gate as before.
 	for _, name := range names {
-		b, _ := s.Get(name)
-
-		_, branchOK := tips[name]
-		if !branchOK {
-			problems = append(problems, fmt.Sprintf("%s is tracked but its git branch is missing (run: st untrack %s)", name, name))
-		}
-
-		parentOK := true
-		_, parentExists := tips[b.Parent]
-		switch {
-		case b.Parent == s.Trunk:
-			// fine
-		case !s.IsTracked(b.Parent):
-			parentOK = false
-			problems = append(problems, fmt.Sprintf("%s has parent %q which is not the trunk or a tracked branch", name, b.Parent))
-		case !parentExists:
-			parentOK = false
-			problems = append(problems, fmt.Sprintf("%s has parent %q whose git branch is missing", name, b.Parent))
-		}
-
-		if path := stack.CyclePath(s, name); path != "" {
-			problems = append(problems, fmt.Sprintf("%s is part of a parent cycle: %s", name, path))
-			continue // drift would be unreliable on a cycle
-		}
-
-		if branchOK && parentOK && drift[name] {
+		if !problemBranch[name] && drift[name] {
 			warnings = append(warnings, fmt.Sprintf("%s needs restack (run: st restack)", name))
 		}
 	}
@@ -126,4 +107,21 @@ func runValidate(args []string) error {
 		return fmt.Errorf("validate found %d problem(s)", len(problems))
 	}
 	return nil
+}
+
+// formatProblem renders an engine Problem as validate's human-readable line.
+func formatProblem(p stack.Problem) string {
+	switch p.Kind {
+	case stack.TrunkMissing:
+		return fmt.Sprintf("trunk branch %q does not exist", p.Branch)
+	case stack.BranchMissing:
+		return fmt.Sprintf("%s is tracked but its git branch is missing (run: st untrack %s)", p.Branch, p.Branch)
+	case stack.ParentUntracked:
+		return fmt.Sprintf("%s has parent %q which is not the trunk or a tracked branch", p.Branch, p.Detail)
+	case stack.ParentMissing:
+		return fmt.Sprintf("%s has parent %q whose git branch is missing", p.Branch, p.Detail)
+	case stack.ParentCycle:
+		return fmt.Sprintf("%s is part of a parent cycle: %s", p.Branch, p.Detail)
+	}
+	return ""
 }

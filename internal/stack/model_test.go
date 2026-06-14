@@ -304,4 +304,14 @@ func checkInvariants(t *testing.T, f *fakeGit, s *State, step int) {
 			cur = nb.Parent
 		}
 	}
+
+	// Cross-check the hand-coded invariant above against the engine's own
+	// classifier: a reconciled stack must have no inconsistencies.
+	tips, err := f.Tips()
+	if err != nil {
+		t.Fatalf("step %d: Tips: %v", step, err)
+	}
+	if ps := s.Inconsistencies(tips); len(ps) != 0 {
+		t.Fatalf("step %d: Inconsistencies on a reconciled stack: %+v", step, ps)
+	}
 }
