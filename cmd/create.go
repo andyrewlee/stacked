@@ -9,11 +9,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "create",
-		Aliases: []string{"c"},
-		Summary: "Create a new branch stacked on the current branch",
-		Usage:   "st create <name> [-m <msg>] [-a|--all] [--json]",
-		Run:     runCreate,
+		Name:       "create",
+		Aliases:    []string{"c"},
+		Summary:    "Create a new branch stacked on the current branch",
+		Usage:      "st create <name> [-m <msg>] [-a|--all] [--json]",
+		Run:        runCreate,
+		NewFlagSet: createFlagSet,
 	})
 }
 

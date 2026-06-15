@@ -11,10 +11,11 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "init",
-		Summary: "Initialize stacked stack tracking in this repo",
-		Usage:   "st init [--trunk <name>] [--json]",
-		Run:     runInit,
+		Name:       "init",
+		Summary:    "Initialize stacked stack tracking in this repo",
+		Usage:      "st init [--trunk <name>] [--json]",
+		Run:        runInit,
+		NewFlagSet: initFlagSet,
 	})
 }
 

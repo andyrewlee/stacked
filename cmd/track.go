@@ -8,10 +8,11 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "track",
-		Summary: "Start tracking the current git branch in the stack",
-		Usage:   "st track [--parent <branch>] [--json]",
-		Run:     runTrack,
+		Name:       "track",
+		Summary:    "Start tracking the current git branch in the stack",
+		Usage:      "st track [--parent <branch>] [--json]",
+		Run:        runTrack,
+		NewFlagSet: trackFlagSet,
 	})
 }
 

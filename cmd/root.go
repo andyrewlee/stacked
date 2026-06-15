@@ -32,6 +32,11 @@ type Command struct {
 	Usage string
 	// Run executes the command with the arguments following the command name.
 	Run func(args []string) error
+	// NewFlagSet, when set, builds a fresh flag set declaring every flag the
+	// command accepts. Run and the help-introspection path both call it, so a
+	// command's flags are declared once and `help --json` cannot drift from what
+	// Run actually parses. Commands whose only flag is --json leave it nil.
+	NewFlagSet func() *flag.FlagSet
 }
 
 // registry holds all registered commands in registration order.
@@ -132,10 +137,62 @@ func Execute() (rc int) {
 // commandInfo is the machine-readable description of a command, emitted by the
 // help commands under --json.
 type commandInfo struct {
-	Name    string   `json:"name"`
-	Summary string   `json:"summary"`
-	Usage   string   `json:"usage"`
-	Aliases []string `json:"aliases,omitempty"`
+	Name    string     `json:"name"`
+	Summary string     `json:"summary"`
+	Usage   string     `json:"usage"`
+	Aliases []string   `json:"aliases,omitempty"`
+	Flags   []flagInfo `json:"flags,omitempty"`
+}
+
+// flagInfo describes one declared flag (a flat entry: -m and --message and --json
+// each appear separately, since Go models them as distinct flags). Positionals
+// are not listed here — the prose usage string documents those.
+type flagInfo struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"` // "bool" or "string"
+	Default string `json:"default,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// registeredInfo builds the machine-readable description of a registered command,
+// including its declared flags.
+func registeredInfo(c *Command) commandInfo {
+	return commandInfo{Name: c.Name, Summary: c.Summary, Usage: c.Usage, Aliases: c.Aliases, Flags: commandFlags(c)}
+}
+
+// commandFlags lists a command's declared flags by introspecting the very flag
+// set it parses with, so help reports exactly what Run accepts. completion
+// declares no flags; every other command accepts at least --json.
+func commandFlags(c *Command) []flagInfo {
+	if c.Name == "completion" {
+		return nil
+	}
+	if c.NewFlagSet != nil {
+		return flagList(c.NewFlagSet())
+	}
+	var asJSON bool
+	return flagList(newFlagSet(c.Name, &asJSON))
+}
+
+// flagList renders a flag set's declared flags as a flat, name-sorted list.
+func flagList(fs *flag.FlagSet) []flagInfo {
+	var flags []flagInfo
+	fs.VisitAll(func(f *flag.Flag) {
+		typ := "string"
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			typ = "bool"
+		}
+		flags = append(flags, flagInfo{Name: f.Name, Type: typ, Default: f.DefValue, Summary: f.Usage})
+	})
+	return flags
+}
+
+// jsonOnlyFlags is the flag list for the built-in pseudo-commands, which accept
+// only --json.
+func jsonOnlyFlags() []flagInfo {
+	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	fs.Bool("json", false, "output the result as JSON")
+	return flagList(fs)
 }
 
 // parseBuiltinArgs is the one argument scanner for the built-in pseudo-commands
@@ -219,13 +276,13 @@ func helpForCommand(name string, asJSON bool) int {
 
 func commandInfoForName(name string) (commandInfo, bool) {
 	if c, ok := byName[name]; ok {
-		return commandInfo{c.Name, c.Summary, c.Usage, c.Aliases}, true
+		return registeredInfo(c), true
 	}
 	switch name {
 	case "help", "-h", "--help":
-		return commandInfo{Name: "help", Summary: "show this help", Usage: "st help [<command>] [--json]", Aliases: []string{"-h", "--help"}}, true
+		return commandInfo{Name: "help", Summary: "show this help", Usage: "st help [<command>] [--json]", Aliases: []string{"-h", "--help"}, Flags: jsonOnlyFlags()}, true
 	case "version", "-v", "--version":
-		return commandInfo{Name: "version", Summary: "print the version", Usage: "st version [--json]", Aliases: []string{"-v", "--version"}}, true
+		return commandInfo{Name: "version", Summary: "print the version", Usage: "st version [--json]", Aliases: []string{"-v", "--version"}, Flags: jsonOnlyFlags()}, true
 	default:
 		return commandInfo{}, false
 	}
@@ -400,7 +457,7 @@ func printHelp(asJSON bool) {
 	if asJSON {
 		infos := make([]commandInfo, 0, len(registry)+2)
 		for _, c := range registry {
-			infos = append(infos, commandInfo{c.Name, c.Summary, c.Usage, c.Aliases})
+			infos = append(infos, registeredInfo(c))
 		}
 		helpInfo, _ := commandInfoForName("help")
 		versionInfo, _ := commandInfoForName("version")

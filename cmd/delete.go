@@ -9,11 +9,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "delete",
-		Aliases: []string{"rm"},
-		Summary: "Delete a branch and re-parent its children",
-		Usage:   "st delete <name> [-f|--force] [--json]",
-		Run:     runDelete,
+		Name:       "delete",
+		Aliases:    []string{"rm"},
+		Summary:    "Delete a branch and re-parent its children",
+		Usage:      "st delete <name> [-f|--force] [--json]",
+		Run:        runDelete,
+		NewFlagSet: deleteFlagSet,
 	})
 }
 

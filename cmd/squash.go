@@ -4,10 +4,11 @@ import "stacked/internal/stack"
 
 func init() {
 	register(&Command{
-		Name:    "squash",
-		Summary: "Squash all of the current branch's commits into one",
-		Usage:   "st squash [-m <msg>] [--json]",
-		Run:     runSquash,
+		Name:       "squash",
+		Summary:    "Squash all of the current branch's commits into one",
+		Usage:      "st squash [-m <msg>] [--json]",
+		Run:        runSquash,
+		NewFlagSet: squashFlagSet,
 	})
 }
 

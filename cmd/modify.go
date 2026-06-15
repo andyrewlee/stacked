@@ -8,11 +8,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "modify",
-		Aliases: []string{"amend", "m"},
-		Summary: "Amend (or add) a commit on the current branch and restack everything above",
-		Usage:   "st modify [-m <msg>] [-a|--all] [--commit] [--json]",
-		Run:     runModify,
+		Name:       "modify",
+		Aliases:    []string{"amend", "m"},
+		Summary:    "Amend (or add) a commit on the current branch and restack everything above",
+		Usage:      "st modify [-m <msg>] [-a|--all] [--commit] [--json]",
+		Run:        runModify,
+		NewFlagSet: modifyFlagSet,
 	})
 }
 
