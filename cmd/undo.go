@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/git"
@@ -22,10 +21,8 @@ func init() {
 // every recorded branch is reset to its prior tip. It does not touch the
 // working tree, so uncommitted changes are preserved.
 func runUndo(args []string) error {
-	fs := flag.NewFlagSet("undo", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st undo [--json]") }
+	fs := newFlagSet("undo", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

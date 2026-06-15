@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -17,15 +16,14 @@ func init() {
 }
 
 func runTrack(args []string) error {
-	fs := flag.NewFlagSet("track", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("track", &asJSON)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st track [--parent <branch>] [--json]")
+		fmt.Fprintln(fs.Output(), usageLine("track"))
 		fs.PrintDefaults()
 	}
 	var parent string
 	fs.StringVar(&parent, "parent", "", "parent branch (trunk or a tracked branch)")
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

@@ -242,6 +242,21 @@ func TestEveryCommandDefinesJSONFlag(t *testing.T) {
 	}
 }
 
+// TestEveryCommandUsageMatchesRegistry locks the drift hazard newFlagSet removed:
+// each command's -h output must begin with the exact usage line derived from its
+// registered Command.Usage, so the printed and registered usage can never diverge
+// again. -h returns flag.ErrHelp before any git/state work, so no repo is needed.
+func TestEveryCommandUsageMatchesRegistry(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, c := range registry {
+		got := captureStdout(t, func() { _ = c.Run([]string{"-h"}) })
+		first, _, _ := strings.Cut(got, "\n")
+		if want := "usage: " + c.Usage; first != want {
+			t.Errorf("command %q -h first line = %q, want %q", c.Name, first, want)
+		}
+	}
+}
+
 func TestExecuteUnknownCommand(t *testing.T) {
 	// Plain mode: exit 1 and nothing on stdout (the diagnostic goes to stderr,
 	// verified by the e2e suite).

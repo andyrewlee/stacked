@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"flag"
-	"fmt"
 	"strings"
 
 	"stacked/internal/git"
@@ -23,10 +21,8 @@ func init() {
 // (trunk/tracked/untracked), parent, children, whether it needs a restack, and
 // whether the working tree is clean. With --json it emits the same data as JSON.
 func runStatus(args []string) error {
-	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output status as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st status [--json]") }
+	fs := newFlagSet("status", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

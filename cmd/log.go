@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"strings"
 
@@ -23,10 +22,8 @@ func init() {
 // runLog renders the tracked stacks as a tree (trunk at the bottom, branches
 // drawn above their parents) or, with --json, as a structured tree for scripting.
 func runLog(args []string) error {
-	fs := flag.NewFlagSet("log", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the stack as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st log [--json]") }
+	fs := newFlagSet("log", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

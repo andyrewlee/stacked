@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -19,9 +18,10 @@ func init() {
 }
 
 func runCreate(args []string) error {
-	fs := flag.NewFlagSet("create", flag.ContinueOnError)
+	var asJSON bool
+	fs := newFlagSet("create", &asJSON)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st create <name> [-m <msg>] [-a|--all] [--json]")
+		fmt.Fprintln(fs.Output(), usageLine("create"))
 		fs.PrintDefaults()
 	}
 	var message string
@@ -30,8 +30,6 @@ func runCreate(args []string) error {
 	var all bool
 	fs.BoolVar(&all, "a", false, "stage all changes before committing")
 	fs.BoolVar(&all, "all", false, "stage all changes before committing")
-	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}

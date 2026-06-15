@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/git"
@@ -22,12 +21,8 @@ func init() {
 // up to n times, stopping early if it reaches the trunk, then checks out the
 // resulting branch.
 func runDown(args []string) error {
-	fs := flag.NewFlagSet("down", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: st down [n] [--json]")
-	}
+	fs := newFlagSet("down", &asJSON)
 	n, err := parseCount(fs, args, "down")
 	if err != nil {
 		return err

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -17,10 +16,8 @@ func init() {
 }
 
 func runContinue(args []string) error {
-	fs := flag.NewFlagSet("continue", flag.ContinueOnError)
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st continue [--json]") }
+	fs := newFlagSet("continue", &asJSON)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}

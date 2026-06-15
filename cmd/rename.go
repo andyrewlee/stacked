@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
 	"stacked/internal/stack"
@@ -18,10 +17,8 @@ func init() {
 }
 
 func runRename(args []string) error {
-	fs := flag.NewFlagSet("rename", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st rename [old] <new> [--json]") }
 	var asJSON bool
-	fs.BoolVar(&asJSON, "json", false, "output the result as JSON")
+	fs := newFlagSet("rename", &asJSON)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
