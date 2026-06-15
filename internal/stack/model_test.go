@@ -33,6 +33,22 @@ func runModel(t *testing.T, seed int64, steps int) {
 
 	for step := 0; step < steps; step++ {
 		tracked := sortedBranchNames(s)
+		// Occasionally corrupt the metadata behind the engine's back and Repair
+		// it: Repair is otherwise invisible to this model, yet restoring exactly
+		// these invariants is its whole job.
+		if len(tracked) > 0 && rng.Intn(12) == 0 {
+			victim := pick(rng, tracked)
+			s.Branches[victim].Parent = "ghost-" + victim // invalid, untracked parent
+			if _, err := Repair(env, s); err != nil {
+				t.Fatalf("step %d: repair: %v", step, err)
+			}
+			f.head = "main"
+			if _, err := Restack(env, s); err != nil {
+				t.Fatalf("step %d: restack after repair: %v", step, err)
+			}
+			checkInvariants(t, f, s, step)
+			continue
+		}
 		// Build the step as a re-runnable closure so it can be applied, undone,
 		// and applied again.
 		var label string
