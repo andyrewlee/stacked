@@ -206,14 +206,11 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 		action = "Amended " + cur
 	}
 
-	// On a conflict the rebase is left in progress for `st continue`; do not
-	// restore HEAD in that case.
-	rebased, err := s.RestackUpstack(env, cur)
+	// Restack the upstack and restore HEAD through the shared epilogue (which
+	// leaves a conflict's rebase in progress for `st continue`), the same tail
+	// Fold/Squash/Onto use.
+	rebased, err := finishUpstack(env, s, cur)
 	if err != nil {
-		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
-		return nil, fmt.Errorf("restacking upstack of %q: %w", cur, err)
-	}
-	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
 		return nil, err
 	}
 	return &OpResult{Summary: action, Branch: cur, Restacked: rebased}, nil
