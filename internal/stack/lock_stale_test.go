@@ -127,3 +127,80 @@ func TestAcquireReclaimGuardRecoversDeadOwner(t *testing.T) {
 	}
 	release()
 }
+
+// The following exercise the composed exclusive-lock acquisition (the Lock body
+// that ships on non-flock platforms) directly, so the path is covered by the
+// unix test binary even though lock_other.go's Lock is build-tagged off it.
+
+func TestAcquireExclLockSecondAcquireFails(t *testing.T) {
+	dir := t.TempDir()
+	release, err := acquireExclLock(dir)
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if _, err := acquireExclLock(dir); err == nil {
+		t.Fatal("second acquire while held should fail")
+	}
+	release()
+	if _, err := os.Stat(filepath.Join(dir, "lock.excl")); !os.IsNotExist(err) {
+		t.Fatalf("lock file should be removed after release, stat err = %v", err)
+	}
+	// After release a fresh acquire succeeds.
+	release2, err := acquireExclLock(dir)
+	if err != nil {
+		t.Fatalf("acquire after release: %v", err)
+	}
+	release2()
+}
+
+func TestAcquireExclLockReclaimsDeadOwner(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.excl")
+	dead := lockFileContent(999999999, time.Now(), "dead")
+	if err := os.WriteFile(path, []byte(dead), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireExclLock(dir)
+	if err != nil {
+		t.Fatalf("acquire should reclaim a dead owner's lock: %v", err)
+	}
+	release()
+}
+
+func TestAcquireExclLockKeepsFreshMalformedLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.excl")
+	if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if release, err := acquireExclLock(dir); err == nil {
+		release()
+		t.Fatal("a fresh malformed lock should not be reclaimed")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fresh malformed lock should remain: %v", err)
+	}
+}
+
+func TestAcquireExclLockReleaseLeavesReplacement(t *testing.T) {
+	dir := t.TempDir()
+	release, err := acquireExclLock(dir)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	// Another process replaces the lock with its own token; our release must not
+	// remove it.
+	path := filepath.Join(dir, "lock.excl")
+	other := lockFileContent(os.Getpid(), time.Now(), "other-token")
+	if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("replacement lock should remain after our release: %v", err)
+	}
+	if string(got) != other {
+		t.Fatalf("release removed or altered another owner's lock: %q", got)
+	}
+}
