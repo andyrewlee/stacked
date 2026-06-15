@@ -33,9 +33,10 @@ type Command struct {
 	// Run executes the command with the arguments following the command name.
 	Run func(args []string) error
 	// NewFlagSet, when set, builds a fresh flag set declaring every flag the
-	// command accepts. Run and the help-introspection path both call it, so a
-	// command's flags are declared once and `help --json` cannot drift from what
-	// Run actually parses. Commands whose only flag is --json leave it nil.
+	// command accepts, for help introspection. Run builds its set from the same
+	// per-command constructor (cmd/flagsets.go), so a command's flags are declared
+	// once and `help --json` cannot drift from what Run parses. Commands whose
+	// only flag is --json leave it nil.
 	NewFlagSet func() *flag.FlagSet
 }
 

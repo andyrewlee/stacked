@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 
 	"stacked/internal/stack"
 )
@@ -19,21 +18,12 @@ func init() {
 }
 
 func runCreate(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("create", &asJSON)
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), usageLine("create"))
-		fs.PrintDefaults()
-	}
-	var message string
-	fs.StringVar(&message, "m", "", "commit message for the new branch")
-	fs.StringVar(&message, "message", "", "commit message for the new branch")
-	var all bool
-	fs.BoolVar(&all, "a", false, "stage all changes before committing")
-	fs.BoolVar(&all, "all", false, "stage all changes before committing")
+	var o createOpts
+	fs := newCreateFlags(&o)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	asJSON, message, all := o.asJSON, o.message, o.all
 	rest := fs.Args()
 	if len(rest) != 1 {
 		usageUnlessJSON(fs, args)

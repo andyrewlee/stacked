@@ -17,20 +17,15 @@ func init() {
 }
 
 func runSync(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("sync", &asJSON)
-	var noDelete bool
-	fs.BoolVar(&noDelete, "no-delete", false, "do not delete merged branches")
-	remote := "origin"
-	fs.StringVar(&remote, "remote", "origin", "remote to fetch and fast-forward from")
-	var dryRun bool
-	fs.BoolVar(&dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
+	var o syncOpts
+	fs := newSyncFlags(&o)
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
 	if err := rejectArgs("sync", fs.Args()); err != nil {
 		return err
 	}
+	asJSON, noDelete, remote, dryRun := o.asJSON, o.noDelete, o.remote, o.dryRun
 
 	if dryRun {
 		s, err := loadState()

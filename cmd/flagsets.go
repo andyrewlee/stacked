@@ -1,86 +1,162 @@
 package cmd
 
-import "flag"
+import (
+	"flag"
+	"fmt"
+)
 
-// Introspection flag sets for `help --json`. Each declares exactly the flags its
-// command's Run parses (Run still builds and binds its own set; these mirror it
-// for introspection only). They are gathered here so the full set is reviewable
-// at a glance, and TestHelpReportsOnlyRealFlags asserts every flag listed here is
-// actually accepted by the command — so help can never advertise a flag the
-// command rejects. Commands whose only flag is --json need no entry (help derives
-// that from newFlagSet); completion has none.
+// Each command with flags beyond --json declares them ONCE here: newXxxFlags
+// binds a *xxxOpts that its Run reads, and the no-arg xxxFlagSet() wrapper feeds
+// the same declaration to help introspection (Command.NewFlagSet). So `help
+// --json` reports exactly what Run parses, by construction — no second
+// declaration to drift. Aliases (-m/--message, -a/--all, -f/--force) bind to one
+// field so command-line last-wins is preserved. (completion has no flags;
+// commands whose only flag is --json need no entry — help derives that from
+// newFlagSet.)
 
-func createFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("create", &asJSON)
-	fs.String("m", "", "commit message for the new branch")
-	fs.String("message", "", "commit message for the new branch")
-	fs.Bool("a", false, "stage all changes before committing")
-	fs.Bool("all", false, "stage all changes before committing")
+// withDefaults gives a command's flag set a usage line plus its flag defaults,
+// the help body the five flag-rich commands print on -h.
+func withDefaults(fs *flag.FlagSet, name string) *flag.FlagSet {
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), usageLine(name))
+		fs.PrintDefaults()
+	}
 	return fs
 }
 
-func modifyFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("modify", &asJSON)
-	fs.String("m", "", "commit message")
-	fs.String("message", "", "commit message")
-	fs.Bool("a", true, "stage all tracked changes before amending/committing")
-	fs.Bool("all", true, "stage all tracked changes before amending/committing")
-	fs.Bool("commit", false, "create a new commit instead of amending the tip")
+type createOpts struct {
+	asJSON  bool
+	message string
+	all     bool
+}
+
+func newCreateFlags(o *createOpts) *flag.FlagSet {
+	fs := newFlagSet("create", &o.asJSON)
+	fs.StringVar(&o.message, "m", "", "commit message for the new branch")
+	fs.StringVar(&o.message, "message", "", "commit message for the new branch")
+	fs.BoolVar(&o.all, "a", false, "stage all changes before committing")
+	fs.BoolVar(&o.all, "all", false, "stage all changes before committing")
+	return withDefaults(fs, "create")
+}
+
+func createFlagSet() *flag.FlagSet { return newCreateFlags(&createOpts{}) }
+
+type modifyOpts struct {
+	asJSON  bool
+	message string
+	all     bool
+	commit  bool
+}
+
+func newModifyFlags(o *modifyOpts) *flag.FlagSet {
+	fs := newFlagSet("modify", &o.asJSON)
+	fs.StringVar(&o.message, "m", "", "commit message")
+	fs.StringVar(&o.message, "message", "", "commit message")
+	// Default to staging all changes so a bare invocation (and the "amend" alias)
+	// behaves like "stage all + amend"; only -a=false disables it.
+	fs.BoolVar(&o.all, "a", true, "stage all tracked changes before amending/committing")
+	fs.BoolVar(&o.all, "all", true, "stage all tracked changes before amending/committing")
+	fs.BoolVar(&o.commit, "commit", false, "create a new commit instead of amending the tip")
+	return withDefaults(fs, "modify")
+}
+
+func modifyFlagSet() *flag.FlagSet { return newModifyFlags(&modifyOpts{}) }
+
+type deleteOpts struct {
+	asJSON bool
+	force  bool
+}
+
+func newDeleteFlags(o *deleteOpts) *flag.FlagSet {
+	fs := newFlagSet("delete", &o.asJSON)
+	fs.BoolVar(&o.force, "f", false, "force delete the branch even if not fully merged")
+	fs.BoolVar(&o.force, "force", false, "force delete the branch even if not fully merged")
+	return withDefaults(fs, "delete")
+}
+
+func deleteFlagSet() *flag.FlagSet { return newDeleteFlags(&deleteOpts{}) }
+
+type initOpts struct {
+	asJSON bool
+	trunk  string
+}
+
+func newInitFlags(o *initOpts) *flag.FlagSet {
+	fs := newFlagSet("init", &o.asJSON)
+	fs.StringVar(&o.trunk, "trunk", "", "name of the trunk branch (default: detected)")
+	return withDefaults(fs, "init")
+}
+
+func initFlagSet() *flag.FlagSet { return newInitFlags(&initOpts{}) }
+
+type trackOpts struct {
+	asJSON bool
+	parent string
+}
+
+func newTrackFlags(o *trackOpts) *flag.FlagSet {
+	fs := newFlagSet("track", &o.asJSON)
+	fs.StringVar(&o.parent, "parent", "", "parent branch (trunk or a tracked branch)")
+	return withDefaults(fs, "track")
+}
+
+func trackFlagSet() *flag.FlagSet { return newTrackFlags(&trackOpts{}) }
+
+type submitOpts struct {
+	asJSON bool
+	remote string
+	dryRun bool
+}
+
+func newSubmitFlags(o *submitOpts) *flag.FlagSet {
+	fs := newFlagSet("submit", &o.asJSON)
+	fs.StringVar(&o.remote, "remote", "origin", "remote to push to")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed without pushing")
 	return fs
 }
 
-func deleteFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("delete", &asJSON)
-	fs.Bool("f", false, "force delete the branch even if not fully merged")
-	fs.Bool("force", false, "force delete the branch even if not fully merged")
+func submitFlagSet() *flag.FlagSet { return newSubmitFlags(&submitOpts{}) }
+
+type syncOpts struct {
+	asJSON   bool
+	noDelete bool
+	remote   string
+	dryRun   bool
+}
+
+func newSyncFlags(o *syncOpts) *flag.FlagSet {
+	fs := newFlagSet("sync", &o.asJSON)
+	fs.BoolVar(&o.noDelete, "no-delete", false, "do not delete merged branches")
+	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
 	return fs
 }
 
-func initFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("init", &asJSON)
-	fs.String("trunk", "", "name of the trunk branch (default: detected)")
+func syncFlagSet() *flag.FlagSet { return newSyncFlags(&syncOpts{}) }
+
+type restackOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newRestackFlags(o *restackOpts) *flag.FlagSet {
+	fs := newFlagSet("restack", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be restacked without changing anything")
 	return fs
 }
 
-func trackFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("track", &asJSON)
-	fs.String("parent", "", "parent branch (trunk or a tracked branch)")
+func restackFlagSet() *flag.FlagSet { return newRestackFlags(&restackOpts{}) }
+
+type squashOpts struct {
+	asJSON  bool
+	message string
+}
+
+func newSquashFlags(o *squashOpts) *flag.FlagSet {
+	fs := newFlagSet("squash", &o.asJSON)
+	fs.StringVar(&o.message, "m", "", "commit message for the squashed commit")
+	fs.StringVar(&o.message, "message", "", "commit message for the squashed commit")
 	return fs
 }
 
-func submitFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("submit", &asJSON)
-	fs.String("remote", "origin", "remote to push to")
-	fs.Bool("dry-run", false, "print what would be pushed without pushing")
-	return fs
-}
-
-func syncFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("sync", &asJSON)
-	fs.Bool("no-delete", false, "do not delete merged branches")
-	fs.String("remote", "origin", "remote to fetch and fast-forward from")
-	fs.Bool("dry-run", false, "show what would be pruned/restacked without changing anything")
-	return fs
-}
-
-func restackFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("restack", &asJSON)
-	fs.Bool("dry-run", false, "show what would be restacked without changing anything")
-	return fs
-}
-
-func squashFlagSet() *flag.FlagSet {
-	var asJSON bool
-	fs := newFlagSet("squash", &asJSON)
-	fs.String("m", "", "commit message for the squashed commit")
-	fs.String("message", "", "commit message for the squashed commit")
-	return fs
-}
+func squashFlagSet() *flag.FlagSet { return newSquashFlags(&squashOpts{}) }

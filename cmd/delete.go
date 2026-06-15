@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 
 	"stacked/internal/stack"
 )
@@ -19,18 +18,12 @@ func init() {
 }
 
 func runDelete(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("delete", &asJSON)
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), usageLine("delete"))
-		fs.PrintDefaults()
-	}
-	var force bool
-	fs.BoolVar(&force, "f", false, "force delete the branch even if not fully merged")
-	fs.BoolVar(&force, "force", false, "force delete the branch even if not fully merged")
+	var o deleteOpts
+	fs := newDeleteFlags(&o)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	asJSON, force := o.asJSON, o.force
 	rest := fs.Args()
 	if len(rest) != 1 {
 		usageUnlessJSON(fs, args)

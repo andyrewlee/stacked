@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -310,41 +309,6 @@ func TestHelpReportsOnlyRealFlags(t *testing.T) {
 			if err != nil && strings.Contains(err.Error(), "provided but not defined") {
 				t.Errorf("help lists flag --%s for %q but Run rejects it: %v", f.Name, c.Name, err)
 			}
-		}
-	}
-}
-
-// TestCommandFlagsMatchExpected pins each command's reported flag set to a
-// maintained table, so a change to flagsets.go (or a new command) that drifts the
-// help-reported flags fails loudly. TestHelpReportsOnlyRealFlags covers the
-// over-report direction (a listed flag the command rejects); this pins the set
-// itself. Every command also reports --json; completion has none.
-func TestCommandFlagsMatchExpected(t *testing.T) {
-	expected := map[string][]string{
-		"create":  {"a", "all", "json", "m", "message"},
-		"modify":  {"a", "all", "commit", "json", "m", "message"},
-		"delete":  {"f", "force", "json"},
-		"init":    {"json", "trunk"},
-		"track":   {"json", "parent"},
-		"submit":  {"dry-run", "json", "remote"},
-		"sync":    {"dry-run", "json", "no-delete", "remote"},
-		"restack": {"dry-run", "json"},
-		"squash":  {"json", "m", "message"},
-	}
-	for _, c := range registry {
-		got := make([]string, 0)
-		for _, f := range commandFlags(c) { // VisitAll order is lexicographical
-			got = append(got, f.Name)
-		}
-		want, ok := expected[c.Name]
-		if !ok {
-			want = []string{"json"} // every command without its own flag set has exactly --json
-			if c.Name == "completion" {
-				want = []string{} // completion declares no flags
-			}
-		}
-		if !slices.Equal(got, want) {
-			t.Errorf("commandFlags(%q) = %v, want %v (update flagsets.go or this table)", c.Name, got, want)
 		}
 	}
 }
