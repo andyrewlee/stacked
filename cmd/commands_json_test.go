@@ -706,16 +706,21 @@ func TestAgentDocDocumentsExitCodes(t *testing.T) {
 	}
 }
 
-// TestAgentDocDocumentsContractStructs pins the central named result structs to
-// AGENT.md. Their omitempty fields (failed, branch, restacked, deleted, notes,
-// dryRun) do not appear on a happy-path run, so reflection — not execution — is
-// the only way to catch a new undocumented field.
+// TestAgentDocDocumentsContractStructs pins the named, documented JSON contract
+// structs to AGENT.md. Their omitempty fields (failed, branch, restacked, deleted,
+// notes, dryRun, aliases, default) do not appear on a happy-path run, so reflection
+// — not execution — is the only way to catch a new undocumented field. commandInfo
+// and flagInfo back the `help --json` payload (AGENT.md's "Discoverability"); no
+// golden captures that payload and the decode test follows any tag rename, so a
+// renamed json tag (e.g. flagInfo `type`->`kind`) would otherwise drift silently.
 func TestAgentDocDocumentsContractStructs(t *testing.T) {
 	doc := agentDoc(t)
 	for _, typ := range []reflect.Type{
 		reflect.TypeOf(submitResult{}),
 		reflect.TypeOf(stack.OpResult{}),
 		reflect.TypeOf(initResult{}),
+		reflect.TypeOf(commandInfo{}),
+		reflect.TypeOf(flagInfo{}),
 	} {
 		for i := 0; i < typ.NumField(); i++ {
 			tag := typ.Field(i).Tag.Get("json")
