@@ -49,6 +49,40 @@ func runModel(t *testing.T, seed int64, steps int) {
 			checkInvariants(t, f, s, step)
 			continue
 		}
+		// Occasionally simulate a branch merging into the trunk and prune it.
+		// PruneMerged reshapes the forest (delete merged branches, re-parent the
+		// survivors) the same way the rest of the model stresses other mutations,
+		// but its trunk-ref mutation makes the centralized undo snapshot awkward,
+		// so this runs outside the undo oracle: apply, then restack/idempotence/
+		// invariants. The fixed TestModelSyncInvariants still covers the Sync
+		// fetch/fast-forward wrapper.
+		if len(tracked) > 0 && rng.Intn(12) == 0 {
+			merged := pick(rng, tracked)
+			mustCheckout(t, f, merged) // off main, so ForceBranch(main, ...) is allowed
+			tip, err := f.RevParse(merged)
+			if err != nil {
+				t.Fatalf("step %d: rev-parse %s: %v", step, merged, err)
+			}
+			if err := f.ForceBranch(s.Trunk, tip); err != nil { // simulate merged into trunk
+				t.Fatalf("step %d: force trunk: %v", step, err)
+			}
+			mustCheckout(t, f, s.Trunk) // Sync checks out trunk before pruning; trunk is never pruned
+			if _, err := PruneMerged(env, s); err != nil {
+				t.Fatalf("step %d: prune merged: %v", step, err)
+			}
+			f.head = "main"
+			if _, err := Restack(env, s); err != nil {
+				t.Fatalf("step %d: restack after prune: %v", step, err)
+			}
+			f.head = "main"
+			if res, err := Restack(env, s); err != nil {
+				t.Fatalf("step %d: prune restack idempotence: %v", step, err)
+			} else if len(res.Restacked) != 0 {
+				t.Fatalf("step %d: restack not idempotent after prune: %v", step, res.Restacked)
+			}
+			checkInvariants(t, f, s, step)
+			continue
+		}
 		// Build the step as a re-runnable closure so it can be applied, undone,
 		// and applied again.
 		var label string
