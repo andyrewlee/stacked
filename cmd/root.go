@@ -114,7 +114,14 @@ func Execute() (rc int) {
 
 	if err := cmd.Run(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0 // usage was already printed by the command's flag set
+			// In --json mode the flag set prints nothing on -h (so the JSON
+			// stream stays clean), which would otherwise leave the agent with
+			// silent empty output; emit the same machine-readable info as
+			// `st help <name> --json`. Text mode already printed usage.
+			if jsonRequested(args[1:]) {
+				return helpForCommand(name, true)
+			}
+			return 0
 		}
 		renderError(err, jsonRequested(args[1:]))
 		return exitCode(err)

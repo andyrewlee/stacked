@@ -242,6 +242,40 @@ func TestEveryCommandDefinesJSONFlag(t *testing.T) {
 	}
 }
 
+// TestSubcommandHelpJSON pins the fix for the silent `st <cmd> -h --json`: it
+// must emit the same machine-readable info as `st help <cmd> --json` (byte for
+// byte), and aliases must resolve the same way.
+func TestSubcommandHelpJSON(t *testing.T) {
+	dashH := captureStdout(t, func() {
+		withArgs(t, []string{"create", "-h", "--json"}, func() { _ = Execute() })
+	})
+	if strings.TrimSpace(dashH) == "" {
+		t.Fatal("st create -h --json produced no output")
+	}
+	var info commandInfo
+	if err := json.Unmarshal([]byte(dashH), &info); err != nil {
+		t.Fatalf("st create -h --json not parseable: %v\n%s", err, dashH)
+	}
+	if info.Name != "create" {
+		t.Errorf("st create -h --json name = %q, want create", info.Name)
+	}
+
+	helpForm := captureStdout(t, func() {
+		withArgs(t, []string{"help", "create", "--json"}, func() { _ = Execute() })
+	})
+	if dashH != helpForm {
+		t.Errorf("st create -h --json != st help create --json\n-h:\n%s\nhelp:\n%s", dashH, helpForm)
+	}
+
+	aliasForm := captureStdout(t, func() {
+		withArgs(t, []string{"co", "-h", "--json"}, func() { _ = Execute() })
+	})
+	var aliasInfo commandInfo
+	if err := json.Unmarshal([]byte(aliasForm), &aliasInfo); err != nil || aliasInfo.Name != "checkout" {
+		t.Errorf("st co -h --json should resolve to checkout: %q (err %v)", aliasForm, err)
+	}
+}
+
 func TestSuggestCommand(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"creat", "create"},   // distance 1
