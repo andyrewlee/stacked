@@ -402,12 +402,19 @@ func printHelp(asJSON bool) {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, c := range registry {
-		fmt.Fprintf(w, "  %s\t%s\n", c.Name, c.Summary)
+		name := c.Name
+		if len(c.Aliases) > 0 {
+			name += " (" + strings.Join(c.Aliases, ", ") + ")"
+		}
+		fmt.Fprintf(w, "  %s\t%s\n", name, c.Summary)
 	}
 	// Built-in pseudo-commands.
 	fmt.Fprintf(w, "  %s\t%s\n", "help", "show this help")
 	fmt.Fprintf(w, "  %s\t%s\n", "version", "print the version")
 	w.Flush()
+
+	fmt.Println()
+	fmt.Println(`New here? Run "st guide" for the recommended workflow, or "st status" to see where you are.`)
 }
 
 // printVersion prints the release version along with the embedded build/VCS
