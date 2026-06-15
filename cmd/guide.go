@@ -44,7 +44,7 @@ func runGuide(args []string) error {
 		for _, step := range guideSteps {
 			out("  %s\n", step)
 		}
-		out("\nEvery command except completion accepts --json; failures use exit codes 2=conflict, 3=not-initialized, 4=dirty.\n")
+		out("\nEvery command except completion accepts --json; failures use exit codes %s.\n", errorCodeSummary())
 		out("Use `st help <command>` for command usage.\n")
 	})
 }
