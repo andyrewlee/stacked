@@ -36,9 +36,8 @@ func runModify(args []string) error {
 	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
-	if len(fs.Args()) != 0 {
-		usageUnlessJSON(fs, args)
-		return fmt.Errorf("modify takes no positional arguments")
+	if err := rejectArgs("modify", fs.Args()); err != nil {
+		return err
 	}
 
 	return mutate("modify", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
