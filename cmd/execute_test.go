@@ -276,6 +276,27 @@ func TestSubcommandHelpJSON(t *testing.T) {
 	}
 }
 
+// TestRenderErrorConflictFields asserts the --json error envelope surfaces the
+// conflicted branch and parent as structured fields (not just in the message).
+func TestRenderErrorConflictFields(t *testing.T) {
+	err := &stack.ConflictError{Action: "rebasing", Branch: "feat-b", Onto: "feat-a"}
+	stderr := captureStderr(t, func() { renderError(err, true) })
+	var env struct {
+		Error struct {
+			Code, Message, Branch, Onto string
+		}
+	}
+	if e := json.Unmarshal([]byte(stderr), &env); e != nil {
+		t.Fatalf("renderError JSON not parseable: %v\n%s", e, stderr)
+	}
+	if env.Error.Code != "conflict" {
+		t.Errorf("code = %q, want conflict", env.Error.Code)
+	}
+	if env.Error.Branch != "feat-b" || env.Error.Onto != "feat-a" {
+		t.Errorf("branch/onto = %q/%q, want feat-b/feat-a", env.Error.Branch, env.Error.Onto)
+	}
+}
+
 func TestSuggestCommand(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"creat", "create"},   // distance 1

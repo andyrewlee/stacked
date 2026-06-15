@@ -712,6 +712,77 @@ func TestRestackConflictContinueRecovers(t *testing.T) {
 	checkInvariants(t, f, s, 0)
 }
 
+// TestConflictErrorCarriesBranch asserts a stopped rebase returns a typed
+// *ConflictError naming the branch and parent, while still matching ErrConflict.
+func TestConflictErrorCarriesBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a2")
+	f.conflictOn("b")
+
+	_, err := Restack(env, s)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restack error = %v, want ErrConflict", err)
+	}
+	var ce *ConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Restack error %v is not a *ConflictError", err)
+	}
+	if ce.Branch != "b" || ce.Onto != "a" {
+		t.Errorf("ConflictError = {Branch:%q Onto:%q}, want {b a}", ce.Branch, ce.Onto)
+	}
+}
+
+// TestConflictErrorMessageOmitsEmptyOnto: with a parent the message names it;
+// without one (the rare re-stall of an untracked branch) the "onto …" clause is
+// dropped rather than rendering an empty quoted parent.
+func TestConflictErrorMessageOmitsEmptyOnto(t *testing.T) {
+	withOnto := (&ConflictError{Action: "rebasing", Branch: "b", Onto: "a"}).Error()
+	if !strings.Contains(withOnto, `"b" onto "a"`) {
+		t.Errorf("with onto: %q, want it to name `\"b\" onto \"a\"`", withOnto)
+	}
+	noOnto := (&ConflictError{Action: "continuing", Branch: "b"}).Error()
+	if strings.Contains(noOnto, "onto") {
+		t.Errorf("empty onto: %q, want no \"onto\" clause", noOnto)
+	}
+	if !strings.Contains(noOnto, `"b"`) {
+		t.Errorf("empty onto: %q, want it to still name the branch", noOnto)
+	}
+}
+
+// TestContinueRestallCarriesBranch: when `st continue` re-stalls on the same
+// conflict, the error is still a typed *ConflictError naming the branch, so the
+// --json envelope carries branch/onto like the other conflict paths.
+func TestContinueRestallCarriesBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a2")
+	f.conflictOn("b")
+	if _, err := Restack(env, s); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restack error = %v, want ErrConflict", err)
+	}
+
+	f.rebaseRestall = true // the resolution attempt re-stalls
+	_, err := Continue(env, s)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Continue error = %v, want ErrConflict", err)
+	}
+	var ce *ConflictError
+	if !errors.As(err, &ce) || ce.Branch != "b" {
+		t.Fatalf("Continue re-stall error = %v, want *ConflictError on branch b", err)
+	}
+}
+
 func TestFoldConflictContinueRecovers(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
