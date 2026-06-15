@@ -137,7 +137,21 @@ func (f *fakeGit) CheckoutDetach(ref string) error {
 	return nil
 }
 
+// headBranch returns the current branch, panicking with a located message if
+// HEAD is detached. The fake otherwise silently reads f.branches[""] and
+// fabricates a branch at the empty SHA, masking engine bugs real git would
+// surface; failing loudly keeps the fake trustworthy.
+func (f *fakeGit) headBranch(op string) string {
+	if f.head == "" {
+		panic("fakeGit." + op + ": HEAD is detached")
+	}
+	return f.head
+}
+
 func (f *fakeGit) CreateBranch(name string) error {
+	if f.head == "" {
+		return fmt.Errorf("cannot create branch %q with a detached HEAD", name)
+	}
 	if _, ok := f.branches[name]; ok {
 		return fmt.Errorf("branch %q exists", name)
 	}
@@ -205,9 +219,10 @@ func (f *fakeGit) RenameBranch(oldName, newName string) error {
 }
 
 func (f *fakeGit) commit(subject string) {
+	head := f.headBranch("commit")
 	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, parent: f.branches[f.head], subject: subject}
-	f.branches[f.head] = id
+	f.commits[id] = &fakeCommit{id: id, parent: f.branches[head], subject: subject}
+	f.branches[head] = id
 }
 
 func (f *fakeGit) Commit(message string, _ bool) error {
@@ -224,14 +239,16 @@ func (f *fakeGit) Commit(message string, _ bool) error {
 }
 
 func (f *fakeGit) amend(subject string) {
-	old := f.commits[f.branches[f.head]]
+	head := f.headBranch("amend")
+	old := f.commits[f.branches[head]]
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: subject}
-	f.branches[f.head] = id
+	f.branches[head] = id
 }
 
 func (f *fakeGit) AmendNoEdit(_ bool) error {
-	f.amend(f.commits[f.branches[f.head]].subject)
+	head := f.headBranch("AmendNoEdit")
+	f.amend(f.commits[f.branches[head]].subject)
 	f.staged = false
 	f.clean = true
 	return nil
@@ -245,6 +262,9 @@ func (f *fakeGit) AmendMessage(message string, _ bool) error {
 }
 
 func (f *fakeGit) ResetSoft(ref string) error {
+	if f.head == "" {
+		return fmt.Errorf("cannot reset with a detached HEAD")
+	}
 	id := f.resolve(ref)
 	if id == "" {
 		return fmt.Errorf("unknown revision %q", ref)
@@ -253,6 +273,44 @@ func (f *fakeGit) ResetSoft(ref string) error {
 	f.staged = true
 	f.clean = false
 	return nil
+}
+
+// TestFakeGitRejectsDetachedHead asserts the HEAD-mutating fake methods fail
+// loudly when HEAD is detached instead of fabricating an empty-SHA branch.
+func TestFakeGitRejectsDetachedHead(t *testing.T) {
+	// A fresh detached fakeGit per assertion, so each guard is exercised in
+	// isolation: a future regression in one fails only its own case instead of
+	// cascading through the rest (which would mask the real culprit).
+	detached := func() *fakeGit { f := newFakeGit(); f.head = ""; return f }
+
+	if err := detached().CreateBranch("x"); err == nil {
+		t.Error("CreateBranch on a detached HEAD should error")
+	}
+	if err := detached().ResetSoft("main"); err == nil {
+		t.Error("ResetSoft on a detached HEAD should error")
+	}
+	assertDetachedPanic(t, "commit", func() { detached().commit("x") })
+	assertDetachedPanic(t, "amend", func() { detached().amend("x") })
+	assertDetachedPanic(t, "AmendNoEdit", func() { _ = detached().AmendNoEdit(false) })
+	// AmendMessage delegates to f.amend, which calls headBranch("amend"), so the
+	// located panic message says "amend", not "AmendMessage".
+	assertDetachedPanic(t, "amend", func() { _ = detached().AmendMessage("x", false) })
+}
+
+func assertDetachedPanic(t *testing.T, op string, fn func()) {
+	t.Helper()
+	want := "fakeGit." + op + ": HEAD is detached"
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("%s on a detached HEAD did not panic", op)
+			return
+		}
+		if msg, ok := r.(string); !ok || !strings.Contains(msg, want) {
+			t.Errorf("panic = %v, want it to contain %q", r, want)
+		}
+	}()
+	fn()
 }
 
 // RebaseOnto replays the branch's commits after oldBase onto newBase, mirroring
