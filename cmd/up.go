@@ -27,11 +27,7 @@ func runUp(args []string) error {
 		return err
 	}
 
-	state, err := loadState()
-	if err != nil {
-		return err
-	}
-	cur, err := currentBranch()
+	state, cur, err := loadStateAndCurrent()
 	if err != nil {
 		return err
 	}

@@ -74,7 +74,7 @@ func runSubmit(args []string) error {
 		})
 	}
 	if !state.IsTracked(cur) {
-		return fmt.Errorf("current branch %q is not tracked by stacked", cur)
+		return fmt.Errorf("branch %q is not tracked by stacked", cur)
 	}
 
 	// Build the ordered list of branches on the path bottom..current. Ancestors

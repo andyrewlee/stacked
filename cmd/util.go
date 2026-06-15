@@ -28,6 +28,20 @@ func loadState() (*stack.State, error) {
 	return s, nil
 }
 
+// loadStateAndCurrent loads the stack state and the current branch together, the
+// common preamble for commands that position relative to where HEAD currently is.
+func loadStateAndCurrent() (*stack.State, string, error) {
+	s, err := loadState()
+	if err != nil {
+		return nil, "", err
+	}
+	cur, err := currentBranch()
+	if err != nil {
+		return nil, "", err
+	}
+	return s, cur, nil
+}
+
 // gitShell is the production git port used by the stack engine.
 var gitShell stack.Git = git.Shell{}
 
