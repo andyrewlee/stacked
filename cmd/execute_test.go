@@ -219,6 +219,29 @@ func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 	}
 }
 
+// TestEveryCommandDefinesJSONFlag is the runtime counterpart to
+// TestEveryCommandDocumentsJSONInUsage: advertising --json in the usage string
+// is worthless if the FlagSet never defines the flag (copy the usage line, forget
+// the fs.BoolVar, and the command fails at runtime with "unknown flag" while all
+// tests stay green). Every command except completion must *parse* --json. Flag
+// parsing runs before any lock/load/git work, so this needs no initialized repo;
+// it tolerates the legitimate downstream failures (not initialized, missing
+// positional args, not a git repo) and only fails on a genuinely undefined flag.
+func TestEveryCommandDefinesJSONFlag(t *testing.T) {
+	t.Chdir(t.TempDir()) // hermetic: an empty, non-stacked dir; commands fail past the parse, harmlessly
+	for _, c := range registry {
+		if c.Name == "completion" {
+			continue // completion emits shell scripts, not JSON
+		}
+		var err error
+		// Swallow any usage/output the command prints on its (expected) failure.
+		_ = captureStdout(t, func() { err = c.Run([]string{"--json"}) })
+		if err != nil && strings.Contains(err.Error(), "provided but not defined") {
+			t.Errorf("command %q advertises --json but its FlagSet does not define it: %v", c.Name, err)
+		}
+	}
+}
+
 func TestExecuteUnknownCommand(t *testing.T) {
 	// Plain mode: exit 1 and nothing on stdout (the diagnostic goes to stderr,
 	// verified by the e2e suite).
