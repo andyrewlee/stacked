@@ -16,6 +16,10 @@ make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 it's green, you can commit. Keep the tool **standard-library only** — `go.mod` must
 have zero `require` entries (`go mod tidy` stays a no-op).
 
+The lint step needs **golangci-lint v2** on your `PATH` (an external binary, never
+a module dependency); `make lint` preflights for it and prints the install line:
+`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
+
 ## Architecture in one breath
 
 The tricky logic is a pure **engine** (`internal/stack`) that talks to git through

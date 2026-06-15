@@ -35,6 +35,8 @@ jobs:
       - name: Install golangci-lint (binary)
         uses: golangci/golangci-lint-action@v8
         with:
+          # Keep in sync with GOLANGCI_VERSION in the Makefile (this field cannot
+          # read a Make variable).
           version: v2.12.2
           install-mode: binary
           # The Makefile drives the lint step itself; this action only installs.
