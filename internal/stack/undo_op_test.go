@@ -125,6 +125,38 @@ func TestUndoRenameRestoresOldNameAndChecksItOut(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 }
 
+// TestUndoRenameWithNilStateRecoversOldName covers the cmd loadErr path (Undo is
+// called with s==nil when the state can't be loaded): the generic current-branch
+// restore must still land on the restored old name (entry.CurrentBranch), with no
+// loaded state to consult.
+func TestUndoRenameWithNilStateRecoversOldName(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustSnapshot(t, s, f, "rename")
+	if _, err := Rename(env, s, "a", "z"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	// FinalizeUndo records the created branch on the persisted entry; with s==nil
+	// it is the only signal that "z" must be deleted.
+	entry.CreatedBranches = []string{"z"}
+	if _, err := Undo(env, nil, entry); err != nil { // s==nil: Load failed
+		t.Fatalf("undo (nil state): %v", err)
+	}
+	if f.BranchExists("z") {
+		t.Fatal("undo left the renamed branch z behind")
+	}
+	if !f.BranchExists("a") {
+		t.Fatal("undo did not restore the old branch name a")
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q after undoing rename with nil state, want a", f.head)
+	}
+}
+
 func TestUndoDeleteResurrectsBranchFromSnapshotRef(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

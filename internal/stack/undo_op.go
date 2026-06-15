@@ -54,14 +54,12 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 				}
 			}
 			if cur, err := g.CurrentBranch(); err == nil && cur == name {
-				// The rename target is still derived from the entry label; the
-				// follow-up is to derive it from the state diff instead.
-				if entry.Label == "rename" {
-					checkoutAfterRestore = restoredRenameTarget(&prev, s, name)
-					if checkoutAfterRestore == "" {
-						checkoutAfterRestore = missingRestoredRef(g, entry)
-					}
-				}
+				// HEAD is on a branch we are about to delete; move it to target (the
+				// parent, or trunk) so the branch can be removed. The final landing
+				// branch is restored below from entry.CurrentBranch (the branch that
+				// was checked out when the command ran) — for a current-branch rename
+				// that is the restored old name, so no command-label coupling is
+				// needed here.
 				if !g.BranchExists(target) {
 					sha, ok := entry.Refs[target]
 					if !ok {
@@ -138,40 +136,6 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 func checkoutBlockedByLocalChanges(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
-}
-
-// restoredRenameTarget picks the branch to check out after undoing a rename:
-// the snapshot name that the current state no longer tracks (or the snapshot
-// trunk when the trunk itself was renamed).
-func restoredRenameTarget(prev, current *State, deleted string) string {
-	if current == nil {
-		return ""
-	}
-	if current.Trunk == deleted && prev.Trunk != current.Trunk {
-		return prev.Trunk
-	}
-	for name := range prev.Branches {
-		if !current.IsTracked(name) {
-			return name
-		}
-	}
-	return ""
-}
-
-// missingRestoredRef returns the single recorded ref whose branch is currently
-// missing, or "" when there is not exactly one.
-func missingRestoredRef(g Git, entry *UndoEntry) string {
-	var missing []string
-	for name := range entry.Refs {
-		if !g.BranchExists(name) {
-			missing = append(missing, name)
-		}
-	}
-	sort.Strings(missing)
-	if len(missing) == 1 {
-		return missing[0]
-	}
-	return ""
 }
 
 // branchCreatedByEntry reports whether name was created by the command the
