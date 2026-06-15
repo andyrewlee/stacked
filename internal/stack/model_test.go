@@ -293,6 +293,55 @@ func TestModelConflictContinueInvariants(t *testing.T) {
 	checkInvariants(t, f, s, 0)
 }
 
+// TestModelConflictAbortInvariants drives an onto conflict (which records a
+// pending reparent) and backs out with Abort (the engine counterpart of
+// Continue): the rebase is gone, the pending reparent is cleared, a second abort
+// errors, and once the conflict is resolved the stack reconciles invariant-clean.
+func TestModelConflictAbortInvariants(t *testing.T) {
+	f := newFakeGit()
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	env := Env{Git: f}
+
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+
+	// Moving b onto c conflicts and records a pending reparent.
+	f.conflictOn("b")
+	mustCheckout(t, f, "b")
+	if _, err := Onto(env, s, "c"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict from onto, got %v", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("expected a rebase in progress after the conflict")
+	}
+	if s.PendingReparent == nil {
+		t.Fatal("onto conflict should record a pending reparent")
+	}
+
+	if _, err := Abort(env, s); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); inProgress {
+		t.Fatal("rebase should be gone after abort")
+	}
+	if s.PendingReparent != nil {
+		t.Fatal("abort should clear the pending reparent for the conflicted branch")
+	}
+	if _, err := Abort(env, s); err == nil {
+		t.Fatal("second abort with no rebase in progress should error")
+	}
+
+	// Resolve the underlying conflict (as the user would) and reconcile; every
+	// invariant must hold on the re-parented stack.
+	delete(f.conflictNext, "b")
+	f.head = "main"
+	if _, err := Restack(env, s); err != nil {
+		t.Fatalf("restack after abort: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
+}
+
 // TestModelSyncInvariants runs a prune-merged sync and asserts the invariants
 // hold on the remaining, re-parented stack (TEST-3).
 func TestModelSyncInvariants(t *testing.T) {
