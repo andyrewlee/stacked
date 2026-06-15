@@ -753,11 +753,13 @@ func collectJSONKeys(v any, into map[string]bool) {
 	}
 }
 
-// TestAgentDocDocumentsEmittedKeys runs the read/navigation commands that emit
-// anonymous inline structs (status, checkout, validate, navigation, log) — which
+// TestAgentDocDocumentsEmittedKeys runs the read/navigation commands and the
+// operational commands (abort/undo/repair) that emit anonymous inline structs
+// (status, checkout, validate, navigation, log, abort, undo, repair) — which
 // reflection cannot reach by name — and asserts every JSON key they actually
 // emit is documented in AGENT.md. The fixture surfaces status's omitempty keys
-// (parent, needsRestack) by running on a tracked branch with a parent and child.
+// (parent, needsRestack) by running on a tracked branch with a parent and child,
+// and drives a real paused rebase so abort has something to abort.
 func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 	doc := agentDoc(t)
 	newRepo(t)
@@ -807,6 +809,16 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 		t.Fatal("expected a conflict restacking conf-b onto the amended conf-a")
 	}
 	collect("status --json (conflict)", func() error { return runStatus([]string{"--json"}) })
+	// The paused rebase is still in progress; aborting it surfaces abort's keys.
+	collect("abort --json", func() error { return runAbort([]string{"--json"}) })
+
+	// repair on a consistent stack and undo of the last mutation surface the
+	// remaining operational keys (repaired/fixes, undone/label/restored).
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "op-a", "a.txt", "a\n", "add a")
+	collect("repair --json", func() error { return runRepair([]string{"--json"}) })
+	collect("undo --json", func() error { return runUndo([]string{"--json"}) })
 
 	for k := range keys {
 		if !documentsKey(doc, k) {

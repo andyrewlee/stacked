@@ -82,7 +82,12 @@ message.
 - **`init --json`** — one shape for both outcomes:
   `{ "trunk", "initialized": bool, "alreadyInitialized": bool }` (a fresh init
   sets `initialized`; an already-initialized repo sets `alreadyInitialized`).
-- **operational** (`abort`, `undo`, `repair`) — small `{ ... }` objects, see `st help <cmd>`.
+- **operational** — each emits a small fixed object:
+  - `abort --json` → `{ "aborted": true, "summary" }`.
+  - `undo --json` → `{ "undone": true, "label", "restored": [] }` (`label` names the
+    reverted command; `restored` lists branches whose tips were moved back).
+  - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
+    `fixes` is non-empty; both are present on every run).
 
 ## Idempotency & safety
 
