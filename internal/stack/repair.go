@@ -2,7 +2,6 @@ package stack
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -64,20 +63,10 @@ func (s *State) Inconsistencies(tips map[string]string) []Problem {
 	if _, ok := tips[s.Trunk]; !ok {
 		ps = append(ps, Problem{Kind: TrunkMissing, Branch: s.Trunk})
 	}
-	for _, name := range sortedNames(s) {
+	for _, name := range sortedBranchNames(s) {
 		ps = append(ps, s.branchProblems(tips, name)...)
 	}
 	return ps
-}
-
-// sortedNames returns the tracked branch names (excluding the trunk) sorted.
-func sortedNames(s *State) []string {
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // Repair reconciles the stack metadata with the repository, fixing the
@@ -101,7 +90,7 @@ func Repair(env Env, s *State) (*OpResult, error) {
 	}
 
 	var fixes []string
-	for _, name := range sortedNames(s) {
+	for _, name := range sortedBranchNames(s) {
 		b, ok := s.Get(name)
 		if !ok {
 			continue // removed during an earlier fix
