@@ -2,7 +2,6 @@ package stack
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,15 +113,6 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 		tips[name] = tip
 	}
 	return tips, nil
-}
-
-func (f *fakeGit) LocalBranches() ([]string, error) {
-	names := make([]string, 0, len(f.branches))
-	for name := range f.branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 func (f *fakeGit) Checkout(name string) error {

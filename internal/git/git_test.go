@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -519,24 +518,6 @@ func TestTips(t *testing.T) {
 	}
 	if tips["feat"] != featSHA {
 		t.Fatalf("tips[feat] = %q, want branch tip %s (not the tag)", tips["feat"], featSHA)
-	}
-}
-
-func TestLocalBranchesUsesFullHeadRefs(t *testing.T) {
-	newRepo(t)
-	mustGit(t, "checkout", "-q", "-b", "release")
-	mustGit(t, "checkout", "-q", "main")
-	mustGit(t, "tag", "release", "HEAD")
-
-	branches, err := LocalBranches()
-	if err != nil {
-		t.Fatalf("LocalBranches: %v", err)
-	}
-	if !slices.Contains(branches, "release") {
-		t.Fatalf("LocalBranches = %v, want release", branches)
-	}
-	if slices.Contains(branches, "heads/release") {
-		t.Fatalf("LocalBranches returned ambiguous short ref: %v", branches)
 	}
 }
 

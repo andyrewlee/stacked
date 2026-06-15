@@ -110,23 +110,6 @@ func BranchExists(name string) bool {
 	return ok("show-ref", "--verify", "--quiet", "refs/heads/"+name)
 }
 
-// LocalBranches returns the names of all local branches.
-func LocalBranches() ([]string, error) {
-	out, err := Run("for-each-ref", "--format=%(refname)", "refs/heads")
-	if err != nil {
-		return nil, err
-	}
-	if out == "" {
-		return nil, nil
-	}
-	refs := strings.Split(out, "\n")
-	branches := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		branches = append(branches, strings.TrimPrefix(ref, "refs/heads/"))
-	}
-	return branches, nil
-}
-
 // Tips returns the tip SHA of every local branch, keyed by branch name, in a
 // single git invocation — so callers walking a whole forest (log, validate) do
 // one spawn instead of two per branch. Full refnames are requested and the
