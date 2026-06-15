@@ -15,6 +15,7 @@ import (
 // git dir) is shared across linked worktrees, so st run from a second worktree
 // sees the same stack (TEST-10).
 func TestWorktreeSharesStackState(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -39,6 +40,7 @@ func TestWorktreeSharesStackState(t *testing.T) {
 // bottom branch amended), then undoes the whole mutation back to the pre-mutation
 // tip and validates clean (TEST-10).
 func TestUndoAfterConflictAbort(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
@@ -62,6 +64,7 @@ func TestUndoAfterConflictAbort(t *testing.T) {
 // branches, inspect via log and status (text + JSON), navigate up/down/top/
 // bottom, modify the bottom branch and confirm the upstack restacks.
 func TestLifecycle(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 
 	// init
@@ -201,6 +204,7 @@ func TestLifecycle(t *testing.T) {
 // TestConflictContinue drives a real merge conflict via modify and resolves it
 // with `st continue`, asserting the upstack ends up rebased onto the new tip.
 func TestConflictContinue(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
@@ -234,6 +238,7 @@ func TestConflictContinue(t *testing.T) {
 // TestConflictAbort drives the same conflict but backs out with `st abort`,
 // asserting the rebase is gone and a second abort errors with "no rebase".
 func TestConflictAbort(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
@@ -261,6 +266,7 @@ func TestConflictAbort(t *testing.T) {
 }
 
 func TestOntoConflictContinue(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
@@ -300,6 +306,7 @@ func TestOntoConflictContinue(t *testing.T) {
 }
 
 func TestOntoConflictAbort(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
@@ -342,6 +349,7 @@ func TestOntoConflictAbort(t *testing.T) {
 // TestSyncConflictContinue drives a conflict that occurs *during* sync's restack
 // (the trunk advances under a stacked branch), then resolves it (TEST-2).
 func TestSyncConflictContinue(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	// feat-a adds f.txt; the trunk then adds f.txt with different content, so
@@ -371,6 +379,7 @@ func TestSyncConflictContinue(t *testing.T) {
 // mode, exercising the QuietShell rebase path and asserting the descendant
 // actually rebased (TEST-6).
 func TestModifyJSONRestacksDescendants(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -399,6 +408,7 @@ func TestModifyJSONRestacksDescendants(t *testing.T) {
 // real-git path) and asserts the subject changed and the descendant restacked
 // (TEST-7).
 func TestModifyMessageReword(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "original")
@@ -418,6 +428,7 @@ func TestModifyMessageReword(t *testing.T) {
 // TestFold folds the top branch into its parent: the parent absorbs the commits
 // and the folded branch is removed.
 func TestFold(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -436,6 +447,7 @@ func TestFold(t *testing.T) {
 
 // TestSquash collapses multiple commits on a branch into one.
 func TestSquash(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -460,6 +472,7 @@ func TestSquash(t *testing.T) {
 
 // TestOnto re-parents a branch onto the trunk, dropping the old parent's commits.
 func TestOnto(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -486,6 +499,7 @@ func TestOnto(t *testing.T) {
 
 // TestRename renames a branch and updates child parent pointers.
 func TestRename(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -516,6 +530,7 @@ func TestRename(t *testing.T) {
 // TestDeleteReparent deletes a middle branch and re-parents its child onto the
 // grandparent, dropping the deleted branch's file from the child's history.
 func TestDeleteReparent(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -548,6 +563,7 @@ func TestDeleteReparent(t *testing.T) {
 
 // TestUndo asserts that undo restores a branch tip after a modify.
 func TestUndo(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -579,6 +595,7 @@ func TestUndo(t *testing.T) {
 // (track the trunk, double-track, untrack the trunk / an untracked branch), and
 // untracking with child re-parenting.
 func TestTrackUntrack(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 
@@ -618,6 +635,7 @@ func TestTrackUntrack(t *testing.T) {
 
 // TestRestackGuards covers the dirty-tree guard and the untracked checkout guard.
 func TestRestackGuards(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -643,6 +661,7 @@ func TestRestackGuards(t *testing.T) {
 // back, asserts validate exits non-zero, then repair fixes it and validate
 // passes.
 func TestValidateRepairDrift(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -668,6 +687,7 @@ func TestValidateRepairDrift(t *testing.T) {
 // trunk on the remote, and asserts `st sync` fast-forwards the trunk, prunes the
 // merged branch, and restacks the survivor.
 func TestSyncPrunesMerged(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
@@ -710,6 +730,7 @@ func TestSyncPrunesMerged(t *testing.T) {
 
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
@@ -720,6 +741,7 @@ func TestSyncNoRemote(t *testing.T) {
 
 // TestRestackDryRun previews what a restack would rebase and changes nothing.
 func TestRestackDryRun(t *testing.T) {
+	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "f.txt", "A\n", "a")
