@@ -246,6 +246,27 @@ func IsClean() (bool, error) {
 	return out == "", nil
 }
 
+// UnmergedFiles returns the paths with unresolved merge conflicts — the files a
+// paused rebase is waiting on — or nil when there are none. Newline output (not
+// -z) is intentional: Run() trims and every parser here splits on "\n", so a NUL
+// stream would leave a stray empty field.
+func UnmergedFiles() ([]string, error) {
+	out, err := Run("diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var files []string
+	for _, line := range strings.Split(out, "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
 // HasStagedChanges reports whether there are staged changes in the index.
 func HasStagedChanges() (bool, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--quiet")

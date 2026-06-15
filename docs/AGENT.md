@@ -67,7 +67,7 @@ message.
     "children": [ { "name": "feat-a", "parent": "main", "parentSHA": "…",
                     "current": true, "needsRestack": false, "topCommit": "add a", "children": [] } ] }
   ```
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies.
+- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git.
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)

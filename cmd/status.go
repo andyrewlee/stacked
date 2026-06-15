@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"stacked/internal/git"
@@ -30,9 +31,37 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	s, cur, err := loadStateAndCurrent()
+	s, err := loadState()
 	if err != nil {
 		return err
+	}
+
+	// A paused restack leaves HEAD detached; detect it before reading the current
+	// branch so status can still report where the rebase stopped (and the
+	// conflicted files) instead of failing with "detached HEAD".
+	var rebaseInProgress bool
+	var rebaseBranch string
+	var conflictedFiles []string
+	if inProgress, err := git.RebaseInProgress(); err != nil {
+		return err
+	} else if inProgress {
+		rebaseInProgress = true
+		if rebaseBranch, _ = git.RebaseHeadName(); rebaseBranch == "" && s.PendingReparent != nil {
+			rebaseBranch = s.PendingReparent.Branch
+		}
+		if conflictedFiles, err = git.UnmergedFiles(); err != nil {
+			return err
+		}
+	}
+
+	cur, err := currentBranch()
+	if err != nil {
+		// A detached HEAD is expected mid-rebase; report the rebase state with no
+		// current branch rather than failing.
+		if !rebaseInProgress || !errors.Is(err, git.ErrDetachedHEAD) {
+			return err
+		}
+		cur = ""
 	}
 
 	role := "untracked"
@@ -69,14 +98,17 @@ func runStatus(args []string) error {
 
 	if asJSON {
 		payload := struct {
-			Branch        string   `json:"branch"`
-			Trunk         string   `json:"trunk"`
-			Role          string   `json:"role"`
-			Parent        string   `json:"parent,omitempty"`
-			Children      []string `json:"children"`
-			NeedsRestack  *bool    `json:"needsRestack,omitempty"`
-			WorktreeClean bool     `json:"worktreeClean"`
-		}{cur, s.Trunk, role, parent, children, needs, clean}
+			Branch           string   `json:"branch"`
+			Trunk            string   `json:"trunk"`
+			Role             string   `json:"role"`
+			Parent           string   `json:"parent,omitempty"`
+			Children         []string `json:"children"`
+			NeedsRestack     *bool    `json:"needsRestack,omitempty"`
+			WorktreeClean    bool     `json:"worktreeClean"`
+			RebaseInProgress bool     `json:"rebaseInProgress,omitempty"`
+			RebaseBranch     string   `json:"rebaseBranch,omitempty"`
+			ConflictedFiles  []string `json:"conflictedFiles,omitempty"`
+		}{cur, s.Trunk, role, parent, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err
@@ -123,6 +155,9 @@ func runStatus(args []string) error {
 		out("worktree: clean\n")
 	} else {
 		out("worktree: dirty\n")
+	}
+	if rebaseInProgress {
+		out("rebase:   in progress on %s (run: st continue / st abort)\n", rebaseBranch)
 	}
 	return nil
 }
