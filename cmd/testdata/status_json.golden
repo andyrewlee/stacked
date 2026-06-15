@@ -1,5 +1,6 @@
 {
   "branch": "feat-a",
+  "trunk": "main",
   "role": "tracked",
   "parent": "main",
   "children": [],
