@@ -1,6 +1,52 @@
 package stack
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+// TestInconsistenciesClassifiesEveryKind asserts the single classifier reports
+// each kind, with the parent kinds kept distinct, in validate's order.
+func TestInconsistenciesClassifiesEveryKind(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	mkBranch(t, env, s, f, "main", "x")
+	mkBranch(t, env, s, f, "x", "y")
+
+	s.Branches["c"].Parent = "ghost" // ParentUntracked
+	s.Branches["x"].Parent = "y"     // x <-> y cycle
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DeleteBranch("a", true); err != nil { // a -> BranchMissing, b -> ParentMissing
+		t.Fatal(err)
+	}
+
+	tips, _ := f.Tips()
+	want := []Problem{
+		{Kind: BranchMissing, Branch: "a"},
+		{Kind: ParentMissing, Branch: "b", Detail: "a"},
+		{Kind: ParentUntracked, Branch: "c", Detail: "ghost"},
+		{Kind: ParentCycle, Branch: "x", Detail: "x -> y -> x"},
+		{Kind: ParentCycle, Branch: "y", Detail: "y -> x -> y"},
+	}
+	if got := s.Inconsistencies(tips); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Inconsistencies =\n %+v\nwant\n %+v", got, want)
+	}
+
+	if err := f.Checkout("y"); err != nil { // move off main so its ref can be deleted
+		t.Fatal(err)
+	}
+	if err := f.DeleteBranch("main", true); err != nil {
+		t.Fatal(err)
+	}
+	tips, _ = f.Tips()
+	if got := s.Inconsistencies(tips); len(got) == 0 || got[0].Kind != TrunkMissing {
+		t.Fatalf("after deleting trunk, first problem = %+v, want TrunkMissing first", got)
+	}
+}
 
 // reconcileAndCheck runs a full restack from the trunk and asserts the topology
 // invariants hold — the same bar the random model enforces — so each repair test
