@@ -242,6 +242,48 @@ func TestEveryCommandDefinesJSONFlag(t *testing.T) {
 	}
 }
 
+func TestSuggestCommand(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"creat", "create"},   // distance 1
+		{"statuss", "status"}, // distance 1
+		{"loggg", "log"},      // distance 2 (boundary)
+		{"createxyz", ""},     // distance 3 -> too far
+		{"zzzzzzzz", ""},      // far from everything
+	}
+	for _, tc := range cases {
+		if got := suggestCommand(tc.in); got != tc.want {
+			t.Errorf("suggestCommand(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestUnknownCommandErr(t *testing.T) {
+	near := unknownCommandErr("creat").Error()
+	if !strings.Contains(near, `did you mean "create"?`) {
+		t.Errorf("near typo should suggest create: %q", near)
+	}
+	if !strings.Contains(near, `run "st help"`) {
+		t.Errorf("missing help pointer: %q", near)
+	}
+	far := unknownCommandErr("zzzzzzzz").Error()
+	if strings.Contains(far, "did you mean") {
+		t.Errorf("far name should not suggest: %q", far)
+	}
+	if !strings.Contains(far, `run "st help"`) {
+		t.Errorf("missing help pointer: %q", far)
+	}
+}
+
+// TestHelpForCommandUnknownEmitsPointer pins the unification: `st help <unknown>`
+// now routes through unknownCommandErr, so it gives the same "run st help"
+// pointer the dispatcher's not-found path always did.
+func TestHelpForCommandUnknownEmitsPointer(t *testing.T) {
+	stderr := captureStderr(t, func() { _ = helpForCommand("frobnicate", false) })
+	if !strings.Contains(stderr, `run "st help"`) {
+		t.Errorf("st help <unknown> should point at st help: %q", stderr)
+	}
+}
+
 // TestEveryCommandUsageMatchesRegistry locks the drift hazard newFlagSet removed:
 // each command's -h output must begin with the exact usage line derived from its
 // registered Command.Usage, so the printed and registered usage can never diverge
