@@ -12,12 +12,8 @@ func init() {
 }
 
 func runFold(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("fold", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("fold", fs.Args()); err != nil {
+	asJSON, err := parsePlain("fold", args)
+	if err != nil {
 		return err
 	}
 

@@ -23,12 +23,8 @@ func init() {
 // (trunk/tracked/untracked), parent, children, whether it needs a restack, and
 // whether the working tree is clean. With --json it emits the same data as JSON.
 func runStatus(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("status", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("status", fs.Args()); err != nil {
+	asJSON, err := parsePlain("status", args)
+	if err != nil {
 		return err
 	}
 

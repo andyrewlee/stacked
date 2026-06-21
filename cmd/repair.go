@@ -18,12 +18,8 @@ func init() {
 // need `st restack`. The repair itself lives in the engine (stack.Repair); this
 // adapter renders its fixes as the {repaired, fixes} JSON.
 func runRepair(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("repair", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("repair", fs.Args()); err != nil {
+	asJSON, err := parsePlain("repair", args)
+	if err != nil {
 		return err
 	}
 

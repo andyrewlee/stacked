@@ -18,12 +18,8 @@ func init() {
 // branch whose parent is the trunk). If the current branch is the trunk, there
 // is nothing below it and a notice is printed instead.
 func runBottom(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("bottom", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("bottom", fs.Args()); err != nil {
+	asJSON, err := parsePlain("bottom", args)
+	if err != nil {
 		return err
 	}
 

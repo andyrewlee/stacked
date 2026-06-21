@@ -24,12 +24,8 @@ func init() {
 // cycles) as well as warnings (branches that have drifted and need a restack).
 // It exits non-zero when any problem is found so it is usable in scripts.
 func runValidate(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("validate", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("validate", fs.Args()); err != nil {
+	asJSON, err := parsePlain("validate", args)
+	if err != nil {
 		return err
 	}
 

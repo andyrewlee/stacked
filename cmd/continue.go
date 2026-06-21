@@ -16,12 +16,8 @@ func init() {
 }
 
 func runContinue(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("continue", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("continue", fs.Args()); err != nil {
+	asJSON, err := parsePlain("continue", args)
+	if err != nil {
 		return err
 	}
 

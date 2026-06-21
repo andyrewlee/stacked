@@ -21,12 +21,8 @@ func init() {
 // only the branch git was mid-rebase on is rolled back. It works even when
 // stacked is not initialized in this repo.
 func runAbort(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("abort", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("abort", fs.Args()); err != nil {
+	asJSON, err := parsePlain("abort", args)
+	if err != nil {
 		return err
 	}
 
