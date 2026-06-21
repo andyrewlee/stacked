@@ -29,6 +29,25 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 	return parentTip != b.ParentSHA, nil
 }
 
+// rebaseFailure classifies a failed RebaseOnto. paused is true when the rebase
+// stopped mid-way and left a rebase in progress — a conflict the caller turns
+// into a ConflictError (and may record bookkeeping such as a PendingReparent
+// for). When paused is false, nonConflictErr is the error to return: git's
+// rebase-state probe failing is reported distinctly from the rebase failing
+// outright. action is the verb used in the messages ("rebasing"/"moving"). This
+// is the single definition of "did the rebase pause on a conflict?", shared by
+// RestackBranch and Onto so the two cannot drift.
+func rebaseFailure(g Git, rebaseErr error, action, branch, onto string) (paused bool, nonConflictErr error) {
+	inProgress, progressErr := g.RebaseInProgress()
+	if progressErr == nil && inProgress {
+		return true, nil
+	}
+	if progressErr != nil {
+		return false, fmt.Errorf("checking rebase state after %s %q onto %q failed: %v (original error: %w)", action, branch, onto, progressErr, rebaseErr)
+	}
+	return false, fmt.Errorf("%s %q onto %q: %w", action, branch, onto, rebaseErr)
+}
+
 // RestackBranch rebases the named branch onto the current tip of its parent if
 // it is out of date; otherwise it is a no-op. It reports whether it actually
 // rebased, so callers need no NeedsRestack pre-check. On a successful rebase
@@ -60,20 +79,19 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	}
 
 	start, startErr := env.Git.CurrentBranch()
-	if err := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); err != nil {
-		inProgress, progressErr := env.Git.RebaseInProgress()
-		if progressErr == nil && inProgress {
+	if rebaseErr := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); rebaseErr != nil {
+		paused, outErr := rebaseFailure(env.Git, rebaseErr, "rebasing", name, b.Parent)
+		if paused {
 			return false, &ConflictError{Action: "rebasing", Branch: name, Onto: b.Parent}
 		}
+		// A non-conflict failure left HEAD wherever the rebase aborted to; put the
+		// caller back on the branch they started on before surfacing outErr.
 		if startErr == nil {
 			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
-				return false, AlsoFailed(fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err), fmt.Sprintf("restore %q", start), restoreErr)
+				return false, AlsoFailed(outErr, fmt.Sprintf("restore %q", start), restoreErr)
 			}
 		}
-		if progressErr != nil {
-			return false, fmt.Errorf("checking rebase state after rebasing %q onto %q failed: %v (original error: %w)", name, b.Parent, progressErr, err)
-		}
-		return false, fmt.Errorf("rebasing %q onto %q: %w", name, b.Parent, err)
+		return false, outErr
 	}
 	b.ParentSHA = parentTip
 	if err := env.save(); err != nil {
