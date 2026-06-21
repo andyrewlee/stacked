@@ -100,23 +100,29 @@ func restoreHEADAfterNonConflict(env Env, target, fallback string, err error) er
 	return err
 }
 
+type upstackResult struct {
+	restacked []string
+	notes     []string
+}
+
 // finishUpstack is the common tail of the operations that rewrite a branch's
 // commits (fold, squash, onto): it restacks anchor's descendants, persists, and
 // restores HEAD to the original branch (or the trunk). On a non-conflict restack
 // error it restores HEAD before returning; on a conflict it leaves the rebase in
 // progress for `st continue`.
-func finishUpstack(env Env, s *State, anchor string) ([]string, error) {
+func finishUpstack(env Env, s *State, anchor string) (upstackResult, error) {
 	rebased, err := s.RestackUpstack(env, anchor)
 	if err != nil {
-		return nil, restoreHEADAfterNonConflict(env, anchor, s.Trunk, err)
+		return upstackResult{}, restoreHEADAfterNonConflict(env, anchor, s.Trunk, err)
 	}
+	notes := skippedWorktreeNotes(s)
 	if err := env.save(); err != nil {
-		return nil, err
+		return upstackResult{}, err
 	}
 	if err := restoreHEAD(env, anchor, s.Trunk); err != nil {
-		return nil, err
+		return upstackResult{}, err
 	}
-	return rebased, nil
+	return upstackResult{restacked: rebased, notes: notes}, nil
 }
 
 // Create makes a new branch stacked on the current branch and tracks it. With
@@ -231,11 +237,11 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 	// Restack the upstack and restore HEAD through the shared epilogue (which
 	// leaves a conflict's rebase in progress for `st continue`), the same tail
 	// Fold/Squash/Onto use.
-	rebased, err := finishUpstack(env, s, cur)
+	upstack, err := finishUpstack(env, s, cur)
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: action, Branch: cur, Restacked: rebased}, nil
+	return &OpResult{Summary: action, Branch: cur, Restacked: upstack.restacked, Notes: upstack.notes}, nil
 }
 
 // Restack rebases the current branch and its upstack onto their parents. From
@@ -367,11 +373,11 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		return nil, err
 	}
 
-	rebased, err := finishUpstack(env, s, parent)
+	upstack, err := finishUpstack(env, s, parent)
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: rebased}, nil
+	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: upstack.restacked, Notes: upstack.notes}, nil
 }
 
 // Squash collapses every commit on the current branch (since its parent) into
@@ -432,11 +438,11 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 		return nil, err
 	}
 
-	rebased, err := finishUpstack(env, s, cur)
+	upstack, err := finishUpstack(env, s, cur)
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: fmt.Sprintf("Squashed %d commits on %s into one", len(subjects), cur), Branch: cur, Restacked: rebased}, nil
+	return &OpResult{Summary: fmt.Sprintf("Squashed %d commits on %s into one", len(subjects), cur), Branch: cur, Restacked: upstack.restacked, Notes: upstack.notes}, nil
 }
 
 // Onto re-parents the current branch onto target and rebases it (and its
@@ -513,11 +519,11 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 		return nil, err
 	}
 
-	rebased, err := finishUpstack(env, s, cur)
+	upstack, err := finishUpstack(env, s, cur)
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: fmt.Sprintf("Moved %s onto %s", cur, target), Branch: cur, Restacked: rebased}, nil
+	return &OpResult{Summary: fmt.Sprintf("Moved %s onto %s", cur, target), Branch: cur, Restacked: upstack.restacked, Notes: upstack.notes}, nil
 }
 
 // Delete removes a tracked branch, re-parents its children onto the deleted
@@ -589,11 +595,12 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		}
 		restacked = append(restacked, more...)
 	}
+	notes := skippedWorktreeNotes(s)
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
 		return nil, err
 	}
 
-	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}, Restacked: restacked}
+	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}, Restacked: restacked, Notes: notes}
 	if len(formerChildren) > 0 {
 		res.Summary = fmt.Sprintf("Deleted %s; re-parented %d branch(es) onto %s", name, len(formerChildren), parent)
 	}

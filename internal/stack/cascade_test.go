@@ -250,6 +250,33 @@ func TestModifyCascadesIntoDependentWorktree(t *testing.T) {
 	}
 }
 
+func TestModifyReportsDirtyDependentWorktreeSkip(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	f.addWorktree("/wt/b", "b")
+	f.markWorktreeDirty("b")
+	mustCheckout(t, f, "a")
+
+	res, err := Modify(env, s, "", true, false)
+	if err != nil {
+		t.Fatalf("Modify with dirty dependent worktree: %v", err)
+	}
+	if len(res.Restacked) != 0 {
+		t.Fatalf("Modify Restacked=%v, want no rebased branches while b is dirty", res.Restacked)
+	}
+	if len(res.Notes) != 1 || res.Notes[0] != "skipped b: its worktree is dirty (commit/stash there, then re-run)" {
+		t.Fatalf("Modify Notes=%v, want dirty worktree skip note", res.Notes)
+	}
+	if needs, _ := s.NeedsRestack(f, "b"); !needs {
+		t.Fatal("dirty skipped b should still need restack")
+	}
+	if cur, _ := f.CurrentBranch(); cur != "a" {
+		t.Fatalf("current worktree HEAD=%q, want a", cur)
+	}
+}
+
 // TestRestackInPlaceWhenBranchIsCurrent confirms that a branch checked out in
 // the CURRENT (main) worktree still rebases in place even in a multi-worktree
 // repo — the cascade only diverts branches owned elsewhere.
