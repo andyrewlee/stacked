@@ -70,6 +70,32 @@ func requireClean(g Git) error {
 	return nil
 }
 
+// tracked returns the tracked branch named name, or the canonical
+// "branch %q is not tracked" error. It is the single source of that message for
+// the operations that act on an existing tracked branch.
+func (s *State) tracked(name string) (*Branch, error) {
+	b, ok := s.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("branch %q is not tracked", name)
+	}
+	return b, nil
+}
+
+// currentTracked returns the checked-out branch and its tracked metadata, or an
+// error when HEAD is not on a tracked branch — the shared preamble of the
+// operations that rewrite the current branch (fold, squash, onto).
+func currentTracked(g Git, s *State) (string, *Branch, error) {
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return "", nil, err
+	}
+	b, err := s.tracked(cur)
+	if err != nil {
+		return "", nil, err
+	}
+	return cur, b, nil
+}
+
 // restoreHEAD checks out target (falling back to fallback when target is gone),
 // returning HEAD to where the user started after an operation moved it.
 func restoreHEAD(env Env, target, fallback string) error {
@@ -306,13 +332,9 @@ func Fold(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	cur, err := g.CurrentBranch()
+	cur, b, err := currentTracked(g, s)
 	if err != nil {
 		return nil, err
-	}
-	b, ok := s.Get(cur)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", cur)
 	}
 	parent := b.Parent
 	if parent == s.Trunk {
@@ -388,13 +410,9 @@ func Squash(env Env, s *State, message string) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	cur, err := g.CurrentBranch()
+	cur, b, err := currentTracked(g, s)
 	if err != nil {
 		return nil, err
-	}
-	b, ok := s.Get(cur)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", cur)
 	}
 	needs, err := s.NeedsRestack(g, cur)
 	if err != nil {
@@ -453,13 +471,9 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	cur, err := g.CurrentBranch()
+	cur, b, err := currentTracked(g, s)
 	if err != nil {
 		return nil, err
-	}
-	b, ok := s.Get(cur)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", cur)
 	}
 	if target == cur {
 		return nil, fmt.Errorf("cannot move %q onto itself", cur)
@@ -534,9 +548,9 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if name == s.Trunk {
 		return nil, fmt.Errorf("cannot delete the trunk branch %q", name)
 	}
-	b, ok := s.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", name)
+	b, err := s.tracked(name)
+	if err != nil {
+		return nil, err
 	}
 	if err := requireClean(g); err != nil {
 		return nil, err
@@ -1008,14 +1022,13 @@ func UntrackBranch(env Env, s *State, name string) (*OpResult, error) {
 	if name == s.Trunk {
 		return nil, fmt.Errorf("cannot untrack the trunk %q", name)
 	}
-	b, ok := s.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", name)
+	b, err := s.tracked(name)
+	if err != nil {
+		return nil, err
 	}
 	children := s.Children(name)
 	mergedIntoParent := false
 	if len(children) > 0 {
-		var err error
 		mergedIntoParent, err = g.IsAncestor(name, b.Parent)
 		if err != nil {
 			if g.BranchExists(name) {

@@ -22,7 +22,6 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		return nil, fmt.Errorf("parsing undo state: %w", err)
 	}
 
-	checkoutAfterRestore := ""
 	skipCheckoutRestore := false
 	if entry.LocalBranches != nil {
 		// Branches created by the undone command must be deleted. Candidates are
@@ -113,15 +112,12 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 	}
 
-	if !skipCheckoutRestore && checkoutAfterRestore == "" && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
-		checkoutAfterRestore = entry.CurrentBranch
-	}
-	if checkoutAfterRestore != "" {
-		if err := g.Checkout(checkoutAfterRestore); err != nil {
-			// Local changes blocking the final checkout are tolerated: the refs
-			// are already restored and HEAD simply stays where it is.
+	if !skipCheckoutRestore && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
+		if err := g.Checkout(entry.CurrentBranch); err != nil {
+			// Local changes blocking the final checkout are tolerated: the refs are
+			// already restored and HEAD simply stays where it is.
 			if !checkoutBlockedByLocalChanges(err) {
-				return nil, fmt.Errorf("checking out restored branch %q: %w", checkoutAfterRestore, err)
+				return nil, fmt.Errorf("checking out restored branch %q: %w", entry.CurrentBranch, err)
 			}
 		}
 	}
