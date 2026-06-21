@@ -22,12 +22,8 @@ func init() {
 // runLog renders the tracked stacks as a tree (trunk at the bottom, branches
 // drawn above their parents) or, with --json, as a structured tree for scripting.
 func runLog(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("log", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("log", fs.Args()); err != nil {
+	asJSON, err := parsePlain("log", args)
+	if err != nil {
 		return err
 	}
 

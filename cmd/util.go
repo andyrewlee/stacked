@@ -80,6 +80,23 @@ func rejectArgs(command string, args []string) error {
 	return fmt.Errorf("%s takes no positional arguments, got %q", command, args[0])
 }
 
+// parsePlain parses the arguments of a command that takes no positionals and
+// only the standard --json flag: it builds the flag set, parses it, and rejects
+// any stray positional, returning whether --json was requested. It is the shared
+// preamble of the read/no-arg commands (abort, bottom, continue, fold, guide,
+// log, repair, status, top, undo, validate), so that contract lives in one place.
+func parsePlain(command string, args []string) (bool, error) {
+	var asJSON bool
+	fs := newFlagSet(command, &asJSON)
+	if err := parseFlagSet(fs, args); err != nil {
+		return false, err
+	}
+	if err := rejectArgs(command, fs.Args()); err != nil {
+		return false, err
+	}
+	return asJSON, nil
+}
+
 // usageLine returns a command's "usage: ..." line, derived from its single
 // registered Command.Usage so the printed and registered usage cannot drift.
 func usageLine(name string) string {

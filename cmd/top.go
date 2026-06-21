@@ -18,12 +18,8 @@ func init() {
 // reaches the leaf of the stack, then checks that leaf out. A branch point (more
 // than one child) stops the walk and directs the user to st checkout.
 func runTop(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("top", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("top", fs.Args()); err != nil {
+	asJSON, err := parsePlain("top", args)
+	if err != nil {
 		return err
 	}
 

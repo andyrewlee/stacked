@@ -21,12 +21,8 @@ func init() {
 // every recorded branch is reset to its prior tip. It does not touch the
 // working tree, so uncommitted changes are preserved.
 func runUndo(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("undo", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("undo", fs.Args()); err != nil {
+	asJSON, err := parsePlain("undo", args)
+	if err != nil {
 		return err
 	}
 

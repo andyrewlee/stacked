@@ -25,12 +25,8 @@ var guideSteps = []string{
 
 // runGuide prints the recommended workflow for driving st (handy for agents).
 func runGuide(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("guide", &asJSON)
-	if err := parseFlagSet(fs, args); err != nil {
-		return err
-	}
-	if err := rejectArgs("guide", fs.Args()); err != nil {
+	asJSON, err := parsePlain("guide", args)
+	if err != nil {
 		return err
 	}
 
