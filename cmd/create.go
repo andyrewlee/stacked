@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 
+	"stacked/internal/git"
 	"stacked/internal/stack"
 )
 
@@ -30,6 +31,9 @@ func runCreate(args []string) error {
 		return errors.New("create requires exactly one branch name")
 	}
 	name := rest[0]
+	if err := git.CheckBranchName(name); err != nil {
+		return err
+	}
 
 	return mutate("create", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Create(env, s, name, message, all)

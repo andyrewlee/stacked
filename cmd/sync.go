@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"flag"
+	"fmt"
+
 	"stacked/internal/git"
 	"stacked/internal/stack"
 )
@@ -26,6 +29,20 @@ func runSync(args []string) error {
 		return err
 	}
 	asJSON, noDelete, remote, dryRun := o.asJSON, o.noDelete, o.remote, o.dryRun
+
+	// If the user explicitly named a remote that does not exist, fail loudly like
+	// `st submit` does instead of silently treating it as "no remote" and
+	// reporting success. A missing DEFAULT origin is still allowed: a repo with no
+	// remotes syncs locally (the fast-forward is skipped, prune+restack still run).
+	remoteExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "remote" {
+			remoteExplicit = true
+		}
+	})
+	if remoteExplicit && !git.RemoteExists(remote) {
+		return fmt.Errorf("remote %q does not exist", remote)
+	}
 
 	if dryRun {
 		s, err := loadState()

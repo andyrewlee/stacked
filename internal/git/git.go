@@ -91,6 +91,21 @@ func validRefArg(kind, name string) error {
 	return nil
 }
 
+// CheckBranchName reports whether name is a usable git branch name, deferring to
+// git's own check-ref-format so the rules match exactly (no spaces, no "..",
+// no trailing ".lock", etc.). It returns a friendly one-line error instead of
+// letting the raw multi-line "fatal: ... is not a valid branch name" + advice
+// hints leak out of `git branch`/`git checkout -b` further down the line.
+func CheckBranchName(name string) error {
+	if name == "" {
+		return fmt.Errorf("branch name is empty")
+	}
+	if !ok("check-ref-format", "refs/heads/"+name) {
+		return fmt.Errorf("%q is not a valid branch name", name)
+	}
+	return nil
+}
+
 // CurrentBranch returns the name of the currently checked-out branch. It returns
 // ErrDetachedHEAD when HEAD is detached (for example, mid-rebase or sitting on a
 // raw commit).
@@ -510,7 +525,10 @@ func AmendMessage(message string, all bool) error {
 }
 
 // RebaseOnto runs "git rebase --onto newBase oldBase branch" with inherited
-// stdio so conflicts can be resolved interactively.
+// stdio so a conflict's details surface to the user. --quiet suppresses git's
+// chatty success progress ("Rebasing (1/1)…Successfully rebased…") so that on a
+// clean rebase the CLI's own one-line summary is the only output, while conflict
+// messages (which --quiet does NOT silence) still reach the user.
 func RebaseOnto(newBase, oldBase, branch string) error {
 	if err := validRefArg("ref", newBase); err != nil {
 		return err
@@ -521,7 +539,7 @@ func RebaseOnto(newBase, oldBase, branch string) error {
 	if err := validRefArg("branch", branch); err != nil {
 		return err
 	}
-	return RunInteractive("rebase", "--onto", newBase, oldBase, branch)
+	return RunInteractive("rebase", "--quiet", "--onto", newBase, oldBase, branch)
 }
 
 // RebaseOntoQuiet runs rebase without inheriting stdout/stderr, for callers that

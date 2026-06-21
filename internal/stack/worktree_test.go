@@ -82,6 +82,38 @@ func TestOwnerOf(t *testing.T) {
 	}
 }
 
+func TestMainWorktree(t *testing.T) {
+	wts := []git.Worktree{
+		{Path: "/main", Branch: "main"},
+		{Path: "/wt/api", Branch: "api"},
+	}
+	if wt, ok := MainWorktree(wts); !ok || wt.Path != "/main" {
+		t.Errorf("MainWorktree = %+v, %v; want /main, true", wt, ok)
+	}
+	if _, ok := MainWorktree(nil); ok {
+		t.Error("MainWorktree(nil) reported a worktree")
+	}
+}
+
+func TestLinkedOwnerOf(t *testing.T) {
+	wts := []git.Worktree{
+		{Path: "/main", Branch: "main"},
+		{Path: "/wt/api", Branch: "api"},
+	}
+	// A linked worktree's branch is found.
+	if wt, ok := LinkedOwnerOf(wts, "api"); !ok || wt.Path != "/wt/api" {
+		t.Errorf("LinkedOwnerOf(api) = %+v, %v; want /wt/api, true", wt, ok)
+	}
+	// The MAIN worktree's branch is NOT a linked owner (unlike OwnerOf), so
+	// `st worktree add/rm main` does not treat the main tree as a separate worktree.
+	if _, ok := LinkedOwnerOf(wts, "main"); ok {
+		t.Error("LinkedOwnerOf(main) treated the main worktree as a linked one")
+	}
+	if _, ok := LinkedOwnerOf(wts, "nope"); ok {
+		t.Error("LinkedOwnerOf(nope) reported an owner")
+	}
+}
+
 func TestIsMultiWorktree(t *testing.T) {
 	if IsMultiWorktree([]git.Worktree{{Path: "/main"}}) {
 		t.Error("single worktree should not be multi")

@@ -68,6 +68,32 @@ func OwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool) {
 	return git.Worktree{}, false
 }
 
+// MainWorktree returns the repository's main (non-linked) worktree. `git worktree
+// list` always reports the main worktree first, so it is the slice's first
+// element; the slice preserves that order end to end. Returns false for an empty
+// slice.
+func MainWorktree(worktrees []git.Worktree) (git.Worktree, bool) {
+	if len(worktrees) == 0 {
+		return git.Worktree{}, false
+	}
+	return worktrees[0], true
+}
+
+// LinkedOwnerOf returns the LINKED worktree that has branch checked out, and
+// whether one exists. Unlike OwnerOf it ignores the main worktree, so it answers
+// the question `st worktree add`/`rm` actually care about — "does branch have its
+// OWN separate worktree?" — rather than treating the main tree (where the current
+// branch already lives) as a removable/duplicate worktree.
+func LinkedOwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool) {
+	main, _ := MainWorktree(worktrees)
+	for _, wt := range worktrees {
+		if wt.Branch == branch && wt.Path != main.Path {
+			return wt, true
+		}
+	}
+	return git.Worktree{}, false
+}
+
 // ownerElsewhere reports whether branch is checked out in a worktree OTHER than
 // the one this process runs in. In a single-tree repo (or when branch is the
 // current branch here) it returns false, so the in-place rebase path is taken

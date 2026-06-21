@@ -80,10 +80,17 @@ func worktreeAdd(branch string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	if wt, ok := stack.OwnerOf(wts, branch); ok {
-		// Already materialized: report the existing path idempotently rather than
-		// failing, so the command is safe to re-run.
+	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
+		// Already materialized as its own linked worktree: report the existing path
+		// idempotently rather than failing, so the command is safe to re-run.
 		return emitWorktree(asJSON, branch, wt.Path, nil, "worktree already exists")
+	}
+	// If branch is the one checked out in the MAIN worktree, git cannot give it a
+	// second checkout, so there is no separate worktree to create. Say so plainly
+	// instead of pointing the user at the main tree as if it were a dedicated
+	// worktree (or leaking git's "already used by worktree" error).
+	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
+		return fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
 	}
 
 	repo, err := repoIdentifier()
@@ -116,8 +123,16 @@ func worktreeRemove(branch string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	wt, ok := stack.OwnerOf(wts, branch)
+	wt, ok := stack.LinkedOwnerOf(wts, branch)
 	if !ok {
+		// The branch has no separate worktree. Distinguish the case where it is the
+		// branch checked out in the main worktree (which is NOT a removable linked
+		// worktree — git refuses with a raw "is a main working tree" fatal) from the
+		// case where it has no worktree at all, so the user gets a clear message
+		// either way.
+		if main, mok := stack.MainWorktree(wts); mok && main.Branch == branch {
+			return fmt.Errorf("%q is checked out in the main worktree, not a separate one; nothing to remove", branch)
+		}
 		return fmt.Errorf("%q has no worktree", branch)
 	}
 	if err := git.WorktreeRemove(wt.Path, false); err != nil {
