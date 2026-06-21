@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"stacked/internal/git"
 	"stacked/internal/stack"
 )
 
@@ -30,6 +31,9 @@ func runRename(args []string) error {
 	oldName, newName := "", rest[0]
 	if len(rest) == 2 {
 		oldName, newName = rest[0], rest[1]
+	}
+	if err := git.CheckBranchName(newName); err != nil {
+		return err
 	}
 
 	return mutate("rename", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {

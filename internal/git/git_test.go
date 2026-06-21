@@ -819,3 +819,23 @@ func TestRunAndRunErr(t *testing.T) {
 		t.Fatalf("expected error for a bad ref")
 	}
 }
+
+// TestCheckBranchName covers the friendly branch-name validator that create and
+// rename call before letting an invalid name reach `git branch`/`git checkout
+// -b`, where it would otherwise leak git's multi-line "fatal: ... is not a valid
+// branch name" + advice hints.
+func TestCheckBranchName(t *testing.T) {
+	newRepo(t)
+	valid := []string{"feat", "feat/foo", "feat-bar", "release/1.2.x"}
+	for _, name := range valid {
+		if err := CheckBranchName(name); err != nil {
+			t.Errorf("CheckBranchName(%q) = %v, want nil", name, err)
+		}
+	}
+	invalid := []string{"", "bad name", "with~tilde", "a..b", "trailing.lock", "has:colon"}
+	for _, name := range invalid {
+		if err := CheckBranchName(name); err == nil {
+			t.Errorf("CheckBranchName(%q) = nil, want an error", name)
+		}
+	}
+}
