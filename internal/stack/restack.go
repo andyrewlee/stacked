@@ -14,9 +14,9 @@ func (s *State) NeedsRestack(g Git, name string) (bool, error) {
 }
 
 func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) {
-	b, ok := s.Get(name)
-	if !ok {
-		return false, fmt.Errorf("branch %q is not tracked", name)
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
 	}
 	parentRef := branchTipRef(b.Parent)
 	if b.Parent == s.Trunk {
@@ -36,9 +36,9 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 // persist. If the rebase fails, a wrapped error explaining how to recover is
 // returned.
 func (s *State) RestackBranch(env Env, name string) (bool, error) {
-	b, ok := s.Get(name)
-	if !ok {
-		return false, fmt.Errorf("branch %q is not tracked", name)
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
 	}
 	parentTip, err := env.Git.RevParse(branchTipRef(b.Parent))
 	if err != nil {
