@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-
-	"stacked/internal/git"
 )
 
 func init() {
@@ -48,9 +46,9 @@ func runDown(args []string) error {
 		}
 	}
 
-	if err := git.Checkout(cur); err != nil {
-		return fmt.Errorf("checking out %q: %w", cur, err)
+	dest, err := teleportCheckout(cur)
+	if err != nil {
+		return err
 	}
-
-	return navEmit(asJSON, cur, fmt.Sprintf("switched to %s", cur))
+	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
 }

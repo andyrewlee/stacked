@@ -46,6 +46,13 @@ func (Shell) RebaseHeadName() (string, error)                 { return RebaseHea
 func (Shell) RebaseContinue() error                           { return RebaseContinue() }
 func (Shell) RebaseAbort() error                              { return RebaseAbort() }
 func (Shell) AncestorSet(ref string) (map[string]bool, error) { return AncestorSet(ref) }
+func (Shell) Worktrees() ([]Worktree, error)                  { return Worktrees() }
+func (Shell) RebaseOntoIn(dir, newBase, oldBase, br string) error {
+	return RebaseOntoIn(dir, newBase, oldBase, br)
+}
+func (Shell) RebaseAbortIn(dir string) error              { return RebaseAbortIn(dir) }
+func (Shell) IsCleanIn(dir string) (bool, error)          { return IsCleanIn(dir) }
+func (Shell) WorktreeRemove(dir string, force bool) error { return WorktreeRemove(dir, force) }
 
 func (QuietShell) RebaseOnto(newBase, oldBase, br string) error {
 	return RebaseOntoQuiet(newBase, oldBase, br)

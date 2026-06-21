@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/git"
 	"stacked/internal/stack"
 )
 
@@ -595,14 +594,16 @@ func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
 
 func TestJSONStackEnvUsesQuietGit(t *testing.T) {
 	orig := gitShell
-	gitShell = git.Shell{}
+	gitShell = cachedShell{}
 	defer func() { gitShell = orig }()
 
-	if _, ok := stackEnv(&stack.State{}, true).Git.(git.QuietShell); !ok {
-		t.Fatal("JSON stack env did not use QuietShell")
+	// JSON mode swaps the production port for its quiet variant (so rebase chatter
+	// cannot corrupt the payload); both keep the cached Worktrees() override.
+	if _, ok := stackEnv(&stack.State{}, true).Git.(cachedQuietShell); !ok {
+		t.Fatal("JSON stack env did not use the quiet cached shell")
 	}
-	if _, ok := stackEnv(&stack.State{}, false).Git.(git.Shell); !ok {
-		t.Fatal("text stack env did not use Shell")
+	if _, ok := stackEnv(&stack.State{}, false).Git.(cachedShell); !ok {
+		t.Fatal("text stack env did not use the cached shell")
 	}
 }
 

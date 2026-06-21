@@ -165,7 +165,7 @@ func registeredInfo(c *Command) commandInfo {
 // set it parses with, so help reports exactly what Run accepts. completion
 // declares no flags; every other command accepts at least --json.
 func commandFlags(c *Command) []flagInfo {
-	if c.Name == "completion" {
+	if c.Name == "completion" || c.Name == "shell" {
 		return nil
 	}
 	if c.NewFlagSet != nil {

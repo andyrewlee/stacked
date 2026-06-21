@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-
-	"stacked/internal/git"
 )
 
 func init() {
@@ -36,13 +34,16 @@ func runUp(args []string) error {
 	}
 
 	start := cur
+	var dest string // worktree path when the last checkout teleported
 	checkout := func(name string) error {
 		if name == start {
 			return nil
 		}
-		if err := git.Checkout(name); err != nil {
-			return fmt.Errorf("checking out %q: %w", name, err)
+		d, err := teleportCheckout(name)
+		if err != nil {
+			return err
 		}
+		dest = d
 		return nil
 	}
 
@@ -56,7 +57,16 @@ func runUp(args []string) error {
 			if cur == start {
 				return navEmit(asJSON, cur, "already at the top of the stack")
 			}
-			return navEmit(asJSON, cur, fmt.Sprintf("switched to %s (top of stack)", cur))
+			summary := fmt.Sprintf("switched to %s (top of stack)", cur)
+			switch {
+			case dest != "" && !shimActive():
+				// Teleport without the shim: the parent shell did not move, so give
+				// the cd command instead of claiming a switch.
+				summary = teleportHint(cur, dest)
+			case dest != "":
+				summary = fmt.Sprintf("switched to %s (top of stack, worktree: %s)", cur, dest)
+			}
+			return navEmit(asJSON, cur, summary)
 		case 1:
 			cur = children[0].Name
 		default:
@@ -83,5 +93,5 @@ func runUp(args []string) error {
 	if err := checkout(cur); err != nil {
 		return err
 	}
-	return navEmit(asJSON, cur, fmt.Sprintf("switched to %s", cur))
+	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
 }

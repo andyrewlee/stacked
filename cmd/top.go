@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-
-	"stacked/internal/git"
 )
 
 func init() {
@@ -45,10 +43,11 @@ func runTop(args []string) error {
 			if leaf == cur {
 				return navEmit(asJSON, cur, fmt.Sprintf("already at the top of the stack: %s", cur))
 			}
-			if err := git.Checkout(leaf); err != nil {
-				return fmt.Errorf("checking out %s: %w", leaf, err)
+			dest, err := teleportCheckout(leaf)
+			if err != nil {
+				return err
 			}
-			return navEmit(asJSON, leaf, fmt.Sprintf("moved to top of stack: %s", leaf))
+			return navEmit(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest))
 		case 1:
 			leaf = children[0].Name
 		default:

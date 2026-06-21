@@ -273,6 +273,17 @@ func (r *repo) branchExists(name string) bool {
 	return cmd.Run() == nil
 }
 
+// isAncestor reports whether ancestor is an ancestor of descendant (i.e. the
+// commit ancestor is contained in descendant's history), via
+// `git merge-base --is-ancestor`.
+func (r *repo) isAncestor(ancestor, descendant string) bool {
+	r.t.Helper()
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = r.dir
+	cmd.Env = cleanEnv(r.home)
+	return cmd.Run() == nil
+}
+
 // fileOnBranch reports whether the given path exists in the tree of branch.
 func (r *repo) fileOnBranch(branch, file string) bool {
 	r.t.Helper()
@@ -321,6 +332,8 @@ type logNode struct {
 	Current      bool       `json:"current"`
 	NeedsRestack bool       `json:"needsRestack"`
 	TopCommit    string     `json:"topCommit"`
+	Worktree     string     `json:"worktree"`
+	Dirty        bool       `json:"dirty"`
 	Children     []*logNode `json:"children"`
 }
 
@@ -331,6 +344,7 @@ type statusJSON struct {
 	Children      []string `json:"children"`
 	NeedsRestack  *bool    `json:"needsRestack"`
 	WorktreeClean bool     `json:"worktreeClean"`
+	Worktree      string   `json:"worktree"`
 }
 
 // findNode returns the first node in the tree (depth-first) with the given name.

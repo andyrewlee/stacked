@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"stacked/internal/git"
 )
 
 // fakeCommit is a node in the in-memory commit DAG.
@@ -43,17 +45,25 @@ type fakeGit struct {
 	// detachedAt is the commit a CheckoutDetach left HEAD on ("" when HEAD is
 	// on a branch).
 	detachedAt string
+
+	// linkedWorktrees models extra (non-main) worktrees by branch -> path. The
+	// main worktree (f.head) is synthesized in Worktrees().
+	linkedWorktrees map[string]string
+	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
+	// IsCleanIn can model a skipped dependent in the cascade tests.
+	dirtyWT map[string]bool
 }
 
 func newFakeGit() *fakeGit {
 	f := &fakeGit{
-		commits:      map[string]*fakeCommit{},
-		branches:     map[string]string{},
-		conflictNext: map[string]bool{},
-		checkoutErr:  map[string]error{},
-		deleteErr:    map[string]error{},
-		rebaseErr:    map[string]error{},
-		clean:        true,
+		commits:         map[string]*fakeCommit{},
+		branches:        map[string]string{},
+		conflictNext:    map[string]bool{},
+		checkoutErr:     map[string]error{},
+		deleteErr:       map[string]error{},
+		rebaseErr:       map[string]error{},
+		clean:           true,
+		linkedWorktrees: map[string]string{},
 	}
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, subject: "init"}
@@ -115,6 +125,89 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+// addWorktree registers a fake linked worktree for branch at path, a test seam
+// for exercising multi-worktree code paths without spawning git.
+func (f *fakeGit) addWorktree(path, branch string) { f.linkedWorktrees[branch] = path }
+
+// Worktrees synthesizes the main worktree (the current f.head, when on a
+// branch) plus any registered linked worktrees. It is read-only and tolerates a
+// detached HEAD (it simply omits the main worktree's branch entry).
+func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
+	var list []git.Worktree
+	main := git.Worktree{Path: "."}
+	if f.head != "" {
+		main.Branch = f.head
+		main.Head = f.branches[f.head]
+	} else {
+		main.Detached = true
+		main.Head = f.detachedAt
+	}
+	list = append(list, main)
+	for branch, path := range f.linkedWorktrees {
+		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch]})
+	}
+	return list, nil
+}
+
+// dirtyWorktrees marks linked worktrees (by branch) as dirty for IsCleanIn.
+func (f *fakeGit) markWorktreeDirty(branch string) {
+	if f.dirtyWT == nil {
+		f.dirtyWT = map[string]bool{}
+	}
+	f.dirtyWT[branch] = true
+}
+
+// RebaseOntoIn models an owner-driven rebase: it replays the branch's commits
+// like RebaseOnto but, crucially, does NOT move f.head — the rebase happens in
+// another worktree, leaving the main worktree's HEAD untouched. A branch armed
+// via conflictOn stalls just like RebaseOnto.
+func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error {
+	if err := f.rebaseErr[branch]; err != nil {
+		return err
+	}
+	if f.conflictNext[branch] {
+		f.rebaseActive = true
+		f.rebaseBranch = branch
+		f.rebaseNewBase = f.resolve(newBase)
+		f.rebaseOldBase = f.resolve(oldBase)
+		return fmt.Errorf("conflict rebasing %q", branch)
+	}
+	savedHead := f.head
+	err := f.replay(newBase, oldBase, branch)
+	f.head = savedHead // the owner worktree rebases; main HEAD does not move
+	return err
+}
+
+func (f *fakeGit) RebaseAbortIn(_ string) error { return f.RebaseAbort() }
+
+func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
+	// Map the worktree dir back to its branch to honor markWorktreeDirty.
+	for branch, path := range f.linkedWorktrees {
+		if path == dir {
+			return !f.dirtyWT[branch], nil
+		}
+	}
+	return true, nil
+}
+
+// WorktreeRemove tears down the linked worktree at dir, mirroring git's refusal
+// to remove a dirty worktree without --force. It deregisters the branch so a
+// follow-up DeleteBranch no longer hits "checked out in another worktree".
+func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
+	for branch, path := range f.linkedWorktrees {
+		if path != dir {
+			continue
+		}
+		if !force && f.dirtyWT[branch] {
+			return fmt.Errorf("worktree %q is dirty; use --force", dir)
+		}
+		delete(f.linkedWorktrees, branch)
+		delete(f.dirtyWT, branch)
+		return nil
+	}
+	return fmt.Errorf("no worktree at %q", dir)
+}
+
 func (f *fakeGit) Checkout(name string) error {
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
@@ -163,6 +256,11 @@ func (f *fakeGit) CreateBranch(name string) error {
 func (f *fakeGit) DeleteBranch(name string, force bool) error {
 	if name == f.head {
 		return fmt.Errorf("cannot delete the current branch %q", name)
+	}
+	if _, ok := f.linkedWorktrees[name]; ok {
+		// git refuses to delete a branch checked out in another worktree; the
+		// engine must tear that worktree down (WorktreeRemove) first.
+		return fmt.Errorf("cannot delete branch %q checked out at another worktree", name)
 	}
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)

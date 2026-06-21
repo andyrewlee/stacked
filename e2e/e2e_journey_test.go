@@ -36,6 +36,491 @@ func TestWorktreeSharesStackState(t *testing.T) {
 	}
 }
 
+// TestWorktreeAnnotationsInLog asserts that, once a second worktree exists, st
+// log/status annotate the branch that lives there with its worktree path (and
+// dirty state), while the single-tree fields stay empty for the main branch.
+func TestWorktreeAnnotationsInLog(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so a worktree can check it out
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+
+	// log --json from the main worktree should annotate feat-a with its path.
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("decode log json: %v\n%s", err, out)
+	}
+	feat := findNode(&root, "feat-a")
+	if feat == nil {
+		t.Fatalf("feat-a missing from log:\n%s", out)
+	}
+	if feat.Worktree == "" {
+		t.Fatalf("feat-a not annotated with a worktree path:\n%s", out)
+	}
+	if feat.Dirty {
+		t.Fatalf("feat-a worktree reported dirty when it is clean:\n%s", out)
+	}
+
+	// Dirty the linked worktree and confirm the flag flips.
+	if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatalf("dirty worktree: %v", err)
+	}
+	out = r.stOK("log", "--json").stdout
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("decode log json: %v\n%s", err, out)
+	}
+	if feat := findNode(&root, "feat-a"); feat == nil || !feat.Dirty {
+		t.Fatalf("feat-a worktree not reported dirty after edit:\n%s", out)
+	}
+
+	// status from inside the worktree reports its own path.
+	cmd := exec.Command(stBin, "status", "--json")
+	cmd.Dir = wt
+	cmd.Env = cleanEnv(r.home)
+	sOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st status in worktree: %v\n%s", err, sOut)
+	}
+	var st statusJSON
+	if err := json.Unmarshal(sOut, &st); err != nil {
+		t.Fatalf("decode status json: %v\n%s", err, sOut)
+	}
+	if st.Branch != "feat-a" || st.Worktree == "" {
+		t.Fatalf("status in worktree missing worktree path: %+v\n%s", st, sOut)
+	}
+}
+
+// TestWorktreeCommand materializes a worktree for a tracked branch via
+// `st worktree`, confirms it is listed and copies .worktreeinclude matches, and
+// then removes it.
+func TestWorktreeCommand(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	// The .worktreeinclude config lives on the trunk, the worktree's source: a
+	// gitignored file listed there should be copied; a tracked file listed there
+	// should NOT (git worktree add already materializes it).
+	r.writeFile(".gitignore", "secret.env\n")
+	r.writeFile("secret.env", "TOKEN=1\n")
+	r.writeFile(".worktreeinclude", "secret.env\na.txt\n")
+	r.git("add", ".gitignore", ".worktreeinclude")
+	r.git("commit", "-q", "-m", "add worktree config")
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so it can be checked out elsewhere
+
+	out := r.stOK("worktree", "feat-a", "--json").stdout
+	var created struct {
+		Branch string   `json:"branch"`
+		Path   string   `json:"path"`
+		Copied []string `json:"copied"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+	if created.Branch != "feat-a" || created.Path == "" {
+		t.Fatalf("unexpected worktree result: %+v", created)
+	}
+	if _, err := os.Stat(filepath.Join(created.Path, "secret.env")); err != nil {
+		t.Fatalf("gitignored .worktreeinclude file not copied: %v", err)
+	}
+	wantCopied := false
+	for _, c := range created.Copied {
+		if c == "secret.env" {
+			wantCopied = true
+		}
+		if c == "a.txt" {
+			t.Errorf("tracked file a.txt was copied; should be skipped")
+		}
+	}
+	if !wantCopied {
+		t.Errorf("secret.env not reported copied: %v", created.Copied)
+	}
+
+	// ls shows the new worktree.
+	lsOut := r.stOK("worktree", "ls").stdout
+	if !strings.Contains(lsOut, "feat-a") {
+		t.Fatalf("worktree ls missing feat-a:\n%s", lsOut)
+	}
+
+	// rm removes it.
+	r.stOK("worktree", "rm", "feat-a")
+	if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+		t.Errorf("worktree dir still present after rm: %v", err)
+	}
+}
+
+// TestShellInstallEmitsShim asserts `st shell install` prints a cd shim that
+// references the directive file, for the shell the user names.
+func TestShellInstallEmitsShim(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	out := r.stOK("shell", "install", "bash").stdout
+	if !strings.Contains(out, "builtin cd") || !strings.Contains(out, "ST_CD_FILE") {
+		t.Fatalf("shell install bash did not emit a cd shim:\n%s", out)
+	}
+}
+
+// TestCheckoutTeleportsToWorktree asserts that, once a branch lives in another
+// worktree, `st checkout` teleports there: with the shell shim's directive file
+// set it writes the worktree path to that file and reports the switch; WITHOUT
+// the shim the parent shell cannot be moved, so it must not claim a switch and
+// instead prints an actionable `cd <path>` hint (progressive enhancement).
+func TestCheckoutTeleportsToWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	created := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(created), &wt); err != nil {
+		t.Fatalf("decode worktree create: %v\n%s", err, created)
+	}
+
+	// With the directive file set (as the shim does), checkout writes the path.
+	directive := filepath.Join(t.TempDir(), "cd")
+	cmd := exec.Command(stBin, "checkout", "feat-a")
+	cmd.Dir = r.dir
+	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("st checkout feat-a: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(directive)
+	if err != nil {
+		t.Fatalf("read cd directive: %v", err)
+	}
+	// Compare by canonical path: git reports the symlink-resolved worktree path
+	// (on macOS /var -> /private/var) while the create JSON carries the computed
+	// one, so a literal string compare would spuriously differ.
+	gotResolved, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got)))
+	wantResolved, _ := filepath.EvalSymlinks(strings.TrimSpace(wt.Path))
+	if gotResolved != wantResolved {
+		t.Fatalf("cd directive = %q, want worktree path %q", got, wt.Path)
+	}
+
+	// We are still on main in the main worktree (checkout teleported, did not
+	// switch the branch here, which git forbids anyway).
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("main worktree branch = %q, want main (teleport must not switch in place)", cur)
+	}
+
+	// Without the shim (ST_CD_FILE unset, as cleanEnv leaves it), checkout cannot
+	// move the parent shell, so it must NOT claim a switch and must instead print
+	// an actionable cd hint pointing at the worktree.
+	noShim := r.stOK("checkout", "feat-a")
+	if strings.Contains(noShim.stdout, "switched") {
+		t.Fatalf("checkout without the shim must not claim a switch:\n%s", noShim.stdout)
+	}
+	if !strings.Contains(noShim.stdout, "cd ") {
+		t.Fatalf("checkout without the shim must suggest cd <path>:\n%s", noShim.stdout)
+	}
+}
+
+// TestCrossWorktreeRestackCascade proves the owner-driven cascade with real git:
+// with feat-a checked out in its own worktree, advancing the trunk and running
+// `st restack` rebases feat-a IN its worktree (git forbids rebasing it from the
+// main worktree), reconciling the stack without moving the main worktree's HEAD.
+func TestCrossWorktreeRestackCascade(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	// Materialize feat-a's worktree.
+	created := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(created), &wt); err != nil {
+		t.Fatalf("decode worktree create: %v\n%s", err, created)
+	}
+	featBefore := r.git("rev-parse", "feat-a")
+
+	// Advance the trunk so feat-a needs a restack.
+	r.writeFile("trunk.txt", "t\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "advance trunk")
+	mainTip := r.git("rev-parse", "main")
+
+	// Restack from main: feat-a (in its worktree) is the dependent to rebase.
+	res := r.stOK("restack")
+	_ = res
+
+	featAfter := r.git("rev-parse", "feat-a")
+	if featAfter == featBefore {
+		t.Fatalf("feat-a tip unchanged (%s); cross-worktree restack did not run", featAfter)
+	}
+	// feat-a's parent commit must now be the new main tip.
+	parent := r.git("rev-parse", "feat-a~1")
+	if parent != mainTip {
+		t.Fatalf("feat-a parent = %s, want new main tip %s", parent, mainTip)
+	}
+	// The main worktree is still on main (the rebase ran in feat-a's worktree).
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("main worktree branch = %q, want main", cur)
+	}
+	// The stack is reconciled: validate is clean.
+	r.stOK("validate")
+}
+
+// TestCrossWorktreeRestackConflictRollsBack proves that a conflict during the
+// owner-worktree rebase is rolled back (not left paused where the main process
+// cannot drive it): the command errors, but neither worktree is left mid-rebase.
+func TestCrossWorktreeRestackConflictRollsBack(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	// feat-a edits the same file the trunk will, forcing a conflict on restack.
+	r.create("feat-a", "shared.txt", "A\n", "a")
+	r.stOK("checkout", "main")
+
+	created := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(created), &wt); err != nil {
+		t.Fatalf("decode worktree create: %v\n%s", err, created)
+	}
+
+	// Advance trunk with a conflicting change to shared.txt.
+	r.writeFile("shared.txt", "X\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "trunk conflicts")
+
+	res := r.st("restack")
+	if res.exitCode == 0 {
+		t.Fatalf("expected restack to fail on the cross-worktree conflict, got exit 0:\n%s", res.stdout)
+	}
+	// The owner worktree must NOT be left mid-rebase.
+	cmd := exec.Command("git", "-C", wt.Path, "status", "--porcelain=v2", "--branch")
+	cmd.Env = cleanEnv(r.home)
+	statusOut, _ := cmd.CombinedOutput()
+	if strings.Contains(string(statusOut), "rebase") {
+		t.Fatalf("owner worktree left mid-rebase after conflict:\n%s", statusOut)
+	}
+	// And the dependent's tip was not advanced (rolled back).
+	r.stOK("validate") // metadata is consistent; the unrebased branch just needs a restack
+}
+
+// TestCrossWorktreeRestackSkipsDirty proves a dirty dependent worktree is
+// skipped (not clobbered) with a clear note, and left needing a restack.
+func TestCrossWorktreeRestackSkipsDirty(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	created := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(created), &wt); err != nil {
+		t.Fatalf("decode worktree create: %v\n%s", err, created)
+	}
+	featBefore := r.git("rev-parse", "feat-a")
+
+	// Dirty feat-a's worktree.
+	if err := os.WriteFile(filepath.Join(wt.Path, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty worktree: %v", err)
+	}
+
+	// Advance the trunk and restack.
+	r.writeFile("trunk.txt", "t\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "advance trunk")
+
+	res := r.stOK("restack")
+	if !strings.Contains(res.stdout, "skipped feat-a") {
+		t.Fatalf("restack did not report the dirty skip:\n%s", res.stdout)
+	}
+	if featAfter := r.git("rev-parse", "feat-a"); featAfter != featBefore {
+		t.Fatalf("dirty feat-a was clobbered: %s -> %s", featBefore, featAfter)
+	}
+}
+
+// worktreeFor materializes feat-a's worktree (from the main worktree) and returns
+// its on-disk path. The caller must already be on a branch other than feat-a.
+func worktreeFor(t *testing.T, r *repo, branch string) string {
+	t.Helper()
+	created := r.stOK("worktree", branch, "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(created), &wt); err != nil {
+		t.Fatalf("decode worktree create: %v\n%s", err, created)
+	}
+	return wt.Path
+}
+
+// TestDeleteTearsDownCleanOwnedWorktree proves `st delete` of a branch that owns
+// a (clean) linked worktree first removes that worktree (git would otherwise
+// refuse to delete a branch checked out elsewhere), then deletes the branch.
+func TestDeleteTearsDownCleanOwnedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b") // child to re-parent onto main
+	r.stOK("checkout", "main")              // free feat-a so it can live elsewhere
+
+	wtPath := worktreeFor(t, r, "feat-a")
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("worktree not materialized: %v", err)
+	}
+
+	// Delete feat-a (force: it is not merged into main): its clean worktree is
+	// torn down and the branch is gone.
+	r.stOK("delete", "feat-a", "-f")
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Fatalf("feat-a's worktree still present after delete: %v", err)
+	}
+	if r.branchExists("feat-a") {
+		t.Fatal("feat-a git branch still present after delete")
+	}
+	if !r.branchExists("feat-b") {
+		t.Fatal("feat-b should survive and be re-parented onto main")
+	}
+	r.stOK("validate")
+}
+
+// TestDeleteRefusesDirtyOwnedWorktree proves `st delete` of a branch whose linked
+// worktree has uncommitted changes errors and changes nothing — the worktree and
+// the branch both remain (in-progress work is never silently discarded).
+func TestDeleteRefusesDirtyOwnedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	wtPath := worktreeFor(t, r, "feat-a")
+	// Dirty the worktree.
+	if err := os.WriteFile(filepath.Join(wtPath, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty worktree: %v", err)
+	}
+
+	res := r.st("delete", "feat-a", "-f")
+	if res.exitCode == 0 {
+		t.Fatalf("delete of a branch with a dirty worktree should fail, got exit 0:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr+res.stdout, "worktree") {
+		t.Fatalf("error should mention the worktree:\nstdout:%s\nstderr:%s", res.stdout, res.stderr)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("dirty worktree was removed: %v", err)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("feat-a must still exist after a refused delete")
+	}
+	r.stOK("validate")
+}
+
+// TestFoldCascadesIntoCleanChildWorktree is the fold analogue of the delete
+// teardown: fold deletes the CURRENT branch (always local — a branch is checked
+// out in at most one worktree), then re-parents and restacks its children. When a
+// child lives in another (clean) worktree, fold must rebase it IN that worktree,
+// never moving the main worktree's HEAD across worktrees. Here feat-b is folded
+// into feat-a while feat-c (feat-b's child) lives in its own worktree.
+func TestFoldCascadesIntoCleanChildWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "feat-b") // free feat-c so it can live elsewhere
+	wtPath := worktreeFor(t, r, "feat-c")
+
+	r.stOK("checkout", "feat-b")
+	r.stOK("fold") // fold feat-b into feat-a
+	if r.branchExists("feat-b") {
+		t.Fatal("feat-b should be folded away")
+	}
+	// feat-c is re-parented onto feat-a and its worktree is left intact; the main
+	// worktree did not teleport into feat-c's worktree during the fold.
+	if cur := r.currentBranch(); cur == "feat-c" {
+		t.Fatalf("main worktree HEAD = feat-c; fold must not move HEAD into another worktree")
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("feat-c's worktree should be intact after fold: %v", err)
+	}
+	// The whole stack reconciles across worktrees.
+	r.stOK("restack")
+	r.stOK("validate")
+}
+
+// TestCrossWorktreeRestackMultiLevel proves the owner-driven cascade reconciles a
+// multi-level stack across the worktree boundary with real git: main -> feat-a ->
+// feat-b -> feat-c, with the INTERMEDIATE feat-b living in its own worktree and
+// feat-a/feat-c local. Advancing the trunk and running `st restack` must rebase
+// feat-a in place, feat-b IN its worktree (onto the rebased feat-a), and feat-c on
+// the rebased feat-b — without moving the main worktree's HEAD.
+func TestCrossWorktreeRestackMultiLevel(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "main") // free feat-b so it can live in its own worktree
+
+	wtPath := worktreeFor(t, r, "feat-b")
+
+	// Advance the trunk so the whole stack is out of date.
+	r.writeFile("trunk.txt", "t\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "advance trunk")
+	mainTip := r.git("rev-parse", "main")
+
+	bBefore := r.git("rev-parse", "feat-b")
+	cBefore := r.git("rev-parse", "feat-c")
+
+	r.stOK("restack")
+
+	// feat-b (in its worktree) and feat-c were rebased.
+	if r.git("rev-parse", "feat-b") == bBefore {
+		t.Fatal("feat-b tip unchanged; the intermediate worktree branch did not rebase")
+	}
+	if r.git("rev-parse", "feat-c") == cBefore {
+		t.Fatal("feat-c tip unchanged; the cascade did not reach the top branch")
+	}
+	// feat-a sits on the new main tip; the whole chain descends from it.
+	if parent := r.git("rev-parse", "feat-a~1"); parent != mainTip {
+		t.Fatalf("feat-a parent=%s, want new main tip %s", parent, mainTip)
+	}
+	// feat-c contains feat-b which contains feat-a (chain across the boundary).
+	if !r.isAncestor("feat-a", "feat-b") {
+		t.Fatal("rebased feat-b does not contain feat-a")
+	}
+	if !r.isAncestor("feat-b", "feat-c") {
+		t.Fatal("rebased feat-c does not contain feat-b")
+	}
+	if !r.isAncestor(mainTip, "feat-c") {
+		t.Fatal("rebased feat-c does not descend from the new main")
+	}
+	// feat-b's worktree is intact and the main worktree stayed on main.
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("feat-b's worktree missing after restack: %v", err)
+	}
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("main worktree HEAD=%q, want main (cascade must not move it)", cur)
+	}
+	// The whole stack is reconciled.
+	r.stOK("validate")
+}
+
 // TestUndoAfterConflictAbort drives a conflict, aborts it (which leaves the
 // bottom branch amended), then undoes the whole mutation back to the pre-mutation
 // tip and validates clean (TEST-10).

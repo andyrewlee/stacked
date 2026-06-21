@@ -137,6 +137,8 @@ Every command below except `completion` (plus `help`/`version`) accepts `--json`
 | `st undo` | | Undo the last stack-mutating command. |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
+| `st worktree <branch> \| ls \| rm <branch>` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
+| `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |
 | `st help` / `st version` | `-h`/`-v` | Show help / print the version. |
@@ -163,15 +165,40 @@ st create feat-a -m "add A"
 #### `st log` (`ls`)
 Renders the stack as a tree with the trunk at the bottom and each branch above its
 parent. The current branch is marked `◉`, others `○`, drifted branches are tagged
-`(needs restack)`, and each branch shows its top commit subject.
+`(needs restack)`, and each branch shows its top commit subject. In a
+multi-worktree repo each branch that lives in a linked worktree is also tagged
+with `(worktree: <path>)` (and `dirty` when that worktree has uncommitted
+changes); `--json` adds matching `worktree`/`dirty` fields. Single-tree output is
+unchanged.
 
 #### `st status` (`stat`)
 Prints the current branch's role (trunk / tracked / untracked), its parent and
-children, whether it needs a restack, and whether the working tree is clean.
+children, whether it needs a restack, and whether the working tree is clean. In a
+multi-worktree repo it also prints `worktree path:` for the current branch
+(`worktree` in `--json`).
 
 #### `st checkout [name]` (`co`)
 Checks out a tracked branch (or the trunk). With no argument, lists the trunk and
-all tracked branches, marking the current one with `*`.
+all tracked branches, marking the current one with `*`. If the branch lives in its
+own worktree (see `st worktree`), checkout *teleports* there instead of switching
+in place — with the shell shim installed your shell `cd`s into the worktree; without
+it the path is printed.
+
+#### `st worktree <branch> | ls | rm <branch>` (`wt`)
+Make a branch a "place you can be" on its own — useful for running multiple agents
+on different branches of one stack in parallel. `st worktree <branch>` materializes
+a git worktree for an existing tracked branch at `~/.stacked/worktrees/<repo>/<branch>`
+(outside the repo, so runners/linters never walk into it) and copies any
+`.worktreeinclude` matches into it (gitignore syntax; only gitignored matches are
+copied, via copy-on-write reflink when available). `st worktree ls` lists every
+worktree; `st worktree rm <branch>` removes a branch's worktree. The stack metadata
+is shared across all worktrees, so every `st` command sees the same stack.
+
+#### `st shell install [bash|zsh|fish]`
+Prints a tiny shell function that wraps `st` so navigation commands can change your
+shell's directory (a CLI process cannot do that to its parent). Install it with, e.g.,
+`eval "$(st shell install)"` in your shell rc. Without it, teleporting commands print
+the destination path instead.
 
 #### `st up [n]` (`u`) / `st down [n]` (`d`)
 Walk `n` levels up (toward leaves) or down (toward trunk) and check out the result.
@@ -196,7 +223,10 @@ Rebases the current branch onto its parent's current tip, then restacks its enti
 upstack in topological order. From the trunk, restacks every tracked branch. Your
 original branch is restored when done. Requires a clean working tree (commit or
 stash first). If a rebase hits a conflict, resolve it, stage the files with
-`git add`, then run `st continue`.
+`git add`, then run `st continue`. When a dependent branch lives in its own
+worktree (see `st worktree`), it is rebased *inside that worktree* — git won't
+let it be rebased from here — as long as that worktree is clean; a dirty
+dependent worktree is skipped with a note rather than clobbered.
 
 #### `st continue`
 Resumes a restack that stopped on a merge conflict. After you resolve the conflict

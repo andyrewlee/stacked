@@ -273,7 +273,19 @@ func runModel(t *testing.T, seed int64, steps int) {
 			t.Fatalf("step %d: re-apply %s: %v", step, label, err)
 		}
 
-		// Reconcile the whole forest, then assert invariants.
+		// On some steps, layer a WORKTREE dimension over the reconcile: materialize
+		// worktrees for a random subset of tracked branches (so they are owned
+		// elsewhere and the cross-worktree cascade activates) and dirty some of
+		// them, then drive the reconcile through the real Restack and assert the
+		// worktree-aware invariants. The branches not chosen stay single-tree, so
+		// each run mixes both regimes. The helper tears every worktree back down
+		// before returning so the next step starts single-tree-coherent (the
+		// checkout-based mutation ops can't run against a branch parked elsewhere);
+		// the plain single-tree reconcile below then finishes any dirty owner that
+		// the cascade had to skip.
+		maybeReconcileWithWorktrees(t, rng, f, s, env, step)
+
+		// Reconcile the whole (now single-tree) forest, then assert invariants.
 		f.head = "main"
 		if _, err := Restack(env, s); err != nil {
 			t.Fatalf("step %d: restack-all: %v", step, err)
@@ -288,6 +300,124 @@ func runModel(t *testing.T, seed int64, steps int) {
 		}
 		if len(res.Restacked) != 0 {
 			t.Fatalf("step %d: restack not idempotent, rebased %v", step, res.Restacked)
+		}
+	}
+}
+
+// maybeReconcileWithWorktrees, on a random subset of steps, parks some tracked
+// branches in their own worktrees (a subset of those dirty), drives the reconcile
+// through the real Restack so the owner-driven cross-worktree cascade runs, and
+// asserts the worktree-aware invariants. It ALWAYS tears every worktree back down
+// before returning (and clears the dirty flags) so the next step — and the
+// caller's plain single-tree reconcile, which finishes any skipped dirty owner —
+// starts single-tree-coherent. On the single-tree path it does nothing.
+func maybeReconcileWithWorktrees(t *testing.T, rng *rand.Rand, f *fakeGit, s *State, env Env, step int) {
+	t.Helper()
+	tracked := sortedBranchNames(s)
+	if len(tracked) == 0 || rng.Intn(3) != 0 {
+		return // ~2/3 of steps stay purely single-tree
+	}
+
+	// Park a random subset of branches in their own worktrees; dirty some.
+	f.head = "main"
+	dirty := map[string]bool{}
+	owned := map[string]bool{}
+	for _, name := range tracked {
+		if rng.Intn(2) == 0 {
+			continue
+		}
+		f.addWorktree("/wt/"+name, name)
+		owned[name] = true
+		if rng.Intn(2) == 0 {
+			f.markWorktreeDirty(name)
+			dirty[name] = true
+		}
+	}
+	// Always restore single-tree state on the way out, whatever the path taken.
+	defer func() {
+		f.linkedWorktrees = map[string]string{}
+		f.dirtyWT = nil
+	}()
+	if len(owned) == 0 {
+		return // nothing parked: fall back to the single-tree reconcile
+	}
+
+	if _, err := Restack(env, s); err != nil {
+		t.Fatalf("step %d: cross-worktree restack-all: %v", step, err)
+	}
+	checkWorktreeInvariants(t, f, s, step, owned, dirty)
+}
+
+// checkWorktreeInvariants asserts the worktree-aware invariants after a reconcile
+// that ran the cross-worktree cascade:
+//
+//	(i)   every existing invariant still holds regardless of worktree ownership
+//	      (acyclic, valid parents, contains-base);
+//	(ii)  every branch whose owning worktree is CLEAN (or has none) is reconciled
+//	      (no longer NeedsRestack);
+//	(iii) a branch still needing a restack is exactly one whose owning worktree is
+//	      DIRTY, and it is reported in SkippedWorktrees;
+//	(iv)  the main worktree's HEAD was never moved by the cascade.
+func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned, dirty map[string]bool) {
+	t.Helper()
+
+	// (iv) the cascade rebases in owner worktrees (git -C <path>); the main
+	// worktree's HEAD must be untouched.
+	if cur, _ := f.CurrentBranch(); cur != "main" {
+		t.Fatalf("step %d: main worktree HEAD = %q after cross-worktree restack, want main", step, cur)
+	}
+
+	// SkippedWorktrees is drained on read; snapshot it once.
+	skipped := map[string]bool{}
+	for _, name := range s.SkippedWorktrees() {
+		skipped[name] = true
+	}
+
+	for _, name := range sortedBranchNames(s) {
+		b := s.Branches[name]
+		// (i) topology invariants hold regardless of where the branch lives.
+		if !f.BranchExists(name) {
+			t.Fatalf("step %d: tracked branch %q has no git branch", step, name)
+		}
+		if b.Parent != s.Trunk && (!s.IsTracked(b.Parent) || !f.BranchExists(b.Parent)) {
+			t.Fatalf("step %d: %q has invalid parent %q", step, name, b.Parent)
+		}
+		if !mustFakeIsAncestor(t, f, b.ParentSHA, name) {
+			t.Fatalf("step %d: %q parentSHA is not an ancestor of its tip", step, name)
+		}
+		seen := map[string]bool{name: true}
+		for cur := b.Parent; cur != s.Trunk; {
+			if seen[cur] {
+				t.Fatalf("step %d: cycle through %q", step, name)
+			}
+			seen[cur] = true
+			nb, ok := s.Get(cur)
+			if !ok {
+				t.Fatalf("step %d: %q parent chain hit untracked %q", step, name, cur)
+			}
+			cur = nb.Parent
+		}
+
+		needs, err := s.NeedsRestack(f, name)
+		if err != nil {
+			t.Fatalf("step %d: NeedsRestack(%q): %v", step, name, err)
+		}
+		switch {
+		case needs && !dirty[name]:
+			// (ii)/(iii) only a DIRTY owner may be left needing a restack.
+			t.Fatalf("step %d: %q still needs restack but its worktree is not dirty (owned=%v)", step, name, owned[name])
+		case needs && dirty[name]:
+			// (iii) and it must be reported as skipped.
+			if !skipped[name] {
+				t.Fatalf("step %d: dirty owner %q needs a restack but was not reported in SkippedWorktrees", step, name)
+			}
+		}
+	}
+
+	// (iii) the skip set must name only dirty owners (no spurious skips).
+	for name := range skipped {
+		if !dirty[name] {
+			t.Fatalf("step %d: %q reported skipped but its worktree is not dirty", step, name)
 		}
 	}
 }

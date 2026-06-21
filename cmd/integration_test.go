@@ -52,6 +52,10 @@ func newRepo(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Chdir(dir)
+	// The worktree probe is memoized per process; the test binary runs many
+	// commands against different temp repos in one process, so drop any cached
+	// list (from a prior repo) before this repo's commands run.
+	resetWorktreeCache()
 	mustRun(t, "git", "init", "-q", "-b", "main")
 	mustRun(t, "git", "config", "user.email", "test@example.com")
 	mustRun(t, "git", "config", "user.name", "test")

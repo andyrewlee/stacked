@@ -207,8 +207,8 @@ func TestExecuteBuiltInUnknownFlags(t *testing.T) {
 // usage string, so `st help <cmd>` documents the flag (CLI-6, DOC-2/3).
 func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 	for _, c := range registry {
-		if c.Name == "completion" {
-			continue // completion emits shell scripts, not JSON
+		if c.Name == "completion" || c.Name == "shell" {
+			continue // these emit shell scripts, not JSON
 		}
 		if !strings.Contains(c.Usage, "--json") {
 			t.Errorf("command %q usage %q does not document --json", c.Name, c.Usage)
@@ -229,9 +229,10 @@ func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 // positional args, not a git repo) and only fails on a genuinely undefined flag.
 func TestEveryCommandDefinesJSONFlag(t *testing.T) {
 	t.Chdir(t.TempDir()) // hermetic: an empty, non-stacked dir; commands fail past the parse, harmlessly
+	resetWorktreeCache()
 	for _, c := range registry {
-		if c.Name == "completion" {
-			continue // completion emits shell scripts, not JSON
+		if c.Name == "completion" || c.Name == "shell" {
+			continue // these emit shell scripts, not JSON
 		}
 		var err error
 		// Swallow any usage/output the command prints on its (expected) failure.
@@ -302,6 +303,7 @@ func TestRenderErrorConflictFields(t *testing.T) {
 // cannot drift into listing a flag the command rejects.
 func TestHelpReportsOnlyRealFlags(t *testing.T) {
 	t.Chdir(t.TempDir())
+	resetWorktreeCache()
 	for _, c := range registry {
 		for _, f := range commandFlags(c) {
 			var err error
@@ -339,6 +341,7 @@ func TestHelpJSONIncludesFlags(t *testing.T) {
 // a dead end otherwise).
 func TestUnknownFlagPointsAtHelp(t *testing.T) {
 	t.Chdir(t.TempDir())
+	resetWorktreeCache()
 	err := byName["status"].Run([]string{"--nope"})
 	if err == nil {
 		t.Fatal("unknown flag should error")
@@ -399,6 +402,7 @@ func TestHelpForCommandUnknownEmitsPointer(t *testing.T) {
 // again. -h returns flag.ErrHelp before any git/state work, so no repo is needed.
 func TestEveryCommandUsageMatchesRegistry(t *testing.T) {
 	t.Chdir(t.TempDir())
+	resetWorktreeCache()
 	for _, c := range registry {
 		got := captureStdout(t, func() { _ = c.Run([]string{"-h"}) })
 		first, _, _ := strings.Cut(got, "\n")
