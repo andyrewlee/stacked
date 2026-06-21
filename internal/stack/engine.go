@@ -495,9 +495,9 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := g.RebaseOnto(newParentTip, oldBase, cur); err != nil {
-		inProgress, progressErr := g.RebaseInProgress()
-		if progressErr == nil && inProgress {
+	if rebaseErr := g.RebaseOnto(newParentTip, oldBase, cur); rebaseErr != nil {
+		paused, outErr := rebaseFailure(g, rebaseErr, "moving", cur, target)
+		if paused {
 			s.PendingReparent = &PendingReparent{Branch: cur, Parent: target, ParentSHA: newParentTip}
 			if saveErr := env.save(); saveErr != nil {
 				// The reparent intent could not be persisted, so a later `st
@@ -519,10 +519,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 			}
 			return nil, &ConflictError{Action: "moving", Branch: cur, Onto: target}
 		}
-		if progressErr != nil {
-			return nil, fmt.Errorf("checking rebase state after moving %q onto %q failed: %v (original error: %w)", cur, target, progressErr, err)
-		}
-		return nil, fmt.Errorf("moving %q onto %q: %w", cur, target, err)
+		return nil, outErr
 	}
 	b.Parent = target
 	b.ParentSHA = newParentTip
