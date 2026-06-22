@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-
-	"stacked/internal/git"
 )
 
 func init() {
@@ -46,8 +44,9 @@ func runBottom(args []string) error {
 		return navEmit(asJSON, b, fmt.Sprintf("already at bottom: %s", b))
 	}
 
-	if err := git.Checkout(b); err != nil {
+	dest, err := teleportCheckout(b)
+	if err != nil {
 		return err
 	}
-	return navEmit(asJSON, b, fmt.Sprintf("switched to bottom: %s", b))
+	return navEmit(asJSON, b, navSummary("switched to bottom:", b, dest))
 }

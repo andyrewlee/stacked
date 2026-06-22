@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"stacked/internal/git"
+	"stacked/internal/stack"
 )
 
 func init() {
@@ -96,6 +97,17 @@ func runStatus(args []string) error {
 		return err
 	}
 
+	// In a multi-worktree repo, report where the current branch lives. Gated so
+	// single-tree output is byte-for-byte unchanged (worktreePath stays "").
+	worktreePath := ""
+	if wts, err := worktrees(); err != nil {
+		return err
+	} else if stack.IsMultiWorktree(wts) {
+		if wt, ok := stack.OwnerOf(wts, cur); ok {
+			worktreePath = wt.Path
+		}
+	}
+
 	if asJSON {
 		payload := struct {
 			Branch           string   `json:"branch"`
@@ -108,7 +120,8 @@ func runStatus(args []string) error {
 			RebaseInProgress bool     `json:"rebaseInProgress,omitempty"`
 			RebaseBranch     string   `json:"rebaseBranch,omitempty"`
 			ConflictedFiles  []string `json:"conflictedFiles,omitempty"`
-		}{cur, s.Trunk, role, parent, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles}
+			Worktree         string   `json:"worktree,omitempty"`
+		}{cur, s.Trunk, role, parent, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err
@@ -155,6 +168,9 @@ func runStatus(args []string) error {
 		out("worktree: clean\n")
 	} else {
 		out("worktree: dirty\n")
+	}
+	if worktreePath != "" {
+		out("worktree path: %s\n", worktreePath)
 	}
 	if rebaseInProgress {
 		out("rebase:   in progress on %s (run: st continue / st abort)\n", rebaseBranch)

@@ -44,6 +44,19 @@ type State struct {
 	Branches map[string]*Branch `json:"branches"`
 	// PendingReparent is set only while an onto rebase is paused on conflicts.
 	PendingReparent *PendingReparent `json:"pendingReparent,omitempty"`
+
+	// skippedWorktrees collects branches the current restack skipped because they
+	// live in a dirty linked worktree (owner-driven cascade). It is transient
+	// (never persisted) and consumed by the engine to build OpResult notes.
+	skippedWorktrees []string `json:"-"`
+}
+
+// SkippedWorktrees returns the branches the last restack skipped because their
+// owning worktree was dirty, and clears the list.
+func (s *State) SkippedWorktrees() []string {
+	skipped := s.skippedWorktrees
+	s.skippedWorktrees = nil
+	return skipped
 }
 
 // Get returns the tracked Branch with the given name and whether it exists.

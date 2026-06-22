@@ -270,10 +270,26 @@ func Restack(env Env, s *State) (*OpResult, error) {
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
 		return nil, err
 	}
-	if len(rebased) == 0 {
+	notes := skippedWorktreeNotes(s)
+	if len(rebased) == 0 && len(notes) == 0 {
 		return &OpResult{Summary: "everything up to date"}, nil
 	}
-	return &OpResult{Summary: "restacked", Restacked: rebased}, nil
+	return &OpResult{Summary: "restacked", Restacked: rebased, Notes: notes}, nil
+}
+
+// skippedWorktreeNotes drains the branches a restack skipped because their owning
+// worktree was dirty, turning each into a human-readable note. Empty when the
+// cascade skipped nothing (the common, single-tree case).
+func skippedWorktreeNotes(s *State) []string {
+	skipped := s.SkippedWorktrees()
+	if len(skipped) == 0 {
+		return nil
+	}
+	notes := make([]string, 0, len(skipped))
+	for _, name := range skipped {
+		notes = append(notes, fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name))
+	}
+	return notes
 }
 
 // Fold folds the current branch into its parent: the parent advances to include
@@ -302,6 +318,14 @@ func Fold(env Env, s *State) (*OpResult, error) {
 	}
 	if needs {
 		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
+	}
+	// Fold deletes cur; if it lives in another worktree git would refuse, so tear
+	// that (clean) worktree down first. A dirty owner errors before any git
+	// mutation, so nothing changes. (Normally cur is checked out HERE and this is
+	// a no-op; the guard covers the case where fold runs against an owned-elsewhere
+	// branch.)
+	if err := s.releaseOwnedWorktree(env, cur); err != nil {
+		return nil, err
 	}
 
 	curTip, err := g.RevParse(branchTipRef(cur))
@@ -511,6 +535,11 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
+	// If name lives in another worktree, git refuses to delete it; tear that
+	// (clean) worktree down first. A dirty owner errors out and nothing changes.
+	if err := s.releaseOwnedWorktree(env, name); err != nil {
+		return nil, err
+	}
 	parent := b.Parent
 
 	start, err := g.CurrentBranch()
@@ -634,7 +663,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		Summary:   "sync complete",
 		Deleted:   deleted,
 		Restacked: rebased,
-		Notes:     []string{"trunk: " + ffResult},
+		Notes:     append([]string{"trunk: " + ffResult}, skippedWorktreeNotes(s)...),
 	}, nil
 }
 
@@ -839,6 +868,13 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 		}
 		if !merged {
 			continue
+		}
+		// A merged branch living in another worktree can't be deleted by git until
+		// its worktree is gone; tear a clean one down first. A dirty owner errors
+		// (the user must commit/stash or `st worktree rm` it), leaving everything
+		// pruned so far intact.
+		if err := s.releaseOwnedWorktree(env, name); err != nil {
+			return deleted, err
 		}
 		if err := g.DeleteBranch(name, true); err != nil {
 			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)

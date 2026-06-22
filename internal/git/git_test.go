@@ -115,6 +115,17 @@ func writeFile(t *testing.T, name, content string) {
 	}
 }
 
+// resolveSymlinks canonicalizes a path so comparisons are stable on platforms
+// (macOS) where temp dirs live under a symlinked prefix (/var -> /private/var).
+func resolveSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return resolved
+}
+
 func TestCurrentBranchAndExists(t *testing.T) {
 	newRepo(t)
 	got, err := CurrentBranch()
@@ -491,6 +502,193 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := PushRemote("origin", "main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+}
+
+// TestWorktreesSingle asserts that a repo with only the main worktree reports
+// exactly one worktree, on the trunk branch with the correct head SHA.
+func TestWorktreesSingle(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "HEAD")
+
+	wts, err := Worktrees()
+	if err != nil {
+		t.Fatalf("Worktrees: %v", err)
+	}
+	if len(wts) != 1 {
+		t.Fatalf("Worktrees = %v, want exactly the main worktree", wts)
+	}
+	if wts[0].Branch != "main" {
+		t.Errorf("main worktree branch = %q, want main", wts[0].Branch)
+	}
+	if wts[0].Head != mainSHA {
+		t.Errorf("main worktree head = %q, want %s", wts[0].Head, mainSHA)
+	}
+	if wts[0].Detached || wts[0].Bare {
+		t.Errorf("main worktree wrongly flagged detached/bare: %+v", wts[0])
+	}
+}
+
+// TestWorktreesLinked asserts a linked worktree is enumerated alongside the main
+// one with its branch and path, and a detached worktree is flagged.
+func TestWorktreesLinked(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "feat")
+	linked := filepath.Join(t.TempDir(), "feat-wt")
+	mustGit(t, "worktree", "add", "-q", linked, "feat")
+	detachedSHA := mustGit(t, "rev-parse", "HEAD")
+	detached := filepath.Join(t.TempDir(), "det-wt")
+	mustGit(t, "worktree", "add", "-q", "--detach", detached, detachedSHA)
+
+	wts, err := Worktrees()
+	if err != nil {
+		t.Fatalf("Worktrees: %v", err)
+	}
+	byBranch := map[string]Worktree{}
+	var detachedSeen bool
+	for _, wt := range wts {
+		if wt.Detached {
+			detachedSeen = true
+		}
+		if wt.Branch != "" {
+			byBranch[wt.Branch] = wt
+		}
+	}
+	if _, ok := byBranch["main"]; !ok {
+		t.Errorf("missing main worktree in %v", wts)
+	}
+	feat, ok := byBranch["feat"]
+	if !ok {
+		t.Fatalf("missing feat worktree in %v", wts)
+	}
+	if resolveSymlinks(t, feat.Path) != resolveSymlinks(t, linked) {
+		t.Errorf("feat worktree path = %q, want %q", feat.Path, linked)
+	}
+	if !detachedSeen {
+		t.Errorf("detached worktree not flagged in %v", wts)
+	}
+}
+
+// TestParseWorktreesBareAndLocked exercises the porcelain arms a normal local
+// repo rarely emits — `bare` (the main entry of a bare repo) and `locked` (a
+// worktree pinned with `git worktree lock`) — against a canned fixture, so the
+// parser is covered without standing up a bare repo or locking a worktree.
+func TestParseWorktreesBareAndLocked(t *testing.T) {
+	// A realistic `git worktree list --porcelain` dump: a bare main entry (no
+	// HEAD/branch), a normal linked worktree on a branch, and a locked detached
+	// worktree. Records are blank-line separated.
+	fixture := "worktree /repo.git\n" +
+		"bare\n" +
+		"\n" +
+		"worktree /wt/feat\n" +
+		"HEAD 1111111111111111111111111111111111111111\n" +
+		"branch refs/heads/feat\n" +
+		"\n" +
+		"worktree /wt/pinned\n" +
+		"HEAD 2222222222222222222222222222222222222222\n" +
+		"detached\n" +
+		"locked reason for the lock\n"
+
+	wts := parseWorktrees(fixture)
+	if len(wts) != 3 {
+		t.Fatalf("parsed %d worktrees, want 3: %+v", len(wts), wts)
+	}
+
+	bare := wts[0]
+	if bare.Path != "/repo.git" || !bare.Bare {
+		t.Errorf("bare entry = %+v, want path /repo.git and Bare=true", bare)
+	}
+	if bare.Branch != "" || bare.Head != "" {
+		t.Errorf("bare entry should have no branch/head: %+v", bare)
+	}
+
+	feat := wts[1]
+	if feat.Branch != "feat" || feat.Bare || feat.Locked || feat.Detached {
+		t.Errorf("feat entry = %+v, want branch feat and no bare/locked/detached flags", feat)
+	}
+
+	pinned := wts[2]
+	if !pinned.Locked {
+		t.Errorf("locked worktree not flagged: %+v", pinned)
+	}
+	if !pinned.Detached {
+		t.Errorf("locked worktree should also be detached: %+v", pinned)
+	}
+	if pinned.Branch != "" {
+		t.Errorf("detached worktree should have no branch: %+v", pinned)
+	}
+}
+
+// TestWorktreeAddAndRemove drives the add/remove plumbing against real git and
+// asserts the worktree shows up in the listing and is gone after removal.
+func TestWorktreeAddAndRemove(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "feat")
+	path := filepath.Join(t.TempDir(), "feat-wt")
+
+	if err := WorktreeAdd(path, "feat"); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	wts, err := Worktrees()
+	if err != nil {
+		t.Fatalf("Worktrees: %v", err)
+	}
+	found := false
+	for _, wt := range wts {
+		if wt.Branch == "feat" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("added worktree not listed: %v", wts)
+	}
+
+	if err := WorktreeRemove(path, false); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree dir still present after remove: %v", err)
+	}
+}
+
+func TestWorktreeAddRejectsBadArgs(t *testing.T) {
+	newRepo(t)
+	if err := WorktreeAdd("/tmp/x", "-evil"); err == nil {
+		t.Error("WorktreeAdd accepted a flag-like branch name")
+	}
+	if err := WorktreeAdd("", "feat"); err == nil {
+		t.Error("WorktreeAdd accepted an empty path")
+	}
+	if err := WorktreeRemove("", false); err == nil {
+		t.Error("WorktreeRemove accepted an empty path")
+	}
+}
+
+// TestIsCleanAt asserts the per-directory clean check reflects a linked
+// worktree's own working-tree state, independent of the main worktree.
+func TestIsCleanAt(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "feat")
+	path := filepath.Join(t.TempDir(), "feat-wt")
+	if err := WorktreeAdd(path, "feat"); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	clean, err := IsCleanAt(path)
+	if err != nil {
+		t.Fatalf("IsCleanAt: %v", err)
+	}
+	if !clean {
+		t.Error("fresh worktree should be clean")
+	}
+	if err := os.WriteFile(filepath.Join(path, "base.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clean, err = IsCleanAt(path)
+	if err != nil {
+		t.Fatalf("IsCleanAt after edit: %v", err)
+	}
+	if clean {
+		t.Error("edited worktree should be dirty")
 	}
 }
 

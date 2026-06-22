@@ -58,11 +58,54 @@ func runLog(args []string) error {
 	}
 	drift := s.DriftAgainst(tips)
 
-	if asJSON {
-		return printLogJSON(s, index, cur, drift, tips, subjects, graph)
+	// Worktree annotations are gated on a multi-worktree repo so the single-tree
+	// output stays byte-for-byte identical: in the common case wtInfo is empty
+	// and every annotation site is skipped.
+	wtInfo, err := branchWorktrees()
+	if err != nil {
+		return err
 	}
-	printLogTree(s, index, cur, drift, tips, subjects, graph)
+
+	if asJSON {
+		return printLogJSON(s, index, cur, drift, tips, subjects, graph, wtInfo)
+	}
+	printLogTree(s, index, cur, drift, tips, subjects, graph, wtInfo)
 	return nil
+}
+
+// worktreeInfo annotates a branch that lives in a linked worktree.
+type worktreeInfo struct {
+	path  string
+	dirty bool
+}
+
+// branchWorktrees returns, for a multi-worktree repo, a map from branch name to
+// where it lives and whether that worktree is dirty. For a single-tree repo it
+// returns an empty map so callers add no annotations and the output is
+// unchanged. The main worktree is intentionally omitted: its branch is the
+// current/in-place branch, which already has its own marker.
+func branchWorktrees() (map[string]worktreeInfo, error) {
+	wts, err := worktrees()
+	if err != nil {
+		return nil, err
+	}
+	if !stack.IsMultiWorktree(wts) {
+		return map[string]worktreeInfo{}, nil
+	}
+	info := make(map[string]worktreeInfo, len(wts))
+	for _, wt := range wts {
+		if wt.Branch == "" {
+			continue
+		}
+		clean, err := git.IsCleanAt(wt.Path)
+		if err != nil {
+			// A worktree we cannot stat (e.g. pruned on disk) is reported without a
+			// dirty flag rather than failing the whole render.
+			clean = true
+		}
+		info[wt.Branch] = worktreeInfo{path: wt.Path, dirty: !clean}
+	}
+	return info, nil
 }
 
 // logNode is the JSON shape of a branch in the stack tree.
@@ -73,10 +116,12 @@ type logNode struct {
 	Current      bool       `json:"current"`
 	NeedsRestack bool       `json:"needsRestack"`
 	TopCommit    string     `json:"topCommit,omitempty"`
+	Worktree     string     `json:"worktree,omitempty"`
+	Dirty        bool       `json:"dirty,omitempty"`
 	Children     []*logNode `json:"children"`
 }
 
-func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, graph commitGraph) error {
+func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, graph commitGraph, wtInfo map[string]worktreeInfo) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
 		node := &logNode{Name: name, Parent: parent, Current: name == cur, Children: []*logNode{}}
@@ -86,6 +131,10 @@ func printLogJSON(s *stack.State, index map[string][]string, cur string, drift m
 			if subject, ok := topSubject(b, tips, subjects, graph); ok {
 				node.TopCommit = subject
 			}
+		}
+		if wt, ok := wtInfo[name]; ok {
+			node.Worktree = wt.path
+			node.Dirty = wt.dirty
 		}
 		for _, child := range index[name] {
 			node.Children = append(node.Children, build(child, name))
@@ -103,7 +152,7 @@ func printLogJSON(s *stack.State, index map[string][]string, cur string, drift m
 
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
-func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, graph commitGraph) {
+func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, graph commitGraph, wtInfo map[string]worktreeInfo) {
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
 		for _, child := range index[name] {
@@ -129,6 +178,13 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 			if subject, ok := topSubject(b, tips, subjects, graph); ok {
 				line += "  " + paint(subject, ansiDim)
 			}
+		}
+		if wt, ok := wtInfo[name]; ok {
+			tag := "(worktree: " + wt.path + ")"
+			if wt.dirty {
+				tag = "(worktree: " + wt.path + ", dirty)"
+			}
+			line += " " + paint(tag, ansiCyan)
 		}
 		out("%s\n", line)
 	}

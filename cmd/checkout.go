@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 
-	"stacked/internal/git"
 	"stacked/internal/stack"
 )
 
@@ -43,14 +42,29 @@ func runCheckout(args []string) error {
 		if name != s.Trunk && !s.IsTracked(name) {
 			return fmt.Errorf("%q is not a tracked branch", name)
 		}
-		if err := git.Checkout(name); err != nil {
-			return fmt.Errorf("checking out %q: %w", name, err)
+		dest, err := teleportCheckout(name)
+		if err != nil {
+			return err
 		}
+		// A teleport without the shim does NOT move the parent shell, so report it
+		// as not-switched and tell the user how to get there; with the shim (or an
+		// in-place checkout) the move really happened.
+		teleportedNoShim := dest != "" && !shimActive()
 		payload := struct {
 			Branch   string `json:"branch"`
 			Switched bool   `json:"switched"`
-		}{name, true}
-		return emit(asJSON, payload, func() { out("switched to %s\n", name) })
+			Worktree string `json:"worktree,omitempty"`
+		}{name, !teleportedNoShim, dest}
+		return emit(asJSON, payload, func() {
+			switch {
+			case teleportedNoShim:
+				out("%s\n", teleportHint(name, dest))
+			case dest != "":
+				out("switched to %s (worktree: %s)\n", name, dest)
+			default:
+				out("switched to %s\n", name)
+			}
+		})
 	}
 
 	return listBranches(s, asJSON)

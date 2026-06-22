@@ -42,16 +42,32 @@ func loadStateAndCurrent() (*stack.State, string, error) {
 	return s, cur, nil
 }
 
-// gitShell is the production git port used by the stack engine.
-var gitShell stack.Git = git.Shell{}
+// gitShell is the production git port used by the stack engine. It is the real
+// git.Shell with one override: Worktrees() routes through the per-process cache
+// (worktrees()) so the cross-worktree restack cascade, which resolves branch
+// ownership once per branch, spawns `git worktree list` at most once — the same
+// memoization the read/navigation commands get.
+var gitShell stack.Git = cachedShell{}
+
+// cachedShell is git.Shell with a cached Worktrees(); every other method is
+// inherited unchanged.
+type cachedShell struct{ git.Shell }
+
+func (cachedShell) Worktrees() ([]git.Worktree, error) { return worktrees() }
+
+// cachedQuietShell is git.QuietShell (quiet rebase output for JSON mode) with the
+// same cached Worktrees() override.
+type cachedQuietShell struct{ git.QuietShell }
+
+func (cachedQuietShell) Worktrees() ([]git.Worktree, error) { return worktrees() }
 
 // stackEnv builds the engine environment for s, persisting via s.Save. In JSON
 // mode the quiet git port is used so rebase output cannot corrupt the payload.
 func stackEnv(s *stack.State, asJSON bool) stack.Env {
 	g := gitShell
 	if asJSON {
-		if _, ok := g.(git.Shell); ok {
-			g = git.QuietShell{}
+		if _, ok := g.(cachedShell); ok {
+			g = cachedQuietShell{}
 		}
 	}
 	return stack.Env{Git: g, Save: s.Save}

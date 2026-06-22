@@ -158,6 +158,152 @@ func TipSubjects() (map[string]string, error) {
 	return subjects, nil
 }
 
+// Worktree describes a single git worktree linked to the repository, as
+// reported by `git worktree list --porcelain`. The main worktree is included.
+// Branch is the short branch name checked out there (empty when detached or
+// bare); Head is the checked-out commit SHA.
+type Worktree struct {
+	Path     string `json:"path"`
+	Branch   string `json:"branch,omitempty"`
+	Head     string `json:"head,omitempty"`
+	Bare     bool   `json:"bare,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
+	Locked   bool   `json:"locked,omitempty"`
+}
+
+// Worktrees lists every worktree linked to the repository (the main worktree
+// plus any added with `git worktree add`), in a single git invocation. Records
+// in --porcelain output are blank-line separated; each begins with a "worktree
+// <path>" line followed by attribute lines ("HEAD <sha>", "branch
+// refs/heads/<name>", "detached", "bare", "locked"). The refs/heads/ prefix is
+// stripped so Branch is the short name, matching Tips().
+func Worktrees() ([]Worktree, error) {
+	out, err := Run("worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	return parseWorktrees(out), nil
+}
+
+// parseWorktrees parses the raw `git worktree list --porcelain` output into the
+// Worktree slice. It is split out from the git invocation so the porcelain
+// grammar (including the bare and locked arms) can be exercised against canned
+// fixtures without spawning git.
+func parseWorktrees(out string) []Worktree {
+	if out == "" {
+		return nil
+	}
+	var (
+		list []Worktree
+		cur  *Worktree
+	)
+	flush := func() {
+		if cur != nil {
+			list = append(list, *cur)
+			cur = nil
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			flush()
+			continue
+		}
+		key, val, _ := strings.Cut(line, " ")
+		switch key {
+		case "worktree":
+			flush()
+			cur = &Worktree{Path: val}
+		case "HEAD":
+			if cur != nil {
+				cur.Head = val
+			}
+		case "branch":
+			if cur != nil {
+				cur.Branch = strings.TrimPrefix(val, "refs/heads/")
+			}
+		case "detached":
+			if cur != nil {
+				cur.Detached = true
+			}
+		case "bare":
+			if cur != nil {
+				cur.Bare = true
+			}
+		case "locked":
+			if cur != nil {
+				cur.Locked = true
+			}
+		}
+	}
+	flush()
+	return list
+}
+
+// WorktreeAdd creates a new linked worktree at path checked out on the existing
+// branch. The "--" separates options from the path/branch operands so a path
+// beginning with a dash can never be read as an option.
+func WorktreeAdd(path, branch string) error {
+	if err := validRefArg("branch", branch); err != nil {
+		return err
+	}
+	if path == "" {
+		return fmt.Errorf("worktree path is empty")
+	}
+	_, err := Run("worktree", "add", "--", path, branch)
+	return err
+}
+
+// WorktreeRemove removes the linked worktree at path. When force is true the
+// worktree is removed even if it has uncommitted changes.
+func WorktreeRemove(path string, force bool) error {
+	if path == "" {
+		return fmt.Errorf("worktree path is empty")
+	}
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, "--", path)
+	_, err := Run(args...)
+	return err
+}
+
+// RebaseOntoIn runs "git -C <dir> rebase --onto newBase oldBase branch" with no
+// inherited stdio, so a branch checked out in the worktree at dir is rebased by
+// its owner (git refuses to rebase a branch checked out in another worktree).
+func RebaseOntoIn(dir, newBase, oldBase, branch string) error {
+	if dir == "" {
+		return fmt.Errorf("worktree dir is empty")
+	}
+	if err := validRefArg("ref", newBase); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", oldBase); err != nil {
+		return err
+	}
+	if err := validRefArg("branch", branch); err != nil {
+		return err
+	}
+	_, err := run("-C", dir, "rebase", "--quiet", "--onto", newBase, oldBase, branch)
+	return err
+}
+
+// RebaseAbortIn aborts an in-progress rebase inside the worktree at dir.
+func RebaseAbortIn(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("worktree dir is empty")
+	}
+	_, err := run("-C", dir, "rebase", "--abort")
+	return err
+}
+
+// IsCleanIn reports whether the worktree at dir has no staged or unstaged
+// changes, via `git -C <dir> status --porcelain`. It is the port-level twin of
+// IsCleanAt.
+func IsCleanIn(dir string) (bool, error) {
+	return IsCleanAt(dir)
+}
+
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
 	if err := validRefArg("branch", name); err != nil {
@@ -240,6 +386,18 @@ func isSingleAbsolutePath(path string) bool {
 // i.e. "git status --porcelain" produces no output.
 func IsClean() (bool, error) {
 	out, err := Run("status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return out == "", nil
+}
+
+// IsCleanAt reports whether the working tree at dir has no staged or unstaged
+// changes, by running `git -C <dir> status --porcelain`. It exists so callers
+// can report the dirty state of a LINKED worktree (a different directory than
+// the process cwd) — the only place git -C is needed for the worktree feature.
+func IsCleanAt(dir string) (bool, error) {
+	out, err := Run("-C", dir, "status", "--porcelain")
 	if err != nil {
 		return false, err
 	}

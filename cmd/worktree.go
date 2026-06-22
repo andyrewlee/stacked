@@ -1,0 +1,168 @@
+package cmd
+
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+
+	"stacked/internal/git"
+	"stacked/internal/stack"
+)
+
+func init() {
+	register(&Command{
+		Name:    "worktree",
+		Aliases: []string{"wt"},
+		Summary: "Materialize, list, or remove a branch's own worktree",
+		Usage:   "st worktree <branch> | ls | rm <branch> [--json]",
+		Run:     runWorktree,
+	})
+}
+
+// runWorktree manages the worktrees that let a branch run on its own:
+//
+//	st worktree <branch>   materialize a worktree for an existing tracked branch
+//	st worktree ls         list every worktree
+//	st worktree rm <name>  remove a branch's worktree
+func runWorktree(args []string) error {
+	var asJSON bool
+	fs := newFlagSet("worktree", &asJSON)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>)")
+	}
+
+	switch rest[0] {
+	case "ls", "list":
+		if len(rest) != 1 {
+			return fmt.Errorf("worktree ls takes no arguments")
+		}
+		return worktreeList(asJSON)
+	case "rm", "remove":
+		if len(rest) != 2 {
+			return fmt.Errorf("worktree rm requires exactly one branch name")
+		}
+		return worktreeRemove(rest[1], asJSON)
+	default:
+		if len(rest) != 1 {
+			return fmt.Errorf("worktree takes exactly one branch name")
+		}
+		return worktreeAdd(rest[0], asJSON)
+	}
+}
+
+// repoIdentifier returns the sanitized repository name used as the <repo>
+// segment of a worktree path: the base name of the repository's top level.
+func repoIdentifier() (string, error) {
+	root, err := git.RepoRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Base(root), nil
+}
+
+// worktreeAdd materializes a worktree for an existing tracked branch at the
+// canonical ~/.stacked/worktrees/<repo>/<branch> path, then copies any
+// .worktreeinclude matches into it.
+func worktreeAdd(branch string, asJSON bool) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	if branch != s.Trunk && !s.IsTracked(branch) {
+		return fmt.Errorf("%q is not a tracked branch", branch)
+	}
+
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	if wt, ok := stack.OwnerOf(wts, branch); ok {
+		// Already materialized: report the existing path idempotently rather than
+		// failing, so the command is safe to re-run.
+		return emitWorktree(asJSON, branch, wt.Path, nil, "worktree already exists")
+	}
+
+	repo, err := repoIdentifier()
+	if err != nil {
+		return err
+	}
+	path, err := stack.WorktreePath(repo, branch)
+	if err != nil {
+		return err
+	}
+	if err := git.WorktreeAdd(path, branch); err != nil {
+		return fmt.Errorf("creating worktree for %q: %w", branch, err)
+	}
+
+	root, err := git.RepoRoot()
+	if err != nil {
+		return err
+	}
+	copied, err := copyWorktreeIncludes(root, path)
+	if err != nil {
+		return fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+	}
+
+	return emitWorktree(asJSON, branch, path, copied, "created worktree")
+}
+
+// worktreeRemove removes the worktree owning branch.
+func worktreeRemove(branch string, asJSON bool) error {
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	wt, ok := stack.OwnerOf(wts, branch)
+	if !ok {
+		return fmt.Errorf("%q has no worktree", branch)
+	}
+	if err := git.WorktreeRemove(wt.Path, false); err != nil {
+		return fmt.Errorf("removing worktree for %q: %w", branch, err)
+	}
+	payload := struct {
+		Branch  string `json:"branch"`
+		Removed string `json:"removed"`
+	}{branch, wt.Path}
+	return emit(asJSON, payload, func() { out("removed worktree %s (%s)\n", branch, wt.Path) })
+}
+
+// worktreeList renders every worktree linked to the repository.
+func worktreeList(asJSON bool) error {
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	sort.Slice(wts, func(i, j int) bool { return wts[i].Path < wts[j].Path })
+	return emit(asJSON, wts, func() {
+		for _, wt := range wts {
+			label := wt.Branch
+			switch {
+			case wt.Bare:
+				label = "(bare)"
+			case label == "":
+				label = "(detached)"
+			}
+			out("%s\t%s\n", label, wt.Path)
+		}
+	})
+}
+
+// emitWorktree renders the result of a create/already-exists worktree action.
+func emitWorktree(asJSON bool, branch, path string, copied []string, summary string) error {
+	payload := struct {
+		Branch  string   `json:"branch"`
+		Path    string   `json:"path"`
+		Copied  []string `json:"copied,omitempty"`
+		Summary string   `json:"summary"`
+	}{branch, path, copied, summary}
+	return emit(asJSON, payload, func() {
+		out("%s: %s -> %s\n", summary, branch, path)
+		if len(copied) > 0 {
+			out("copied: %s\n", joinNames(copied))
+		}
+	})
+}

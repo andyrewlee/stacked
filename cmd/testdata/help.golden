@@ -20,6 +20,7 @@ commands:
   rename (mv)        Rename a branch and update the stack metadata
   repair             Reconcile the stack metadata with the repository (fix drift)
   restack (r)        Rebase the current branch and everything above it onto their parents
+  shell              Print the shell integration that teleports into a branch's worktree
   squash             Squash all of the current branch's commits into one
   status (stat)      Show current branch, its parent/children, and restack state
   submit (ss)        Push every branch in the current stack to the remote (no PRs — login-free)
@@ -30,6 +31,7 @@ commands:
   untrack            Stop tracking a branch (re-parents its children)
   up (u)             Move up the stack to a child branch
   validate (doctor)  Check the stack state for drift or inconsistencies
+  worktree (wt)      Materialize, list, or remove a branch's own worktree
   help               show this help
   version            print the version
 

@@ -29,6 +29,7 @@ deliberately left unplanned, is below so nothing needs re-auditing.
 | 014 | Cover `missingRestoredRef` + corrupt state.json load | P3 | S | — | TODO |
 | 015 | Establish and document the minimum git version | P3 | S | — | TODO |
 | 016 | `--dry-run` for onto/fold/squash/delete (direction) | P3 | M | best after 009 | TODO |
+| 017 | Stacked diffs across git worktrees (parallel agents) | P2 | L | — | DONE (tiers 1-3 landed on branch stacked-worktrees-foundation) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

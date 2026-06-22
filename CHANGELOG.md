@@ -7,6 +7,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Owner-driven cross-worktree restack cascade.** `st restack` / `st sync` now
+  rebase a dependent branch that lives in another worktree *inside that worktree*
+  (git forbids rebasing a branch checked out elsewhere), gated on a clean tree: a
+  dirty dependent worktree is skipped with a clear note rather than clobbered, and
+  a conflict during the cross-worktree rebase is rolled back in that worktree
+  rather than left paused. Single-tree restack/sync behavior is unchanged.
+- **Worktree-aware lifecycle ops.** `st delete`, `st fold`, and `st sync`'s
+  prune-merged step now tear down a *clean* linked worktree that owns a branch they
+  remove (git refuses to delete a branch checked out elsewhere) before deleting the
+  branch. A *dirty* owning worktree is refused with a clear error — nothing is
+  deleted and no in-progress work is discarded; commit/stash or `st worktree rm`
+  first. Single-tree behavior is unchanged.
+- **`st worktree` (alias `wt`)** materializes, lists, and removes a branch's own
+  git worktree at `~/.stacked/worktrees/<repo>/<branch>`, copying `.worktreeinclude`
+  matches (gitignore syntax, gitignored-only, copy-on-write reflink) into it — so
+  multiple agents can work different branches of one stack in parallel.
+- **`st shell install [bash|zsh|fish]`** prints a shell shim so `st checkout`/`up`/
+  `down`/`top`/`bottom` can teleport (`cd`) into a branch's worktree; without the
+  shim the destination path is printed.
+- **Worktree-aware stack views (foundation).** `st log` and `st status` annotate,
+  in a multi-worktree repo, which linked worktree each branch lives in and whether
+  it is dirty; `log --json` gains `worktree`/`dirty` and `status --json` gains
+  `worktree` (all `omitempty`, so single-tree output is byte-for-byte unchanged).
+  Backed by a new `Worktrees()` git port method (parsing `git worktree list
+  --porcelain`) and pure worktree-path/ownership helpers in `internal/stack`.
 - `--dry-run` on `restack` and `sync` previews the branches that would be rebased
   or pruned (a `{"dryRun":true,...}` result) without changing anything.
 - `st guide` prints the recommended end-to-end workflow (text or `--json`).

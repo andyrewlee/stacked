@@ -47,6 +47,18 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	if parentTip == b.ParentSHA {
 		return false, nil
 	}
+
+	// Owner-driven cross-worktree restack: if name is checked out in ANOTHER
+	// worktree, git forbids rebasing it here, so the rebase must run in that
+	// worktree. This path activates only in a multi-worktree repo where name is
+	// owned elsewhere; single-tree behavior (and the model invariant test, whose
+	// fake reports a single worktree) is unchanged.
+	if owner, elsewhere, err := s.ownerElsewhere(env.Git, name); err != nil {
+		return false, err
+	} else if elsewhere {
+		return s.restackInWorktree(env, name, b, parentTip, owner)
+	}
+
 	start, startErr := env.Git.CurrentBranch()
 	if err := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); err != nil {
 		inProgress, progressErr := env.Git.RebaseInProgress()

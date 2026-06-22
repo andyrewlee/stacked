@@ -58,7 +58,10 @@ message.
   ```
   `branch`, `restacked`, `deleted`, `notes`, and `dryRun` are all `omitempty` —
   absent when empty or false. Preview-capable commands (`restack`, `sync`) add
-  `"dryRun": true` under `--dry-run`. `continue` resumes an interrupted restack,
+  `"dryRun": true` under `--dry-run`. In a multi-worktree repo, `restack`/`sync`
+  rebase a dependent branch that lives in another worktree *inside that worktree*;
+  a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
+  feat-a: its worktree is dirty (…)"`) rather than clobbered. `continue` resumes an interrupted restack,
   emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
   `notes` entry naming the branch whose conflict was just completed.
 - **`log --json`** — a recursive tree rooted at the trunk:
@@ -67,11 +70,17 @@ message.
     "children": [ { "name": "feat-a", "parent": "main", "parentSHA": "…",
                     "current": true, "needsRestack": false, "topCommit": "add a", "children": [] } ] }
   ```
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git.
+  In a multi-worktree repo each node may also carry `worktree` (the on-disk path
+  of the linked worktree the branch lives in) and `dirty` (true when that
+  worktree has uncommitted changes); both are `omitempty`, so single-tree output
+  is unchanged.
+- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the linked worktree the current branch lives in, `omitempty`).
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
-  name, `{ "trunk", "current", "branches": [] }`
+  name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
+  worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
-- **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point)
+- **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
+- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }`. `st shell install` emits a shell script, not JSON.
 - **`submit --json`** — one shape for every outcome:
   `{ "remote", "dryRun", "pushed": [], "repoURL", "summary", "failed" }`
   (`repoURL`, `summary`, and `failed` are `omitempty`; from trunk, `pushed` is
