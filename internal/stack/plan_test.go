@@ -38,6 +38,43 @@ func TestRestackPlanListsOutOfDateAndDescendants(t *testing.T) {
 	}
 }
 
+func TestRestackPlanUsesSingleTipsRead(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	mkBranch(t, env, s, f, "c", "d")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	counting := &countingSnapshotGit{Git: f}
+	env.Git = counting
+	if _, err := RestackPlan(env, s); err != nil {
+		t.Fatal(err)
+	}
+	if counting.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	}
+}
+
+func TestRestackPlanErrorsWhenParentTipIsMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	delete(f.branches, "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RestackPlan(env, s); err == nil {
+		t.Fatal("RestackPlan with a missing parent branch returned nil error")
+	}
+}
+
 func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 	f, s, env := newEnvState()
 	if err := f.CreateBranch("scratch"); err != nil {

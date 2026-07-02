@@ -187,7 +187,11 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if entry == nil {
 		return TrimUndo()
 	}
-	created := createdBranchesSince(g, entry)
+	tips, err := g.Tips()
+	if err != nil {
+		tips = nil
+	}
+	created := createdBranchesSince(tips, entry)
 	if len(created) > 0 {
 		if err := SetLastUndoCreatedBranches(created); err != nil {
 			return err
@@ -200,7 +204,7 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if !unchanged {
 		return TrimUndo()
 	}
-	if refsUnchanged(g, entry) {
+	if refsUnchanged(tips, entry) {
 		return DropUndo()
 	}
 	return TrimUndo()
@@ -213,12 +217,16 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 // that left a rebase in progress.
 func CleanupUndoOnError(g Git, s *State, opErr error) error {
 	entry, _, _ := PeekUndo()
-	dropped, err := dropNoopUndo(g, s, entry, opErr)
+	tips, tipsErr := g.Tips()
+	if tipsErr != nil {
+		tips = nil
+	}
+	dropped, err := dropNoopUndo(g, tips, s, entry, opErr)
 	if err != nil {
 		return err
 	}
 	if !dropped {
-		created := createdBranchesSince(g, entry)
+		created := createdBranchesSince(tips, entry)
 		if len(created) > 0 {
 			if err := SetLastUndoCreatedBranches(created); err != nil {
 				return err
@@ -232,7 +240,7 @@ func CleanupUndoOnError(g Git, s *State, opErr error) error {
 // same state, every recorded ref on its recorded tip, and no branch created.
 // A conflict with a rebase still in progress always keeps the entry — the
 // mutation is half-applied, exactly what undo protects.
-func dropNoopUndo(g Git, s *State, entry *UndoEntry, opErr error) (bool, error) {
+func dropNoopUndo(g Git, tips map[string]string, s *State, entry *UndoEntry, opErr error) (bool, error) {
 	if entry == nil {
 		return false, nil
 	}
@@ -247,10 +255,10 @@ func dropNoopUndo(g Git, s *State, entry *UndoEntry, opErr error) (bool, error) 
 	if err != nil || !unchanged {
 		return false, err
 	}
-	if !refsUnchanged(g, entry) {
+	if !refsUnchanged(tips, entry) {
 		return false, nil
 	}
-	if len(createdBranchesSince(g, entry)) > 0 {
+	if len(createdBranchesSince(tips, entry)) > 0 {
 		return false, nil
 	}
 	return true, DropUndo()
@@ -258,17 +266,13 @@ func dropNoopUndo(g Git, s *State, entry *UndoEntry, opErr error) (bool, error) 
 
 // createdBranchesSince returns the local branches that exist now but were not
 // in the entry's captured branch list, sorted.
-func createdBranchesSince(g Git, entry *UndoEntry) []string {
-	if entry == nil || entry.LocalBranches == nil {
+func createdBranchesSince(tips map[string]string, entry *UndoEntry) []string {
+	if tips == nil || entry == nil || entry.LocalBranches == nil {
 		return nil
 	}
 	existed := map[string]bool{}
 	for _, name := range entry.LocalBranches {
 		existed[name] = true
-	}
-	tips, err := g.Tips()
-	if err != nil {
-		return nil
 	}
 	var created []string
 	for name := range tips {
@@ -282,9 +286,8 @@ func createdBranchesSince(g Git, entry *UndoEntry) []string {
 
 // refsUnchanged reports whether every ref the entry recorded still resolves to
 // its recorded tip.
-func refsUnchanged(g Git, entry *UndoEntry) bool {
-	tips, err := g.Tips()
-	if err != nil {
+func refsUnchanged(tips map[string]string, entry *UndoEntry) bool {
+	if tips == nil {
 		return false
 	}
 	for name, want := range entry.Refs {

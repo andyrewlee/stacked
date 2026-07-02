@@ -158,6 +158,30 @@ func TestSnapshotUndoSpawns(t *testing.T) {
 	}
 }
 
+func TestFinalizeUndoSpawns(t *testing.T) {
+	initGitRepo(t)
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	entry, err := s.SnapshotUndo(f, "test-op")
+	if err != nil {
+		t.Fatalf("SnapshotUndo: %v", err)
+	}
+	if err := writeUndo([]UndoEntry{*entry}); err != nil {
+		t.Fatalf("writeUndo: %v", err)
+	}
+
+	counting := &countingSnapshotGit{Git: f}
+	if err := FinalizeUndo(counting, s, entry); err != nil {
+		t.Fatalf("FinalizeUndo: %v", err)
+	}
+	if counting.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	}
+}
+
 // tipsErrGit makes Tips fail while delegating everything else to the embedded
 // port, to exercise the undo snapshot's handling of an unreadable ref list.
 type tipsErrGit struct {
