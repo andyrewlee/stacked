@@ -719,10 +719,15 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 			}
 		}
 	}
-	full, err := planState.restackPlanAgainst(g, planState.Trunk, trunkRef)
+	trunkTip, err := g.RevParse(trunkRef)
 	if err != nil {
 		return nil, err
 	}
+	tips, err := g.Tips()
+	if err != nil {
+		return nil, err
+	}
+	full := planState.restackPlanFromTips(tips, trunkTip, planState.Trunk)
 	var plan []string
 	for _, name := range full {
 		if !deleted[name] {

@@ -116,15 +116,26 @@ func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 	return drift
 }
 
-// restackPlan returns, in order, the branches a restack starting at `start`
-// would rebase — without changing anything. A branch is rebased if it is out of
-// date, or its parent will be rebased (which moves the parent tip and forces the
-// child). When start is the trunk, the whole forest is considered.
-func (s *State) restackPlan(g Git, start string) ([]string, error) {
-	return s.restackPlanAgainst(g, start, branchTipRef(s.Trunk))
+func tipsWithTrunk(tips map[string]string, trunk, trunkTip string) map[string]string {
+	if trunkTip == "" {
+		return tips
+	}
+	cp := make(map[string]string, len(tips)+1)
+	for name, tip := range tips {
+		cp[name] = tip
+	}
+	cp[trunk] = trunkTip
+	return cp
 }
 
-func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, error) {
+// restackPlanFromTips returns, in order, the branches a restack starting at
+// `start` would rebase — without changing anything. trunkTip overrides the
+// trunk's map entry so sync can preview against a freshly fetched remote trunk.
+// A branch is rebased if it is out of date, or its parent will be rebased
+// (which moves the parent tip and forces the child). When start is the trunk,
+// the whole forest is considered.
+func (s *State) restackPlanFromTips(tips map[string]string, trunkTip, start string) []string {
+	drift := s.DriftAgainst(tipsWithTrunk(tips, s.Trunk, trunkTip))
 	var order []string
 	if start != s.Trunk {
 		order = append(order, start)
@@ -139,16 +150,12 @@ func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, err
 		if !ok {
 			continue
 		}
-		needs, err := s.needsRestackAgainst(g, name, trunkRef)
-		if err != nil {
-			return nil, err
-		}
-		if needs || inPlan[b.Parent] {
+		if drift[name] || inPlan[b.Parent] {
 			plan = append(plan, name)
 			inPlan[name] = true
 		}
 	}
-	return plan, nil
+	return plan
 }
 
 // RestackPlan previews the branches a restack from the current branch would
@@ -167,10 +174,11 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if start != s.Trunk && !s.IsTracked(start) {
 		return nil, fmt.Errorf("branch %q is not tracked", start)
 	}
-	plan, err := s.restackPlan(env.Git, start)
+	tips, err := env.Git.Tips()
 	if err != nil {
 		return nil, err
 	}
+	plan := s.restackPlanFromTips(tips, "", start)
 	summary := "nothing to restack"
 	if len(plan) > 0 {
 		summary = fmt.Sprintf("would restack %d branch(es)", len(plan))
