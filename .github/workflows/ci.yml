@@ -7,6 +7,13 @@ on:
 permissions:
   contents: read
 
+# A re-push supersedes the previous run of the same ref; don't keep burning
+# two runners on it. github.ref alone would collide all PRs on the merge ref,
+# so include the event name and PR number.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     name: ci (${{ matrix.os }})
@@ -21,12 +28,25 @@ jobs:
         with:
           fetch-depth: 0 # full history so `git describe` can produce a version
 
-      # The cache key must come from go.mod because stdlib-only means go.sum can never exist.
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-          cache-dependency-path: go.mod
+          cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
+
+      - name: Resolve Go build cache dir
+        id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+      # Keyed on the commit so every run saves; restored by prefix so the newest
+      # previous cache seeds the next run, including this repo's package builds.
+      - name: Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: gobuild-${{ runner.os }}-go1.26-${{ github.sha }}
+          restore-keys: |
+            gobuild-${{ runner.os }}-go1.26-
 
       # Dev tooling is installed as an external binary only; it is never added to
       # go.mod (the shipped tool stays standard-library only). golangci-lint v2
