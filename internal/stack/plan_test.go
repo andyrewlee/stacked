@@ -61,6 +61,20 @@ func TestRestackPlanUsesSingleTipsRead(t *testing.T) {
 	}
 }
 
+func TestRestackPlanErrorsWhenParentTipIsMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	delete(f.branches, "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RestackPlan(env, s); err == nil {
+		t.Fatal("RestackPlan with a missing parent branch returned nil error")
+	}
+}
+
 func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 	f, s, env := newEnvState()
 	if err := f.CreateBranch("scratch"); err != nil {

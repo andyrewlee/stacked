@@ -134,8 +134,9 @@ func tipsWithTrunk(tips map[string]string, trunk, trunkTip string) map[string]st
 // A branch is rebased if it is out of date, or its parent will be rebased
 // (which moves the parent tip and forces the child). When start is the trunk,
 // the whole forest is considered.
-func (s *State) restackPlanFromTips(tips map[string]string, trunkTip, start string) []string {
-	drift := s.DriftAgainst(tipsWithTrunk(tips, s.Trunk, trunkTip))
+func (s *State) restackPlanFromTips(tips map[string]string, trunkTip, start string) ([]string, error) {
+	tips = tipsWithTrunk(tips, s.Trunk, trunkTip)
+	drift := s.DriftAgainst(tips)
 	var order []string
 	if start != s.Trunk {
 		order = append(order, start)
@@ -150,12 +151,15 @@ func (s *State) restackPlanFromTips(tips map[string]string, trunkTip, start stri
 		if !ok {
 			continue
 		}
+		if _, ok := tips[b.Parent]; !ok {
+			return nil, fmt.Errorf("resolve parent %q: missing branch tip", b.Parent)
+		}
 		if drift[name] || inPlan[b.Parent] {
 			plan = append(plan, name)
 			inPlan[name] = true
 		}
 	}
-	return plan
+	return plan, nil
 }
 
 // RestackPlan previews the branches a restack from the current branch would
@@ -178,7 +182,10 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan := s.restackPlanFromTips(tips, "", start)
+	plan, err := s.restackPlanFromTips(tips, "", start)
+	if err != nil {
+		return nil, err
+	}
 	summary := "nothing to restack"
 	if len(plan) > 0 {
 		summary = fmt.Sprintf("would restack %d branch(es)", len(plan))
