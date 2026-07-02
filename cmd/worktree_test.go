@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseIncludePatterns(t *testing.T) {
-	in := "# a comment\n\nnode_modules\n  target  \n# trailing\n./build\n"
+	in := "# a comment\n\nnode_modules\n  target  \n# trailing\n./build\n../outside.txt\n/abs/path\nsub/../../escape\n"
 	got := parseIncludePatterns(in)
 	want := []string{"node_modules", "target", "build"}
 	if len(got) != len(want) {
@@ -151,6 +151,119 @@ func TestCopyWorktreeIncludes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "tracked.txt")); !os.IsNotExist(err) {
 		t.Errorf("tracked.txt should not be copied")
+	}
+}
+
+func TestCopyWorktreeIncludesSkipsEscapingPattern(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(root)
+	if err := os.WriteFile(filepath.Join(parent, "outside.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "outside.txt\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	write(t, ".worktreeinclude", "../outside.txt\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 0 {
+		t.Fatalf("copied = %v, want none", copied)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "..", "outside.txt")); !os.IsNotExist(err) {
+		t.Errorf("outside file should not be copied")
+	}
+}
+
+func TestCopyWorktreeIncludesSkipsSymlinkTraversal(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "escape\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".worktreeinclude", "escape/secret.txt\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 0 {
+		t.Fatalf("copied = %v, want none", copied)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "escape", "secret.txt")); !os.IsNotExist(err) {
+		t.Errorf("escape/secret.txt should not be copied through a symlinked dir")
+	}
+}
+
+func TestCopyWorktreeIncludesCopiesManifestSymlinkVerbatim(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "secret.link\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	if err := os.Symlink(outside, filepath.Join(root, "secret.link")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".worktreeinclude", "secret.link\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 1 || copied[0] != "secret.link" {
+		t.Fatalf("copied = %v, want only secret.link", copied)
+	}
+	info, err := os.Lstat(filepath.Join(dst, "secret.link"))
+	if err != nil {
+		t.Fatalf("secret.link not copied: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("secret.link mode = %v, want symlink", info.Mode())
+	}
+	target, err := os.Readlink(filepath.Join(dst, "secret.link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != outside {
+		t.Fatalf("secret.link target = %q, want %q", target, outside)
 	}
 }
 

@@ -818,6 +818,12 @@ func RemoteURL(remote string) (string, error) {
 // CommitSubjects returns the subject lines of the commits in the local branch
 // range base..branch, newest first.
 func CommitSubjects(base, branch string) ([]string, error) {
+	if err := validRefArg("ref", base); err != nil {
+		return nil, err
+	}
+	if err := validRefArg("branch", branch); err != nil {
+		return nil, err
+	}
 	out, err := Run("log", "--format=%s", localBranchRef(base)+".."+localBranchNameRef(branch))
 	if err != nil {
 		return nil, err
