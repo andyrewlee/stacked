@@ -334,14 +334,14 @@ func navEmit(asJSON bool, branch, summary string) error {
 //
 // A flag that takes a value in the "-flag value" form (i.e. not a boolean flag
 // and not written as "-flag=value") consumes the following token as its value,
-// so the two are kept together. A bare "--" terminates flag parsing: it and
+// so the two are kept together. A bare "--" terminates flag parsing:
 // everything after it is treated as positional, in order.
 func parseArgs(fs *flag.FlagSet, args []string) error {
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
-			positional = append(positional, args[i:]...)
+			positional = append(positional, args[i+1:]...)
 			break
 		}
 		if len(a) > 1 && a[0] == '-' && !looksNumeric(a) {
@@ -361,10 +361,9 @@ func parseArgs(fs *flag.FlagSet, args []string) error {
 	}
 	// A positional that looks like a flag (the negative count "-3" routed here by
 	// looksNumeric) must be shielded from fs.Parse, which would otherwise reject
-	// it as an unknown flag. A leading "--" terminates flag parsing; skip adding
-	// one when the caller already supplied it (the explicit-terminator case).
+	// it as an unknown flag.
 	combined := append([]string(nil), flags...)
-	if len(positional) > 0 && positional[0] != "--" {
+	if len(positional) > 0 {
 		combined = append(combined, "--")
 	}
 	combined = append(combined, positional...)
