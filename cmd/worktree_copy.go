@@ -34,6 +34,11 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		return nil, nil
 	}
 
+	realRoot, err := filepath.EvalSymlinks(srcRoot)
+	if err != nil {
+		return nil, err
+	}
+
 	var copied []string
 	for _, rel := range patterns {
 		src := filepath.Join(srcRoot, rel)
@@ -42,6 +47,13 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		}
 		if !isGitIgnored(srcRoot, rel) {
 			continue // tracked (or not ignored): git worktree add already has it
+		}
+		realParent, err := filepath.EvalSymlinks(filepath.Dir(src))
+		if err != nil {
+			continue // unresolvable: skip like an absent entry
+		}
+		if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
+			continue // resolves outside the repo, for example through a symlinked dir
 		}
 		dst := filepath.Join(dstRoot, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -66,7 +78,11 @@ func parseIncludePatterns(content string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		out = append(out, filepath.Clean(line))
+		clean := filepath.Clean(line)
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			continue
+		}
+		out = append(out, clean)
 	}
 	return out
 }

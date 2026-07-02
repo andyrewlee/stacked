@@ -361,6 +361,16 @@ func TestUpdateRefRejectsFlagLikeRef(t *testing.T) {
 	}
 }
 
+func TestCommitSubjectsRejectsFlagLikeRefs(t *testing.T) {
+	newRepo(t)
+	if _, err := CommitSubjects("-x", "main"); err == nil {
+		t.Fatal("CommitSubjects accepted a flag-like base ref")
+	}
+	if _, err := CommitSubjects("abc123", "-x"); err == nil {
+		t.Fatal("CommitSubjects accepted a flag-like branch")
+	}
+}
+
 func TestTipSubjects(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "feat")

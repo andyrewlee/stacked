@@ -32,7 +32,7 @@ items deliberately left unplanned, is below so nothing needs re-auditing.
 | 016 | `--dry-run` for onto/fold/squash/delete (direction) | P3 | M | best after 009 | TODO |
 | 017 | Stacked diffs across git worktrees (parallel agents) | P2 | L | — | DONE (merged to main, d5a37b3 + follow-ups #88–#92) |
 | 018 | Fix parseArgs: non-leading `--` terminator leaks into positionals | P1 | S | — | DONE |
-| 019 | Input hardening: CommitSubjects ref guard + .worktreeinclude containment | P1 | S | — | TODO |
+| 019 | Input hardening: CommitSubjects ref guard + .worktreeinclude containment | P1 | S | — | DONE |
 | 020 | Single Tips() read for dry-run previews and the undo epilogue | P2 | S | — (run before 021) | TODO |
 | 021 | Live tip map through the mutation restack loop | P2 | M | best after 020 (same file) | TODO |
 | 022 | CI/tooling tune-up (lint-pin check, concurrency-cancel, build cache, dist/) | P2 | S | — | TODO |
