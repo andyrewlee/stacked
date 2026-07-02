@@ -240,6 +240,65 @@ func TestInferParentDeterministic(t *testing.T) {
 	}
 }
 
+func TestRestackUpstackUsesSingleTipsReadWhenClean(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	mkBranch(t, env, s, f, "c", "d")
+
+	counting := &countingSnapshotGit{Git: f}
+	env.Git = counting
+	rebased, err := s.RestackUpstack(env, "main")
+	if err != nil {
+		t.Fatalf("RestackUpstack: %v", err)
+	}
+	if len(rebased) != 0 {
+		t.Fatalf("rebased = %v, want none", rebased)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	}
+	if counting.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	}
+}
+
+func TestRestackUpstackRefreshesMovedParentTips(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.amend("a2")
+
+	counting := &countingSnapshotGit{Git: f}
+	env.Git = counting
+	rebased, err := s.RestackUpstack(env, "a")
+	if err != nil {
+		t.Fatalf("RestackUpstack: %v", err)
+	}
+	if len(rebased) != 2 || rebased[0] != "b" || rebased[1] != "c" {
+		t.Fatalf("rebased = %v, want [b c]", rebased)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	}
+	if counting.revParseCalls != 2 {
+		t.Fatalf("RevParse calls = %d, want 2 refreshes", counting.revParseCalls)
+	}
+	b, _ := s.Get("b")
+	c, _ := s.Get("c")
+	if b.ParentSHA != f.branches["a"] {
+		t.Fatalf("b ParentSHA = %q, want a tip %q", b.ParentSHA, f.branches["a"])
+	}
+	if c.ParentSHA != f.branches["b"] {
+		t.Fatalf("c ParentSHA = %q, want refreshed b tip %q", c.ParentSHA, f.branches["b"])
+	}
+}
+
 func TestEngineDeleteDropsCommits(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
