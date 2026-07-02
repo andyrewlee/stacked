@@ -70,8 +70,14 @@ check-deps:
 check-lint-version:
 	@ok=1; \
 	for f in .github/workflows/ci.yml README.md CONTRIBUTING.md; do \
-		if ! grep -q "$(GOLANGCI_VERSION)" $$f; then \
-			echo "$$f does not pin golangci-lint $(GOLANGCI_VERSION) (drifted from Makefile)"; \
+		case $$f in \
+			.github/workflows/ci.yml) \
+				pins=$$(sed -nE 's/^[[:space:]]*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p' $$f);; \
+			*) \
+				pins=$$(sed -nE 's/.*golangci-lint@((v[0-9]+\.[0-9]+\.[0-9]+)).*/\1/p' $$f);; \
+		esac; \
+		if [ "$$pins" != "$(GOLANGCI_VERSION)" ]; then \
+			echo "$$f pins golangci-lint '$${pins:-<none>}' (want $(GOLANGCI_VERSION) from Makefile)"; \
 			ok=0; \
 		fi; \
 	done; \
