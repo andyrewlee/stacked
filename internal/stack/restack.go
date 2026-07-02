@@ -63,6 +63,10 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
+	return s.restackBranchWith(env, name, b, parentTip)
+}
+
+func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip string) (bool, error) {
 	if parentTip == b.ParentSHA {
 		return false, nil
 	}
@@ -104,9 +108,9 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 // branch-name → tip map (one Tips() read), with no further git access. A
 // parent missing from the map means its git branch is missing; drift is
 // reported false for that branch (the missing branch itself is a problem the
-// consumers report separately). Mutation paths keep reading live tips per
-// step — correctness during restacks depends on it — this is for the
-// read-only consumers (log, validate).
+// consumers report separately). Mutation paths maintain a live tip map:
+// RestackUpstack seeds it from one Tips() read and refreshes each branch it
+// actually rebases, so children observe parent tips moved earlier in the loop.
 func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 	drift := make(map[string]bool, len(s.Branches))
 	for name, b := range s.Branches {
@@ -197,13 +201,33 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 // (parents before children). The branch name itself is not restacked. It
 // returns the names of the branches that were actually rebased.
 func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
+	tips, err := env.Git.Tips()
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
 	var rebased []string
 	for _, child := range s.Descendants(name) {
-		did, err := s.RestackBranch(env, child)
+		b, err := s.tracked(child)
+		if err != nil {
+			return rebased, err
+		}
+		parentTip, ok := tips[b.Parent]
+		if !ok {
+			parentTip, err = env.Git.RevParse(branchTipRef(b.Parent))
+			if err != nil {
+				return rebased, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
+			}
+		}
+		did, err := s.restackBranchWith(env, child, b, parentTip)
 		if err != nil {
 			return rebased, err
 		}
 		if did {
+			newTip, err := env.Git.RevParse(branchTipRef(child))
+			if err != nil {
+				return rebased, fmt.Errorf("resolve %q after restack: %w", child, err)
+			}
+			tips[child] = newTip
 			rebased = append(rebased, child)
 		}
 	}

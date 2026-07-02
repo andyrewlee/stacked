@@ -34,7 +34,7 @@ items deliberately left unplanned, is below so nothing needs re-auditing.
 | 018 | Fix parseArgs: non-leading `--` terminator leaks into positionals | P1 | S | — | DONE |
 | 019 | Input hardening: CommitSubjects ref guard + .worktreeinclude containment | P1 | S | — | DONE |
 | 020 | Single Tips() read for dry-run previews and the undo epilogue | P2 | S | — (run before 021) | DONE |
-| 021 | Live tip map through the mutation restack loop | P2 | M | best after 020 (same file) | TODO |
+| 021 | Live tip map through the mutation restack loop | P2 | M | best after 020 (same file) | DONE |
 | 022 | CI/tooling tune-up (lint-pin check, concurrency-cancel, build cache, dist/) | P2 | S | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
