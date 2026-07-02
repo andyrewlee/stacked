@@ -13,14 +13,14 @@ GOLANGCI_VERSION := v2.12.2
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
 # Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
 # wrong golangci-lint never hides a compile/vet failure; lint still precedes the
 # slow `cover` step. `cover` runs the whole suite once (race + combined
 # in-process/e2e coverage), so ci does not run the tests three times.
-ci: check-deps fmt-check vet vet-cross build lint cover
+ci: check-deps check-lint-version fmt-check vet vet-cross build lint cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -65,6 +65,19 @@ check-deps:
 	fi
 	@echo "deps: standard library only"
 
+# The lint version is pinned in four hand-synced places. Enforce agreement so
+# local make ci, CI, and contributor docs cannot silently drift apart.
+check-lint-version:
+	@ok=1; \
+	for f in .github/workflows/ci.yml README.md CONTRIBUTING.md; do \
+		if ! grep -q "$(GOLANGCI_VERSION)" $$f; then \
+			echo "$$f does not pin golangci-lint $(GOLANGCI_VERSION) (drifted from Makefile)"; \
+			ok=0; \
+		fi; \
+	done; \
+	[ $$ok -eq 1 ] || exit 1; \
+	echo "lint pin: $(GOLANGCI_VERSION) consistent across Makefile, ci.yml, README, CONTRIBUTING"
+
 # Regenerate golden test fixtures after an intended, reviewed output change.
 golden:
 	go test ./cmd -run Golden -update
@@ -108,6 +121,7 @@ hooks:
 
 clean:
 	rm -f $(BINARY) cover.out
+	rm -rf dist
 
 # Cut a release from the current git tag with GoReleaser (needs GITHUB_TOKEN).
 release:
