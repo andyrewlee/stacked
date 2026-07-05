@@ -19,6 +19,9 @@ have zero `require` entries (`go mod tidy` stays a no-op).
 The lint step needs **golangci-lint v2** on your `PATH` (an external binary, never
 a module dependency); `make lint` preflights for it and prints the install line:
 `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
+Development also requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git
+2.31+** is recommended for native common-dir path resolution, while older
+supported Git versions use a fallback.
 
 ## Architecture in one breath
 

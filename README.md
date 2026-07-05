@@ -67,9 +67,11 @@ cannot corrupt your stack metadata.
 
 ## Install / build
 
-Requires **Go 1.26+** and a working `git` on your `PATH`. The full gate
-(`make ci`) additionally needs **golangci-lint v2** — an external binary, never a
-module dependency: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
+Requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git 2.31+** is
+recommended for native common-dir path resolution, while older supported Git
+versions use a fallback. The full gate (`make ci`) additionally needs
+**golangci-lint v2** — an external binary, never a module dependency:
+`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
 
 ```sh
 # install onto your PATH
