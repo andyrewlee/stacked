@@ -156,6 +156,48 @@ func TestWorktreeCommand(t *testing.T) {
 	}
 }
 
+func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "main")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "main")
+
+	mainOut := r.stOK("worktree", "feat-b", "--json").stdout
+	var mainCreated struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(mainOut), &mainCreated); err != nil {
+		t.Fatalf("decode main worktree create: %v\n%s", err, mainOut)
+	}
+	mainParts := generatedWorktreePathParts(t, r.home, mainCreated.Path)
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "-q", linked, "feat-a")
+	cmd := exec.Command(stBin, "worktree", "feat-c", "--json")
+	cmd.Dir = linked
+	cmd.Env = cleanEnv(r.home)
+	linkedOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st worktree from linked worktree: %v\n%s", err, linkedOut)
+	}
+	var linkedCreated struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(linkedOut, &linkedCreated); err != nil {
+		t.Fatalf("decode linked worktree create: %v\n%s", err, linkedOut)
+	}
+	linkedParts := generatedWorktreePathParts(t, r.home, linkedCreated.Path)
+	if linkedParts[0] != mainParts[0] {
+		t.Fatalf("linked worktree repo segment = %q, want main repo segment %q", linkedParts[0], mainParts[0])
+	}
+}
+
 func TestWorktreeIncludeCopyFailureRollsBackWorktree(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
@@ -200,10 +242,30 @@ func TestWorktreeIncludeCopyFailureRollsBackWorktree(t *testing.T) {
 	if strings.Contains(list, "branch refs/heads/feat-a") {
 		t.Fatalf("failed worktree still registered:\n%s", list)
 	}
-	createdPath := filepath.Join(r.home, ".stacked", "worktrees", filepath.Base(r.dir), "feat-a")
-	if _, err := os.Stat(createdPath); !os.IsNotExist(err) {
-		t.Fatalf("failed worktree path still exists: %v", err)
+	matches, err := filepath.Glob(filepath.Join(r.home, ".stacked", "worktrees", "*", "feat-a"))
+	if err != nil {
+		t.Fatalf("glob failed worktree path: %v", err)
 	}
+	if len(matches) != 0 {
+		t.Fatalf("failed worktree paths still exist: %v", matches)
+	}
+}
+
+func generatedWorktreePathParts(t *testing.T, home, path string) []string {
+	t.Helper()
+	root := filepath.Join(home, ".stacked", "worktrees")
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		t.Fatalf("Rel: %v", err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		t.Fatalf("path %q is not under worktrees root %q", path, root)
+	}
+	parts := strings.Split(rel, string(os.PathSeparator))
+	if len(parts) != 2 {
+		t.Fatalf("expected generated path to have two segments below root, got %q (%v)", rel, parts)
+	}
+	return parts
 }
 
 // TestShellInstallEmitsShim asserts `st shell install` prints a cd shim that
