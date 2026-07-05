@@ -765,7 +765,7 @@ func GitCommonDir() (string, error) {
 	if err == nil && isSingleAbsolutePath(dir) {
 		return dir, nil
 	}
-	// Fall back for git versions without --path-format: resolve a possibly
+	// Fall back for git < 2.31 (no --path-format): resolve a possibly
 	// relative --git-common-dir from the current working directory.
 	dir, err = Run("rev-parse", "--git-common-dir")
 	if err != nil {
