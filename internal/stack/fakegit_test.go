@@ -125,6 +125,45 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+func (f *fakeGit) TipsFor(names []string) (map[string]string, error) {
+	tips := map[string]string{}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if tip, ok := f.branches[name]; ok {
+			tips[name] = tip
+		}
+	}
+	return tips, nil
+}
+
+type tipReadSpyGit struct {
+	Git
+	revParseCalls int
+	tipsCalls     int
+	tipsForCalls  int
+	tipsForNames  [][]string
+}
+
+func (g *tipReadSpyGit) RevParse(ref string) (string, error) {
+	g.revParseCalls++
+	return g.Git.RevParse(ref)
+}
+
+func (g *tipReadSpyGit) Tips() (map[string]string, error) {
+	g.tipsCalls++
+	return g.Git.Tips()
+}
+
+func (g *tipReadSpyGit) TipsFor(names []string) (map[string]string, error) {
+	g.tipsForCalls++
+	g.tipsForNames = append(g.tipsForNames, append([]string(nil), names...))
+	return g.Git.TipsFor(names)
+}
+
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 	target := f.resolve(ref)
 	if target == "" {

@@ -710,6 +710,17 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
+	tips, err := g.TipsFor(stateTipNames(s))
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	if trunkRef != s.Trunk && trunkRef != branchTipRef(s.Trunk) {
+		trunkTip, err := g.RevParse(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("resolve trunk ref %q: %w", trunkRef, err)
+		}
+		tips[s.Trunk] = trunkTip
+	}
 	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
@@ -729,15 +740,6 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 			}
 		}
 	}
-	trunkTip, err := g.RevParse(trunkRef)
-	if err != nil {
-		return nil, err
-	}
-	tips, err := g.Tips()
-	if err != nil {
-		return nil, err
-	}
-	tips[s.Trunk] = trunkTip
 	preview, err := restackPlanAgainstWithWorktrees(env, planState, planState.Trunk, tips)
 	if err != nil {
 		return nil, err
@@ -980,7 +982,7 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list ancestors of %q: %w", s.Trunk, err)
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return "", fmt.Errorf("read branch tips: %w", err)
 	}

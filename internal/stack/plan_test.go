@@ -43,26 +43,37 @@ func TestRestackPlanListsOutOfDateAndDescendants(t *testing.T) {
 	}
 }
 
-func TestRestackPlanUsesSingleTipsRead(t *testing.T) {
+func TestRestackPlanUsesScopedTipsForStateBranches(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-	mkBranch(t, env, s, f, "c", "d")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.Checkout("a"); err != nil {
 		t.Fatal(err)
 	}
 
-	counting := &countingSnapshotGit{Git: f}
-	env.Git = counting
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
 	if _, err := RestackPlan(env, s); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RestackPlan: %v", err)
 	}
-	if counting.revParseCalls != 0 {
-		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	if spy.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", spy.revParseCalls)
 	}
-	if counting.tipsCalls != 1 {
-		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	if spy.tipsCalls != 0 {
+		t.Fatalf("Tips calls = %d, want 0", spy.tipsCalls)
+	}
+	if spy.tipsForCalls != 1 {
+		t.Fatalf("TipsFor calls = %d, want 1", spy.tipsForCalls)
+	}
+	wantNames := []string{"main", "a", "b"}
+	if got := spy.tipsForNames[0]; !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("TipsFor names = %v, want %v", got, wantNames)
 	}
 }
 
@@ -88,6 +99,44 @@ func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 
 	if _, err := RestackPlan(env, s); err == nil {
 		t.Fatal("RestackPlan on untracked branch should error")
+	}
+}
+
+func TestTrackBranchInferParentUsesScopedTipsForStateBranches(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("manual")
+
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+	if _, err := TrackBranch(env, s, ""); err != nil {
+		t.Fatalf("TrackBranch: %v", err)
+	}
+	if spy.tipsCalls != 0 {
+		t.Fatalf("Tips calls = %d, want 0", spy.tipsCalls)
+	}
+	if spy.tipsForCalls != 1 {
+		t.Fatalf("TipsFor calls = %d, want 1", spy.tipsForCalls)
+	}
+	wantNames := []string{"main", "a", "b"}
+	if got := spy.tipsForNames[0]; !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("TipsFor names = %v, want %v", got, wantNames)
+	}
+	if b, ok := s.Get("manual"); !ok || b.Parent != "a" {
+		t.Fatalf("tracked manual = %+v, want parent a", b)
 	}
 }
 

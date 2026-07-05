@@ -31,7 +31,7 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -79,7 +79,7 @@ func SquashPlan(env Env, s *State, message string) (*OpResult, error) {
 	if len(subjects) <= 1 {
 		return &OpResult{Summary: fmt.Sprintf("%s already has a single commit; nothing to squash", cur), Branch: cur, DryRun: true}, nil
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -125,7 +125,7 @@ func OntoPlan(env Env, s *State, target string) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -176,7 +176,7 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if _, err := g.CurrentBranch(); err != nil {
 		return nil, err
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}

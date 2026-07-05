@@ -29,6 +29,18 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 	return parentTip != b.ParentSHA, nil
 }
 
+func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bool, error) {
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
+	}
+	parentTip, ok := tips[b.Parent]
+	if !ok {
+		return false, fmt.Errorf("resolve parent %q: branch tip not found", b.Parent)
+	}
+	return parentTip != b.ParentSHA, nil
+}
+
 // rebaseFailure classifies a failed RebaseOnto. paused is true when the rebase
 // stopped mid-way and left a rebase in progress — a conflict the caller turns
 // into a ConflictError (and may record bookkeeping such as a PendingReparent
@@ -129,16 +141,16 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
+	tips, err := env.Git.TipsFor(stateTipNames(s))
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
 	start, err := env.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
 	}
 	if start != s.Trunk && !s.IsTracked(start) {
 		return nil, fmt.Errorf("branch %q is not tracked", start)
-	}
-	tips, err := env.Git.Tips()
-	if err != nil {
-		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
 	preview, err := restackPlanAgainstWithWorktrees(env, s, start, tips)
 	if err != nil {

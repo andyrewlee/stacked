@@ -78,9 +78,9 @@ func (s *State) Inconsistencies(tips map[string]string) []Problem {
 // engine operation over the Git port it is visible to the invariant model.
 func Repair(env Env, s *State) (*OpResult, error) {
 	g := env.Git
-	// One for-each-ref read answers every branch-exists and tip question for the
-	// whole forest, instead of a show-ref/rev-parse spawn per branch.
-	tips, err := g.Tips()
+	// One scoped tip read answers every branch-exists and tip question for the
+	// tracked forest, instead of a show-ref/rev-parse spawn per branch.
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, err
 	}
