@@ -16,7 +16,7 @@ func TestParseIncludePatterns(t *testing.T) {
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("pattern[%d] = %q, want %q", i, got[i], want[i])
+			t.Errorf("entry[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 }
@@ -184,6 +184,29 @@ func TestCopyWorktreeIncludesSkipsEscapingPattern(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "..", "outside.txt")); !os.IsNotExist(err) {
 		t.Errorf("outside file should not be copied")
+	}
+}
+
+func TestCopyWorktreeIncludesTreatsWildcardsAsLiteralPaths(t *testing.T) {
+	newRepo(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "*.env\n")
+	write(t, "secret.env", "TOKEN=1\n")
+	write(t, ".worktreeinclude", "*.env\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 0 {
+		t.Fatalf("copied = %v, want none for wildcard-looking literal entry", copied)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "secret.env")); !os.IsNotExist(err) {
+		t.Errorf("secret.env should not be copied from wildcard-looking entry")
 	}
 }
 
