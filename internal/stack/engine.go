@@ -707,12 +707,12 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
+		mergedIntoTrunk, err := g.MergedInto(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
+		}
 		for _, name := range sortedBranchNames(planState) {
-			merged, err := g.IsAncestor(name, trunkRef)
-			if err != nil {
-				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunkRef, err)
-			}
-			if merged {
+			if mergedIntoTrunk[name] {
 				planState.RemoveBranch(name)
 				deleted[name] = true
 				deletedList = append(deletedList, name)

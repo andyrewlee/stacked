@@ -125,6 +125,23 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
+	target := f.resolve(ref)
+	if target == "" {
+		return nil, fmt.Errorf("unknown revision %q", ref)
+	}
+	merged := map[string]bool{}
+	for name, tip := range f.branches {
+		for cur := target; cur != ""; cur = f.commits[cur].parent {
+			if cur == tip {
+				merged[name] = true
+				break
+			}
+		}
+	}
+	return merged, nil
+}
+
 // addWorktree registers a fake linked worktree for branch at path, a test seam
 // for exercising multi-worktree code paths without spawning git.
 func (f *fakeGit) addWorktree(path, branch string) { f.linkedWorktrees[branch] = path }

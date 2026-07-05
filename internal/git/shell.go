@@ -16,19 +16,22 @@ func (Shell) RevParse(ref string) (string, error)          { return RevParse(ref
 func (Shell) RebaseOnto(newBase, oldBase, br string) error { return RebaseOnto(newBase, oldBase, br) }
 func (Shell) BranchExists(name string) bool                { return BranchExists(name) }
 func (Shell) Tips() (map[string]string, error)             { return Tips() }
-func (Shell) Checkout(name string) error                   { return Checkout(name) }
-func (Shell) CheckoutDetach(ref string) error              { return CheckoutDetach(ref) }
-func (Shell) CreateBranch(name string) error               { return CreateBranch(name) }
-func (Shell) DeleteBranch(name string, force bool) error   { return DeleteBranch(name, force) }
-func (Shell) ForceBranch(name, ref string) error           { return ForceBranch(name, ref) }
-func (Shell) UpdateRef(ref, sha string) error              { return UpdateRef(ref, sha) }
-func (Shell) ResetSoft(ref string) error                   { return ResetSoft(ref) }
-func (Shell) Commit(message string, all bool) error        { return Commit(message, all) }
-func (Shell) AmendNoEdit(all bool) error                   { return AmendNoEdit(all) }
-func (Shell) AmendMessage(message string, all bool) error  { return AmendMessage(message, all) }
-func (Shell) Add(paths ...string) error                    { return Add(paths...) }
-func (Shell) RenameBranch(oldName, newName string) error   { return RenameBranch(oldName, newName) }
-func (Shell) MergeBase(a, b string) (string, error)        { return MergeBase(a, b) }
+func (Shell) MergedInto(ref string) (map[string]bool, error) {
+	return MergedInto(ref)
+}
+func (Shell) Checkout(name string) error                  { return Checkout(name) }
+func (Shell) CheckoutDetach(ref string) error             { return CheckoutDetach(ref) }
+func (Shell) CreateBranch(name string) error              { return CreateBranch(name) }
+func (Shell) DeleteBranch(name string, force bool) error  { return DeleteBranch(name, force) }
+func (Shell) ForceBranch(name, ref string) error          { return ForceBranch(name, ref) }
+func (Shell) UpdateRef(ref, sha string) error             { return UpdateRef(ref, sha) }
+func (Shell) ResetSoft(ref string) error                  { return ResetSoft(ref) }
+func (Shell) Commit(message string, all bool) error       { return Commit(message, all) }
+func (Shell) AmendNoEdit(all bool) error                  { return AmendNoEdit(all) }
+func (Shell) AmendMessage(message string, all bool) error { return AmendMessage(message, all) }
+func (Shell) Add(paths ...string) error                   { return Add(paths...) }
+func (Shell) RenameBranch(oldName, newName string) error  { return RenameBranch(oldName, newName) }
+func (Shell) MergeBase(a, b string) (string, error)       { return MergeBase(a, b) }
 func (Shell) IsAncestor(ancestor, descendant string) (bool, error) {
 	return IsAncestor(ancestor, descendant)
 }
