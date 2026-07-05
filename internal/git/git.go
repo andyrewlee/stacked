@@ -678,6 +678,34 @@ func PushRemote(remote, branch string, force bool) error {
 	return err
 }
 
+// PushBranches pushes the given branches to remote in a single git invocation
+// and records upstreams (-u) for each branch.
+func PushBranches(remote string, branches []string, force bool) error {
+	if err := validRefArg("remote", remote); err != nil {
+		return err
+	}
+	for _, branch := range branches {
+		if err := validRefArg("branch", branch); err != nil {
+			return err
+		}
+	}
+	if len(branches) == 0 {
+		return nil
+	}
+
+	args := []string{"push", "-u"}
+	if force {
+		args = append(args, "--force-with-lease")
+	}
+	args = append(args, remote)
+	for _, branch := range branches {
+		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+		args = append(args, refspec)
+	}
+	_, err := Run(args...)
+	return err
+}
+
 // RemoteExists reports whether a remote with the given name is configured.
 func RemoteExists(name string) bool {
 	return ok("remote", "get-url", name)

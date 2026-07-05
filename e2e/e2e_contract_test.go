@@ -329,9 +329,11 @@ func TestSubmitRealPushSetsUpstream(t *testing.T) {
 		}
 	}
 	// Upstream tracking was set by push -u.
-	up := r.git("rev-parse", "--abbrev-ref", "feat-b@{upstream}")
-	if up != "origin/feat-b" {
-		t.Fatalf("feat-b upstream = %q, want origin/feat-b", up)
+	for _, b := range []string{"feat-a", "feat-b"} {
+		up := r.git("rev-parse", "--abbrev-ref", b+"@{upstream}")
+		if want := "origin/" + b; up != want {
+			t.Fatalf("%s upstream = %q, want %s", b, up, want)
+		}
 	}
 }
 
