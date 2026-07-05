@@ -159,14 +159,8 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedWorktreeReleaseTarget(env, name); err != nil {
-		return nil, err
-	}
 	parent := b.Parent
 
-	if _, err := g.CurrentBranch(); err != nil {
-		return nil, err
-	}
 	if !force {
 		mergedIntoParent, err := g.IsAncestor(name, parent)
 		if err != nil {
@@ -175,6 +169,12 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 		if !mergedIntoParent {
 			return nil, fmt.Errorf("branch %q is not merged into its stack parent %q (use --force to delete anyway)", name, parent)
 		}
+	}
+	if _, err := s.ownedWorktreeReleaseTarget(env, name); err != nil {
+		return nil, err
+	}
+	if _, err := g.CurrentBranch(); err != nil {
+		return nil, err
 	}
 	tips, err := g.Tips()
 	if err != nil {
