@@ -29,6 +29,15 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 	return parentTip != b.ParentSHA, nil
 }
 
+func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bool, error) {
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
+	}
+	parentTip, ok := tips[b.Parent]
+	return ok && parentTip != b.ParentSHA, nil
+}
+
 // rebaseFailure classifies a failed RebaseOnto. paused is true when the rebase
 // stopped mid-way and left a rebase in progress — a conflict the caller turns
 // into a ConflictError (and may record bookkeeping such as a PendingReparent
@@ -120,11 +129,11 @@ func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 // would rebase — without changing anything. A branch is rebased if it is out of
 // date, or its parent will be rebased (which moves the parent tip and forces the
 // child). When start is the trunk, the whole forest is considered.
-func (s *State) restackPlan(g Git, start string) ([]string, error) {
-	return s.restackPlanAgainst(g, start, branchTipRef(s.Trunk))
+func (s *State) restackPlan(start string, tips map[string]string) ([]string, error) {
+	return s.restackPlanAgainst(start, tips)
 }
 
-func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, error) {
+func (s *State) restackPlanAgainst(start string, tips map[string]string) ([]string, error) {
 	var order []string
 	if start != s.Trunk {
 		order = append(order, start)
@@ -139,7 +148,7 @@ func (s *State) restackPlanAgainst(g Git, start, trunkRef string) ([]string, err
 		if !ok {
 			continue
 		}
-		needs, err := s.needsRestackAgainst(g, name, trunkRef)
+		needs, err := s.needsRestackAgainstTips(name, tips)
 		if err != nil {
 			return nil, err
 		}
@@ -160,6 +169,10 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
+	tips, err := env.Git.Tips()
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
 	start, err := env.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
@@ -167,7 +180,7 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if start != s.Trunk && !s.IsTracked(start) {
 		return nil, fmt.Errorf("branch %q is not tracked", start)
 	}
-	plan, err := s.restackPlan(env.Git, start)
+	plan, err := s.restackPlan(start, tips)
 	if err != nil {
 		return nil, err
 	}

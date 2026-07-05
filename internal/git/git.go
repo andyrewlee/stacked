@@ -149,6 +149,30 @@ func Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+// MergedInto returns the local branch names whose tips are ancestors of ref in
+// one git invocation, matching `merge-base --is-ancestor <branch> <ref>` for
+// every local branch.
+func MergedInto(ref string) (map[string]bool, error) {
+	if err := validRefArg("ref", ref); err != nil {
+		return nil, err
+	}
+	out, err := Run("for-each-ref", "--format=%(refname)", "--merged", localBranchRef(ref), "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	merged := map[string]bool{}
+	if out == "" {
+		return merged, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		merged[strings.TrimPrefix(line, "refs/heads/")] = true
+	}
+	return merged, nil
+}
+
 // TipSubjects returns the subject line of every local branch's tip commit,
 // keyed by branch name, in a single git invocation — so a caller rendering a
 // whole forest (log) does one spawn instead of one `git log` per branch. A NUL

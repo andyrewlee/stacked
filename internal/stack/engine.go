@@ -703,23 +703,34 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
+	tips, err := g.Tips()
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	if trunkRef != s.Trunk && trunkRef != branchTipRef(s.Trunk) {
+		trunkTip, err := g.RevParse(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("resolve trunk ref %q: %w", trunkRef, err)
+		}
+		tips[s.Trunk] = trunkTip
+	}
 	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
+		mergedIntoTrunk, err := g.MergedInto(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
+		}
 		for _, name := range sortedBranchNames(planState) {
-			merged, err := g.IsAncestor(name, trunkRef)
-			if err != nil {
-				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunkRef, err)
-			}
-			if merged {
+			if mergedIntoTrunk[name] {
 				planState.RemoveBranch(name)
 				deleted[name] = true
 				deletedList = append(deletedList, name)
 			}
 		}
 	}
-	full, err := planState.restackPlanAgainst(g, planState.Trunk, trunkRef)
+	full, err := planState.restackPlanAgainst(planState.Trunk, tips)
 	if err != nil {
 		return nil, err
 	}
@@ -875,16 +886,16 @@ func RestackAll(env Env, s *State) ([]string, error) {
 func PruneMerged(env Env, s *State) ([]string, error) {
 	g := env.Git
 	trunk := s.Trunk
+	mergedIntoTrunk, err := g.MergedInto(branchTipRef(trunk))
+	if err != nil {
+		return nil, fmt.Errorf("list branches merged into %q: %w", trunk, err)
+	}
 	var deleted []string
 	for _, name := range sortedBranchNames(s) {
 		if _, ok := s.Get(name); !ok {
 			continue
 		}
-		merged, err := g.IsAncestor(name, trunk)
-		if err != nil {
-			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunk, err)
-		}
-		if !merged {
+		if !mergedIntoTrunk[name] {
 			continue
 		}
 		// A merged branch living in another worktree can't be deleted by git until

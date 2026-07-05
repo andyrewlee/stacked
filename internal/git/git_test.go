@@ -719,6 +719,34 @@ func TestTips(t *testing.T) {
 	}
 }
 
+func TestMergedInto(t *testing.T) {
+	newRepo(t)
+	base := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "checkout", "-q", "-b", "merged")
+	writeFile(t, "merged.txt", "merged\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "merged")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "merge", "-q", "--ff-only", "merged")
+	mustGit(t, "checkout", "-q", "-b", "unmerged", base)
+	writeFile(t, "unmerged.txt", "unmerged\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unmerged")
+	mustGit(t, "tag", "merged", base) // decoy tag with a branch's name
+	mustGit(t, "checkout", "-q", "main")
+
+	merged, err := MergedInto("main")
+	if err != nil {
+		t.Fatalf("MergedInto: %v", err)
+	}
+	if len(merged) != 2 || !merged["main"] || !merged["merged"] {
+		t.Fatalf("MergedInto(main) = %v, want exactly main and merged", merged)
+	}
+	if merged["unmerged"] {
+		t.Fatalf("MergedInto(main) included unmerged branch: %v", merged)
+	}
+}
+
 func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
 	newRepo(t)
 	bare := t.TempDir()

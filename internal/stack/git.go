@@ -11,6 +11,9 @@ type Git interface {
 	RebaseOnto(newBase, oldBase, branch string) error
 	BranchExists(name string) bool
 	Tips() (map[string]string, error)
+	// MergedInto returns the local branches whose tips are ancestors of ref,
+	// equivalent to checking IsAncestor(branch, ref) for every local branch.
+	MergedInto(ref string) (map[string]bool, error)
 	Checkout(name string) error
 	CheckoutDetach(ref string) error
 	CreateBranch(name string) error

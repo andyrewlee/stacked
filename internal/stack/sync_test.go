@@ -267,6 +267,26 @@ func TestSyncPlanAgainstRemoteTrunkRestacks(t *testing.T) {
 	}
 }
 
+func TestSyncPlanAgainstMergedAndRestackPreview(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-merged")
+	mergedTip, _ := f.RevParse("feat-merged")
+	mkBranch(t, env, s, f, "main", "feat-restack")
+	remoteTip := f.newID()
+	f.commits[remoteTip] = &fakeCommit{id: remoteTip, parent: mergedTip, subject: "remote main"}
+
+	res, err := SyncPlanAgainst(env, s, false, remoteTip)
+	if err != nil {
+		t.Fatalf("SyncPlanAgainst: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-merged" {
+		t.Fatalf("Deleted = %v, want [feat-merged]", res.Deleted)
+	}
+	if len(res.Restacked) != 1 || res.Restacked[0] != "feat-restack" {
+		t.Fatalf("Restacked = %v, want [feat-restack]", res.Restacked)
+	}
+}
+
 func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
