@@ -158,6 +158,89 @@ func TestSnapshotUndoSpawns(t *testing.T) {
 	}
 }
 
+func setupCountingUndoCloseout(t *testing.T) (*fakeGit, *State, *countingSnapshotGit) {
+	t.Helper()
+	initGitRepo(t)
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	counting := &countingSnapshotGit{Git: f}
+	if err := s.RecordUndo(counting, "op"); err != nil {
+		t.Fatalf("RecordUndo: %v", err)
+	}
+	counting.revParseCalls = 0
+	counting.tipsCalls = 0
+	return f, s, counting
+}
+
+func TestFinalizeUndoCloseoutTipsOnce(t *testing.T) {
+	_, s, counting := setupCountingUndoCloseout(t)
+	entry, ok, err := PeekUndo()
+	if err != nil {
+		t.Fatalf("PeekUndo: %v", err)
+	}
+	if !ok {
+		t.Fatal("PeekUndo returned no undo entry")
+	}
+	if err := FinalizeUndo(counting, s, entry); err != nil {
+		t.Fatalf("FinalizeUndo: %v", err)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls during FinalizeUndo = %d, want 1", counting.tipsCalls)
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		t.Fatalf("loadUndo: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("journal = %d entries after successful no-op, want 0", len(entries))
+	}
+}
+
+func TestCleanupUndoOnErrorCloseoutTipsOnce(t *testing.T) {
+	_, s, counting := setupCountingUndoCloseout(t)
+	boom := errors.New("op failed")
+	if err := CleanupUndoOnError(counting, s, boom); err != nil {
+		t.Fatalf("CleanupUndoOnError: %v", err)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls during CleanupUndoOnError = %d, want 1", counting.tipsCalls)
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		t.Fatalf("loadUndo: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("journal = %d entries after failed no-op, want 0", len(entries))
+	}
+}
+
+func TestCleanupUndoOnErrorChangedStateCreatedBranchTipsOnce(t *testing.T) {
+	f, s, counting := setupCountingUndoCloseout(t)
+	mustCheckout(t, f, "a")
+	if err := f.CreateBranch("fresh"); err != nil {
+		t.Fatal(err)
+	}
+	s.Track("fresh", "a", s.Branches["a"].ParentSHA)
+
+	boom := errors.New("op failed")
+	if err := CleanupUndoOnError(counting, s, boom); err != nil {
+		t.Fatalf("CleanupUndoOnError: %v", err)
+	}
+	if counting.tipsCalls != 1 {
+		t.Fatalf("Tips calls during CleanupUndoOnError = %d, want 1", counting.tipsCalls)
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		t.Fatalf("loadUndo: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("journal = %d entries after changed failure, want 1", len(entries))
+	}
+	if len(entries[0].CreatedBranches) != 1 || entries[0].CreatedBranches[0] != "fresh" {
+		t.Fatalf("createdBranches = %v, want [fresh]", entries[0].CreatedBranches)
+	}
+}
+
 // tipsErrGit makes Tips fail while delegating everything else to the embedded
 // port, to exercise the undo snapshot's handling of an unreadable ref list.
 type tipsErrGit struct {
