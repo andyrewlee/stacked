@@ -130,6 +130,30 @@ func TestLoadNotInitialized(t *testing.T) {
 	}
 }
 
+func TestStackedDirPerWorkingDirectory(t *testing.T) {
+	repoA := initGitRepo(t)
+	pathA, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath repo A: %v", err)
+	}
+
+	repoB := initGitRepo(t)
+	pathB, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath repo B: %v", err)
+	}
+
+	if pathA == pathB {
+		t.Fatalf("state paths should differ across working directories: %s", pathA)
+	}
+	if want := filepath.Join(repoA, ".git", "stacked", "state.json"); pathA != want {
+		t.Errorf("statePath repo A = %q, want %q", pathA, want)
+	}
+	if want := filepath.Join(repoB, ".git", "stacked", "state.json"); pathB != want {
+		t.Errorf("statePath repo B = %q, want %q", pathB, want)
+	}
+}
+
 func TestAtomicWriteFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "data.txt")
