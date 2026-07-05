@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1358,4 +1359,142 @@ func TestRestackDryRun(t *testing.T) {
 
 	res = r.stOK("restack", "--dry-run", "--json")
 	wantStdoutContains(t, res, `"dryRun": true`)
+}
+
+func TestFoldDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "feat-a")
+	r.create("feat-d", "d.txt", "d\n", "d")
+	r.stOK("checkout", "feat-b")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b", "feat-c", "feat-d")
+	got := decodeDryRunResult(t, r.stOK("fold", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", []string{"feat-d"}, []string{"feat-b"})
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("fold dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+	if !r.branchExists("feat-b") {
+		t.Fatal("fold dry-run deleted feat-b")
+	}
+}
+
+func TestSquashDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.writeFile("a2.txt", "a2\n")
+	r.stOK("modify", "--commit", "-m", "a2")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b")
+	got := decodeDryRunResult(t, r.stOK("squash", "-m", "squashed", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", []string{"feat-b"}, nil)
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("squash dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
+func TestOntoDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "feat-b")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-b", "feat-c")
+	got := decodeDryRunResult(t, r.stOK("onto", "main", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-b", []string{"feat-c"}, nil)
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("onto dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
+func TestDeleteDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-b", "feat-c")
+	got := decodeDryRunResult(t, r.stOK("delete", "feat-b", "--force", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "", []string{"feat-c"}, []string{"feat-b"})
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("delete dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+	if !r.branchExists("feat-b") {
+		t.Fatal("delete dry-run deleted feat-b")
+	}
+}
+
+type dryRunResult struct {
+	Branch    string   `json:"branch"`
+	Restacked []string `json:"restacked"`
+	Deleted   []string `json:"deleted"`
+	DryRun    bool     `json:"dryRun"`
+}
+
+func decodeDryRunResult(t *testing.T, res result) dryRunResult {
+	t.Helper()
+	var got dryRunResult
+	if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+		t.Fatalf("dry-run JSON invalid: %v\n%s", err, res.stdout)
+	}
+	return got
+}
+
+func assertDryRunResult(t *testing.T, got dryRunResult, branch string, restacked, deleted []string) {
+	t.Helper()
+	if !got.DryRun {
+		t.Fatalf("dryRun = false in %+v", got)
+	}
+	if got.Branch != branch {
+		t.Fatalf("branch = %q, want %q in %+v", got.Branch, branch, got)
+	}
+	if !reflect.DeepEqual(got.Restacked, restacked) {
+		t.Fatalf("restacked = %v, want %v in %+v", got.Restacked, restacked, got)
+	}
+	if !reflect.DeepEqual(got.Deleted, deleted) {
+		t.Fatalf("deleted = %v, want %v in %+v", got.Deleted, deleted, got)
+	}
+}
+
+func captureTips(t *testing.T, r *repo, names ...string) map[string]string {
+	t.Helper()
+	tips := make(map[string]string, len(names))
+	for _, name := range names {
+		tips[name] = r.git("rev-parse", name)
+	}
+	return tips
+}
+
+func assertTips(t *testing.T, r *repo, want map[string]string) {
+	t.Helper()
+	for name, tip := range want {
+		if got := r.git("rev-parse", name); got != tip {
+			t.Fatalf("%s tip changed: before=%s after=%s", name, tip, got)
+		}
+	}
 }

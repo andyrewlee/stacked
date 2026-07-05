@@ -65,16 +65,31 @@ func modifyFlagSet() *flag.FlagSet { return newModifyFlags(&modifyOpts{}) }
 type deleteOpts struct {
 	asJSON bool
 	force  bool
+	dryRun bool
 }
 
 func newDeleteFlags(o *deleteOpts) *flag.FlagSet {
 	fs := newFlagSet("delete", &o.asJSON)
 	fs.BoolVar(&o.force, "f", false, "force delete the branch even if not fully merged")
 	fs.BoolVar(&o.force, "force", false, "force delete the branch even if not fully merged")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be deleted/restacked without changing anything")
 	return withDefaults(fs, "delete")
 }
 
 func deleteFlagSet() *flag.FlagSet { return newDeleteFlags(&deleteOpts{}) }
+
+type foldOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newFoldFlags(o *foldOpts) *flag.FlagSet {
+	fs := newFlagSet("fold", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be folded/restacked without changing anything")
+	return fs
+}
+
+func foldFlagSet() *flag.FlagSet { return newFoldFlags(&foldOpts{}) }
 
 type initOpts struct {
 	asJSON bool
@@ -147,15 +162,30 @@ func newRestackFlags(o *restackOpts) *flag.FlagSet {
 
 func restackFlagSet() *flag.FlagSet { return newRestackFlags(&restackOpts{}) }
 
+type ontoOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newOntoFlags(o *ontoOpts) *flag.FlagSet {
+	fs := newFlagSet("onto", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be moved/restacked without changing anything")
+	return fs
+}
+
+func ontoFlagSet() *flag.FlagSet { return newOntoFlags(&ontoOpts{}) }
+
 type squashOpts struct {
 	asJSON  bool
 	message string
+	dryRun  bool
 }
 
 func newSquashFlags(o *squashOpts) *flag.FlagSet {
 	fs := newFlagSet("squash", &o.asJSON)
 	fs.StringVar(&o.message, "m", "", "commit message for the squashed commit")
 	fs.StringVar(&o.message, "message", "", "commit message for the squashed commit")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be squashed/restacked without changing anything")
 	return fs
 }
 

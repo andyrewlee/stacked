@@ -11,7 +11,7 @@ func init() {
 		Name:       "delete",
 		Aliases:    []string{"rm"},
 		Summary:    "Delete a branch and re-parent its children",
-		Usage:      "st delete <name> [-f|--force] [--json]",
+		Usage:      "st delete <name> [-f|--force] [--dry-run] [--json]",
 		Run:        runDelete,
 		NewFlagSet: deleteFlagSet,
 	})
@@ -23,7 +23,7 @@ func runDelete(args []string) error {
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
-	asJSON, force := o.asJSON, o.force
+	asJSON, force, dryRun := o.asJSON, o.force, o.dryRun
 	rest := fs.Args()
 	if len(rest) != 1 {
 		usageUnlessJSON(fs, args)
@@ -31,6 +31,17 @@ func runDelete(args []string) error {
 	}
 	name := rest[0]
 
+	if dryRun {
+		s, err := loadState()
+		if err != nil {
+			return err
+		}
+		res, err := stack.DeletePlan(stackEnv(s, asJSON), s, name, force)
+		if err != nil {
+			return err
+		}
+		return renderResult(res, asJSON)
+	}
 	return mutate("delete", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Delete(env, s, name, force)
 	})

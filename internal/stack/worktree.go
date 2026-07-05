@@ -218,24 +218,35 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 // work in another worktree is never silently discarded; the user is told to
 // commit/stash or `st worktree rm` first.
 func (s *State) releaseOwnedWorktree(env Env, branch string) error {
-	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+	path, err := s.ownedWorktreeReleaseTarget(env, branch)
 	if err != nil {
 		return err
 	}
-	if !elsewhere {
+	if path == "" {
 		return nil
+	}
+	if err := env.Git.WorktreeRemove(path, false); err != nil {
+		return fmt.Errorf("removing worktree %q for %q: %w", path, branch, err)
+	}
+	return nil
+}
+
+func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, error) {
+	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+	if err != nil {
+		return "", err
+	}
+	if !elsewhere {
+		return "", nil
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
-		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+		return "", fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
 	}
 	if !clean {
-		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
+		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}
-	if err := env.Git.WorktreeRemove(owner.Path, false); err != nil {
-		return fmt.Errorf("removing worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	return nil
+	return owner.Path, nil
 }
 
 // IsMultiWorktree reports whether the repository has more than one worktree.
