@@ -203,8 +203,9 @@ func TestExecuteBuiltInUnknownFlags(t *testing.T) {
 	}
 }
 
-// Every command except completion accepts --json and must say so in its registry
-// usage string, so `st help <cmd>` documents the flag (CLI-6, DOC-2/3).
+// Every command except completion and shell accepts --json and must say so in
+// its registry usage string, so `st help <cmd>` documents the flag (CLI-6,
+// DOC-2/3).
 func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 	for _, c := range registry {
 		if c.Name == "completion" || c.Name == "shell" {
@@ -219,14 +220,79 @@ func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 	}
 }
 
+func TestJSONExceptionTextMatchesCommandFlags(t *testing.T) {
+	exceptions := jsonExceptionCommands(t)
+	plainExceptions := strings.Join(exceptions, " and ")
+	quotedExceptions := "`" + strings.Join(exceptions, "` and `") + "`"
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "docs/AGENT.md",
+			path: "../docs/AGENT.md",
+			want: "except " + quotedExceptions + " accepts `--json`",
+		},
+		{
+			name: "README.md",
+			path: "../README.md",
+			want: "except " + quotedExceptions + " (plus `help`/`version`) accepts `--json`",
+		},
+	} {
+		text, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.name, err)
+		}
+		if !strings.Contains(string(text), tc.want) {
+			t.Errorf("%s does not document JSON exceptions %q", tc.name, tc.want)
+		}
+	}
+
+	var guideText string
+	var err error
+	guideText = captureStdout(t, func() { err = runGuide(nil) })
+	if err != nil {
+		t.Fatalf("runGuide: %v", err)
+	}
+	wantGuide := "except " + plainExceptions + " accepts --json"
+	if !strings.Contains(guideText, wantGuide) {
+		t.Errorf("st guide does not document JSON exceptions %q", wantGuide)
+	}
+}
+
+func jsonExceptionCommands(t *testing.T) []string {
+	t.Helper()
+
+	var exceptions []string
+	for _, c := range registry {
+		hasJSON := false
+		for _, f := range commandFlags(c) {
+			if f.Name == "json" {
+				hasJSON = true
+				break
+			}
+		}
+		if !hasJSON {
+			exceptions = append(exceptions, c.Name)
+		}
+	}
+	if len(exceptions) == 0 {
+		t.Fatal("no registered commands lack --json")
+	}
+	return exceptions
+}
+
 // TestEveryCommandDefinesJSONFlag is the runtime counterpart to
 // TestEveryCommandDocumentsJSONInUsage: advertising --json in the usage string
 // is worthless if the FlagSet never defines the flag (copy the usage line, forget
 // the fs.BoolVar, and the command fails at runtime with "unknown flag" while all
-// tests stay green). Every command except completion must *parse* --json. Flag
-// parsing runs before any lock/load/git work, so this needs no initialized repo;
-// it tolerates the legitimate downstream failures (not initialized, missing
-// positional args, not a git repo) and only fails on a genuinely undefined flag.
+// tests stay green). Every command except completion and shell must *parse*
+// --json. Flag parsing runs before any lock/load/git work, so this needs no
+// initialized repo; it tolerates the legitimate downstream failures (not
+// initialized, missing positional args, not a git repo) and only fails on a
+// genuinely undefined flag.
 func TestEveryCommandDefinesJSONFlag(t *testing.T) {
 	t.Chdir(t.TempDir()) // hermetic: an empty, non-stacked dir; commands fail past the parse, harmlessly
 	resetWorktreeCache()
