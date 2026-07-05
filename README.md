@@ -129,11 +129,11 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st restack [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
 | `st abort` | | Abort an in-progress restack/rebase. |
-| `st fold` | | Fold the current branch into its parent (parent absorbs its commits). |
-| `st squash [-m|--message <msg>]` | | Squash all of the current branch's commits into one. |
-| `st onto <target>` | `move` | Move the current branch (and its upstack) onto a new parent. |
+| `st fold [--dry-run]` | | Fold the current branch into its parent (parent absorbs its commits; `--dry-run` previews). |
+| `st squash [-m|--message <msg>] [--dry-run]` | | Squash all of the current branch's commits into one (`--dry-run` previews). |
+| `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
 | `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
-| `st delete <name> [-f|--force]` | `rm` | Delete a branch and re-parent its children. |
+| `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
 | `st sync [--no-delete] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--dry-run` previews). |
 | `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL (no PRs). |
 | `st undo` | | Undo the last stack-mutating command. |
@@ -238,9 +238,10 @@ the branch's new base, and restacks the rest of the stack — picking up exactly
 where it left off. If it hits another conflict, resolve and run `st continue`
 again.
 
-#### `st delete <name> [-f|--force]` (`rm`)
+#### `st delete <name> [-f|--force] [--dry-run]` (`rm`)
 Deletes a tracked branch, re-parents its children onto the deleted branch's parent,
-and restacks them. `-f` force-deletes an unmerged branch.
+and restacks them. `-f` force-deletes an unmerged branch. `--dry-run` previews the
+deleted/restacked branches without changing anything.
 
 #### `st sync [--no-delete] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
@@ -262,20 +263,23 @@ Aborts an in-progress restack (`git rebase --abort`). Branches that already
 restacked keep their new positions; the conflicted branch is rolled back and still
 needs a restack.
 
-#### `st fold`
+#### `st fold [--dry-run]`
 Folds the current branch into its parent: the parent advances to include the
 branch's commits, the branch is deleted, and its children are re-parented onto the
-parent. The branch must be in sync first (`st restack` if needed).
+parent. The branch must be in sync first (`st restack` if needed). `--dry-run`
+previews the fold and any descendant restacks without changing anything.
 
-#### `st squash [-m <msg>]`
+#### `st squash [-m <msg>] [--dry-run]`
 Collapses every commit on the current branch (since its parent) into one, then
 restacks its descendants. With no `-m`, the message is composed from the existing
-commit subjects.
+commit subjects. `--dry-run` previews the squash and descendant restacks without
+changing anything.
 
-#### `st onto <target>` (`move`)
+#### `st onto <target> [--dry-run]` (`move`)
 Re-parents the current branch onto `target` (the trunk or a tracked branch) and
 rebases it and its descendants there. `target` may not be the branch itself or one
-of its descendants. On conflict, resolve and run `st continue`.
+of its descendants. On conflict, resolve and run `st continue`. `--dry-run`
+previews the move and descendant restacks without changing anything.
 
 #### `st rename [old] <new>` (`mv`)
 Renames a branch (the current one by default) with `git branch -m` and updates the
