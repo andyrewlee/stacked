@@ -187,8 +187,9 @@ it the path is printed.
 #### `st worktree <branch> | ls | rm <branch>` (`wt`)
 Make a branch a "place you can be" on its own — useful for running multiple agents
 on different branches of one stack in parallel. `st worktree <branch>` materializes
-a git worktree for an existing tracked branch at `~/.stacked/worktrees/<repo>/<branch>`
-(outside the repo, so runners/linters never walk into it) and copies any
+a git worktree for an existing tracked branch under `~/.stacked/worktrees/` using
+a collision-resistant repo key and encoded branch segment (outside the repo, so
+runners/linters never walk into it) and copies any
 `.worktreeinclude` matches into it (gitignore syntax; only gitignored matches are
 copied, via copy-on-write reflink when available). `st worktree ls` lists every
 worktree; `st worktree rm <branch>` removes a branch's worktree. The stack metadata
