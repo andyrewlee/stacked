@@ -34,11 +34,30 @@ func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bo
 	if err != nil {
 		return false, err
 	}
+	if err := requireBranchTip(tips, name); err != nil {
+		return false, err
+	}
 	parentTip, ok := tips[b.Parent]
 	if !ok {
 		return false, fmt.Errorf("resolve parent %q: branch tip not found", b.Parent)
 	}
 	return parentTip != b.ParentSHA, nil
+}
+
+func requireStateTips(s *State, tips map[string]string) error {
+	for _, name := range stateTipNames(s) {
+		if err := requireBranchTip(tips, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireBranchTip(tips map[string]string, name string) error {
+	if _, ok := tips[name]; !ok {
+		return fmt.Errorf("resolve branch %q: branch tip not found", name)
+	}
+	return nil
 }
 
 // rebaseFailure classifies a failed RebaseOnto. paused is true when the rebase

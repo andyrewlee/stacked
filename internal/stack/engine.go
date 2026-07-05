@@ -714,6 +714,9 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
+	if err := requireStateTips(s, tips); err != nil {
+		return nil, err
+	}
 	if trunkRef != s.Trunk && trunkRef != branchTipRef(s.Trunk) {
 		trunkTip, err := g.RevParse(trunkRef)
 		if err != nil {

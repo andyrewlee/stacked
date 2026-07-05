@@ -180,6 +180,9 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
+	if err := requireBranchTip(tips, name); err != nil {
+		return nil, err
+	}
 	planState := cloneState(s)
 	formerChildren := planState.RemoveBranch(name)
 	preview, err := appendRestackPlans(env, planState, tips, formerChildren...)

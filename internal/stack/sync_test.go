@@ -288,6 +288,20 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 	}
 }
 
+func TestSyncPlanErrorsWhenTrackedBranchTipIsMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	delete(f.branches, "feat-a")
+
+	before := cloneState(s)
+	if _, err := SyncPlan(env, s, false); err == nil {
+		t.Fatal("SyncPlan with a missing tracked branch returned nil error")
+	}
+	if after := cloneState(s); !reflect.DeepEqual(after, before) {
+		t.Fatalf("SyncPlan mutated state: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestSyncPlanAgainstRemoteTrunkRestacks(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")

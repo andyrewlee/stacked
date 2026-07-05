@@ -336,6 +336,19 @@ func TestDeletePlanNonForceUnmergedPrecedesDirtyWorktreeCheck(t *testing.T) {
 	}
 }
 
+func TestDeletePlanForceErrorsWhenBranchTipIsMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.branches, "a")
+
+	if _, err := DeletePlan(env, s, "a", true); err == nil {
+		t.Fatal("DeletePlan --force with a missing branch returned nil error")
+	}
+}
+
 func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()
