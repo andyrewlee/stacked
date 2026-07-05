@@ -198,6 +198,32 @@ func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
 	}
 }
 
+func TestLogJSONOmitsUnrelatedLocalBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "tracked subject")
+
+	unrelatedName := "unrelated-log-branch"
+	unrelatedSubject := "unrelated log subject 025"
+	mustRun(t, "git", "checkout", "-q", "-b", unrelatedName, "main")
+	write(t, "unrelated.txt", "unrelated\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", unrelatedSubject)
+	mustCheckout(t, "feat-a")
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	if strings.Contains(jsonOut, unrelatedName) {
+		t.Fatalf("log --json included unrelated branch name %q:\n%s", unrelatedName, jsonOut)
+	}
+	if strings.Contains(jsonOut, unrelatedSubject) {
+		t.Fatalf("log --json included unrelated branch subject %q:\n%s", unrelatedSubject, jsonOut)
+	}
+}
+
 // --- status ----------------------------------------------------------------
 
 type statusPayload struct {
