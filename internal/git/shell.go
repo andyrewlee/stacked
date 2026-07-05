@@ -16,6 +16,10 @@ func (Shell) RevParse(ref string) (string, error)          { return RevParse(ref
 func (Shell) RebaseOnto(newBase, oldBase, br string) error { return RebaseOnto(newBase, oldBase, br) }
 func (Shell) BranchExists(name string) bool                { return BranchExists(name) }
 func (Shell) Tips() (map[string]string, error)             { return Tips() }
+func (Shell) TipsFor(names []string) (map[string]string, error) {
+	return TipsFor(names)
+}
+
 func (Shell) MergedInto(ref string) (map[string]bool, error) {
 	return MergedInto(ref)
 }

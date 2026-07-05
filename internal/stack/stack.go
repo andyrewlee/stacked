@@ -74,6 +74,19 @@ func (s *State) IsTracked(name string) bool {
 	return ok
 }
 
+func stateTipNames(s *State) []string {
+	names := make([]string, 0, len(s.Branches)+1)
+	names = append(names, s.Trunk)
+	tracked := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		if name != s.Trunk {
+			tracked = append(tracked, name)
+		}
+	}
+	sort.Strings(tracked)
+	return append(names, tracked...)
+}
+
 // Track upserts a branch into the state with the given parent branch name and
 // parent commit SHA.
 func (s *State) Track(name, parent, parentSHA string) {

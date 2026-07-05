@@ -134,7 +134,7 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
-	tips, err := env.Git.Tips()
+	tips, err := env.Git.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}

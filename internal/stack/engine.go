@@ -710,7 +710,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -982,7 +982,7 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list ancestors of %q: %w", s.Trunk, err)
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return "", fmt.Errorf("read branch tips: %w", err)
 	}
