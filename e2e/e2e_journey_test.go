@@ -97,7 +97,7 @@ func TestWorktreeAnnotationsInLog(t *testing.T) {
 }
 
 // TestWorktreeCommand materializes a worktree for a tracked branch via
-// `st worktree`, confirms it is listed and copies .worktreeinclude matches, and
+// `st worktree`, confirms it is listed and copies .worktreeinclude entries, and
 // then removes it.
 func TestWorktreeCommand(t *testing.T) {
 	t.Parallel()

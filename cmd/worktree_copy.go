@@ -10,17 +10,17 @@ import (
 )
 
 // worktreeIncludeFile is the manifest, in the repo root, listing paths to copy
-// into a freshly-created worktree. It uses .gitignore syntax and is adopted
-// verbatim from Claude Code's mechanism: only entries that BOTH match a pattern
-// AND are gitignored are copied, so tracked files (already materialized by `git
-// worktree add`) are never duplicated.
+// into a freshly-created worktree. Each non-comment line is treated as a literal
+// repo-root-relative path, and only listed paths that are gitignored are copied,
+// so tracked files (already materialized by `git worktree add`) are never
+// duplicated.
 const worktreeIncludeFile = ".worktreeinclude"
 
-// copyWorktreeIncludes copies, from srcRoot into dstRoot, every path listed in
-// srcRoot/.worktreeinclude that is also gitignored. It returns the relative
-// paths copied. Missing manifest => nothing to do (nil, nil). The copy prefers a
-// copy-on-write reflink (instant for big dirs like node_modules) and falls back
-// to a plain recursive copy.
+// copyWorktreeIncludes copies, from srcRoot into dstRoot, every literal path
+// listed in srcRoot/.worktreeinclude that is also gitignored. It returns the
+// relative paths copied. Missing manifest => nothing to do (nil, nil). The copy
+// prefers a copy-on-write reflink (instant for big dirs like node_modules) and
+// falls back to a plain recursive copy.
 func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	manifest := filepath.Join(srcRoot, worktreeIncludeFile)
 	data, err := os.ReadFile(manifest)
@@ -30,17 +30,17 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		}
 		return nil, err
 	}
-	patterns := parseIncludePatterns(string(data))
-	if len(patterns) == 0 {
+	entries := parseIncludePatterns(string(data))
+	if len(entries) == 0 {
 		return nil, nil
 	}
-	patterns, err = validateWorktreeIncludePaths(patterns)
+	entries, err = validateWorktreeIncludePaths(entries)
 	if err != nil {
 		return nil, err
 	}
 
 	var copied []string
-	for _, rel := range patterns {
+	for _, rel := range entries {
 		src := filepath.Join(srcRoot, rel)
 		if _, err := os.Lstat(src); err != nil {
 			continue // listed but absent: skip rather than fail the whole create
@@ -63,9 +63,9 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	return copied, nil
 }
 
-func validateWorktreeIncludePaths(patterns []string) ([]string, error) {
-	out := make([]string, 0, len(patterns))
-	for _, rel := range patterns {
+func validateWorktreeIncludePaths(entries []string) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, rel := range entries {
 		cleaned, err := validateWorktreeIncludePath(rel)
 		if err != nil {
 			return nil, err

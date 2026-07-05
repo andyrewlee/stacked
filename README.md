@@ -191,11 +191,13 @@ Make a branch a "place you can be" on its own — useful for running multiple ag
 on different branches of one stack in parallel. `st worktree <branch>` materializes
 a git worktree for an existing tracked branch under `~/.stacked/worktrees/` using
 a collision-resistant repo key and encoded branch segment (outside the repo, so
-runners/linters never walk into it) and copies any
-`.worktreeinclude` matches into it (gitignore syntax; only gitignored matches are
-copied, via copy-on-write reflink when available). `st worktree ls` lists every
-worktree; `st worktree rm <branch>` removes a branch's worktree. The stack metadata
-is shared across all worktrees, so every `st` command sees the same stack.
+runners/linters never walk into it). If `.worktreeinclude` exists, entries are
+copied into the worktree via copy-on-write reflink when available. The file is a
+newline-separated list of repo-root-relative literal paths; blank lines and `#`
+comments are ignored, tracked or non-ignored paths are skipped, and wildcard/glob
+expansion is not currently supported. `st worktree ls` lists every worktree;
+`st worktree rm <branch>` removes a branch's worktree. The stack metadata is
+shared across all worktrees, so every `st` command sees the same stack.
 
 #### `st shell install [bash|zsh|fish]`
 Prints a tiny shell function that wraps `st` so navigation commands can change your
