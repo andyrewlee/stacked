@@ -178,8 +178,16 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if _, err := s.ownedWorktreeReleaseTarget(env, name); err != nil {
 		return nil, err
 	}
-	if _, err := g.CurrentBranch(); err != nil {
+	start, err := g.CurrentBranch()
+	if err != nil {
 		return nil, err
+	}
+	if start == name {
+		if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
+			return nil, err
+		} else if elsewhere {
+			return nil, fmt.Errorf("cannot delete current branch %q because its parent %q is checked out in another worktree %q", name, parent, owner.Path)
+		}
 	}
 	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {

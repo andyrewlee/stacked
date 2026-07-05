@@ -363,6 +363,20 @@ func TestDeletePlanForceErrorsWhenBranchTipIsMissing(t *testing.T) {
 	}
 }
 
+func TestDeletePlanCurrentBranchRejectsParentCheckedOutInLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := DeletePlan(env, s, "b", true); err == nil {
+		t.Fatal("DeletePlan for current branch with parent checked out elsewhere returned nil error")
+	}
+}
+
 func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()

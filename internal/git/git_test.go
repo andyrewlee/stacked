@@ -829,6 +829,19 @@ func TestTipsForDoesNotTreatPrefixAsBranch(t *testing.T) {
 	}
 }
 
+func TestTipsForDoesNotResolveRevisionSyntax(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+
+	tips, err := TipsFor([]string{"main", "main^{commit}", "main~0"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 1 || tips["main"] != mainSHA {
+		t.Fatalf("TipsFor revision syntax = %v, want only exact main tip %s", tips, mainSHA)
+	}
+}
+
 func TestMergedInto(t *testing.T) {
 	newRepo(t)
 	base := mustGit(t, "rev-parse", "HEAD")

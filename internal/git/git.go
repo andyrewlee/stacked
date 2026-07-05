@@ -152,7 +152,7 @@ func Tips() (map[string]string, error) {
 }
 
 // TipsFor returns the tip SHA of the named local branches, keyed by branch
-// name, in a single exact-ref cat-file invocation. Missing branches are omitted.
+// name, using exact full-ref matches. Missing branches are omitted.
 func TipsFor(names []string) (map[string]string, error) {
 	unique, refs, err := scopedBranchRefs(names)
 	if err != nil {
@@ -162,18 +162,22 @@ func TipsFor(names []string) (map[string]string, error) {
 	if len(refs) == 0 {
 		return tips, nil
 	}
-	out, err := catFile(refs, "--batch-check=%(objectname) %(objecttype)")
+	args := append([]string{"for-each-ref", "--format=%(refname) %(objectname)"}, refs...)
+	out, err := Run(args...)
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-	if len(lines) != len(unique) {
-		return nil, fmt.Errorf("git cat-file --batch-check returned %d lines for %d refs", len(lines), len(unique))
+	refToName := make(map[string]string, len(refs))
+	for i, ref := range refs {
+		refToName[ref] = unique[i]
 	}
-	for i, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == "commit" {
-			tips[unique[i]] = fields[0]
+	for _, line := range strings.Split(out, "\n") {
+		ref, sha, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		if name, ok := refToName[ref]; ok {
+			tips[name] = sha
 		}
 	}
 	return tips, nil
