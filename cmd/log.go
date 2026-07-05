@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"stacked/internal/git"
@@ -36,15 +37,16 @@ func runLog(args []string) error {
 	// for rendering, so treat it as "no marker".
 	cur, _ := currentBranch()
 	index := s.ChildIndex()
+	renderedNames, rendered := renderedBranches(s)
 
-	// Two for-each-ref reads power the whole render regardless of stack size: one
-	// for tips (drift) and one for tip subjects, instead of a `git log` spawn per
-	// branch.
-	tips, err := git.Tips()
+	// Two exact cat-file batch reads power the whole render for only the
+	// branches that can appear in the tree: one for tips (drift) and one for tip
+	// subjects, instead of a `git log` spawn per branch.
+	tips, err := git.TipsFor(renderedNames)
 	if err != nil {
 		return err
 	}
-	subjects, err := git.TipSubjects()
+	subjects, err := git.TipSubjectsFor(renderedNames)
 	if err != nil {
 		return err
 	}
@@ -57,7 +59,7 @@ func runLog(args []string) error {
 	// Worktree annotations are gated on a multi-worktree repo so the single-tree
 	// output stays byte-for-byte identical: in the common case wtInfo is empty
 	// and every annotation site is skipped.
-	wtInfo, err := branchWorktrees()
+	wtInfo, err := branchWorktrees(rendered)
 	if err != nil {
 		return err
 	}
@@ -69,6 +71,22 @@ func runLog(args []string) error {
 	return nil
 }
 
+func renderedBranches(s *stack.State) (names []string, rendered map[string]bool) {
+	rendered = make(map[string]bool, len(s.Branches)+1)
+	names = make([]string, 0, len(s.Branches)+1)
+	names = append(names, s.Trunk)
+	rendered[s.Trunk] = true
+	tracked := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		if name != s.Trunk {
+			tracked = append(tracked, name)
+			rendered[name] = true
+		}
+	}
+	sort.Strings(tracked)
+	return append(names, tracked...), rendered
+}
+
 // worktreeInfo annotates a branch that lives in a linked worktree.
 type worktreeInfo struct {
 	path  string
@@ -78,9 +96,9 @@ type worktreeInfo struct {
 // branchWorktrees returns, for a multi-worktree repo, a map from branch name to
 // where it lives and whether that worktree is dirty. For a single-tree repo it
 // returns an empty map so callers add no annotations and the output is
-// unchanged. The main worktree is intentionally omitted: its branch is the
-// current/in-place branch, which already has its own marker.
-func branchWorktrees() (map[string]worktreeInfo, error) {
+// unchanged. Only rendered branches are probed for dirtiness; unrelated local
+// branches cannot appear in log output.
+func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) {
 	wts, err := worktrees()
 	if err != nil {
 		return nil, err
@@ -90,7 +108,7 @@ func branchWorktrees() (map[string]worktreeInfo, error) {
 	}
 	info := make(map[string]worktreeInfo, len(wts))
 	for _, wt := range wts {
-		if wt.Branch == "" {
+		if wt.Branch == "" || !rendered[wt.Branch] {
 			continue
 		}
 		clean, err := git.IsCleanAt(wt.Path)

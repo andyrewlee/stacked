@@ -398,6 +398,44 @@ func TestTipSubjects(t *testing.T) {
 	}
 }
 
+func TestTipSubjectsForScopesToRequestedBranches(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+	mustGit(t, "checkout", "-q", "-b", "unrelated")
+	writeFile(t, "u.txt", "u\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unrelated subject")
+	unrelatedSHA := mustGit(t, "rev-parse", "refs/heads/unrelated")
+	mustGit(t, "tag", "main", unrelatedSHA) // decoy tag sharing the branch name
+
+	subjects, err := TipSubjectsFor([]string{"main", "main", "missing"})
+	if err != nil {
+		t.Fatalf("TipSubjectsFor: %v", err)
+	}
+	if len(subjects) != 1 {
+		t.Fatalf("TipSubjectsFor = %v, want only main", subjects)
+	}
+	if subjects["main"] != "init" {
+		t.Fatalf("TipSubjectsFor[main] = %q, want init from branch %s", subjects["main"], mainSHA)
+	}
+	if _, ok := subjects["unrelated"]; ok {
+		t.Fatalf("TipSubjectsFor included unrelated branch: %v", subjects)
+	}
+}
+
+func TestTipSubjectsForDoesNotTreatPrefixAsBranch(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "foo/bar")
+
+	subjects, err := TipSubjectsFor([]string{"foo"})
+	if err != nil {
+		t.Fatalf("TipSubjectsFor: %v", err)
+	}
+	if len(subjects) != 0 {
+		t.Fatalf("TipSubjectsFor(foo) = %v, want missing despite foo/bar", subjects)
+	}
+}
+
 func TestCommitSubjects(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "feat")
@@ -747,6 +785,47 @@ func TestTips(t *testing.T) {
 	}
 	if tips["feat"] != featSHA {
 		t.Fatalf("tips[feat] = %q, want branch tip %s (not the tag)", tips["feat"], featSHA)
+	}
+}
+
+func TestTipsForScopesToRequestedBranches(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+	mustGit(t, "checkout", "-q", "-b", "unrelated")
+	writeFile(t, "u.txt", "u\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unrelated subject")
+	unrelatedSHA := mustGit(t, "rev-parse", "refs/heads/unrelated")
+	mustGit(t, "tag", "main", unrelatedSHA) // decoy tag sharing the branch name
+
+	tips, err := TipsFor([]string{"main", "main", "missing"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 1 {
+		t.Fatalf("TipsFor = %v, want only main", tips)
+	}
+	if tips["main"] != mainSHA {
+		t.Fatalf("TipsFor[main] = %q, want branch tip %s", tips["main"], mainSHA)
+	}
+	if tips["main"] == unrelatedSHA {
+		t.Fatalf("TipsFor[main] used same-named tag target %s", unrelatedSHA)
+	}
+	if _, ok := tips["unrelated"]; ok {
+		t.Fatalf("TipsFor included unrelated branch: %v", tips)
+	}
+}
+
+func TestTipsForDoesNotTreatPrefixAsBranch(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "foo/bar")
+
+	tips, err := TipsFor([]string{"foo"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 0 {
+		t.Fatalf("TipsFor(foo) = %v, want missing despite foo/bar", tips)
 	}
 }
 
