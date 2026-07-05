@@ -111,7 +111,11 @@ func worktreeAdd(branch string, asJSON bool) error {
 	}
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
-		return fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+		if removeErr := git.WorktreeRemove(path, true); removeErr != nil {
+			return stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
+		}
+		return copyErr
 	}
 
 	return emitWorktree(asJSON, branch, path, copied, "created worktree")

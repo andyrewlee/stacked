@@ -156,6 +156,56 @@ func TestWorktreeCommand(t *testing.T) {
 	}
 }
 
+func TestWorktreeIncludeCopyFailureRollsBackWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.writeFile(".gitignore", "secret.env\n")
+	r.writeFile(".worktreeinclude", "secret.env\n")
+	r.writeFile("secret.env", "TOKEN=source\n")
+	r.git("add", ".gitignore", ".worktreeinclude")
+	r.git("commit", "-q", "-m", "add worktree include config")
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("write outside target: %v", err)
+	}
+	if err := os.Remove(filepath.Join(r.dir, "secret.env")); err != nil {
+		t.Fatalf("remove source secret before symlink: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(r.dir, "secret.env")); err != nil {
+		t.Fatalf("create tracked symlink: %v", err)
+	}
+	r.git("add", "-f", "secret.env")
+	r.git("commit", "-q", "-m", "track symlink at include path")
+
+	r.stOK("checkout", "main")
+	r.writeFile("secret.env", "TOKEN=source\n")
+
+	res := r.st("worktree", "feat-a")
+	if res.exitCode == 0 {
+		t.Fatalf("st worktree feat-a succeeded; want unsafe destination symlink failure\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr, "destination symlink") {
+		t.Fatalf("st worktree feat-a stderr = %q, want destination symlink context", res.stderr)
+	}
+	if b, err := os.ReadFile(outside); err != nil || string(b) != "outside\n" {
+		t.Fatalf("outside file = %q, %v; destination symlink was followed", b, err)
+	}
+
+	list := r.git("worktree", "list", "--porcelain")
+	if strings.Contains(list, "branch refs/heads/feat-a") {
+		t.Fatalf("failed worktree still registered:\n%s", list)
+	}
+	createdPath := filepath.Join(r.home, ".stacked", "worktrees", filepath.Base(r.dir), "feat-a")
+	if _, err := os.Stat(createdPath); !os.IsNotExist(err) {
+		t.Fatalf("failed worktree path still exists: %v", err)
+	}
+}
+
 // TestShellInstallEmitsShim asserts `st shell install` prints a cd shim that
 // references the directive file, for the shell the user names.
 func TestShellInstallEmitsShim(t *testing.T) {

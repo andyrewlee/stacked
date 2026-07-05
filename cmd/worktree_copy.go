@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,10 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	if len(patterns) == 0 {
 		return nil, nil
 	}
+	patterns, err = validateWorktreeIncludePaths(patterns)
+	if err != nil {
+		return nil, err
+	}
 
 	realRoot, err := filepath.EvalSymlinks(srcRoot)
 	if err != nil {
@@ -59,12 +64,38 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return copied, err
 		}
+		if err := rejectDestinationSymlink(dst); err != nil {
+			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
+		}
 		if err := reflinkCopy(src, dst); err != nil {
 			return copied, err
 		}
 		copied = append(copied, rel)
 	}
 	return copied, nil
+}
+
+func validateWorktreeIncludePaths(patterns []string) ([]string, error) {
+	out := make([]string, 0, len(patterns))
+	for _, rel := range patterns {
+		cleaned, err := validateWorktreeIncludePath(rel)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cleaned)
+	}
+	return out, nil
+}
+
+func validateWorktreeIncludePath(rel string) (string, error) {
+	cleaned := filepath.Clean(rel)
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("unsafe .worktreeinclude path %q: absolute paths are not allowed", rel)
+	}
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("unsafe .worktreeinclude path %q: path must stay within the repository", rel)
+	}
+	return cleaned, nil
 }
 
 // parseIncludePatterns extracts the path entries from a .worktreeinclude file,
@@ -95,11 +126,28 @@ func isGitIgnored(root, rel string) bool {
 	return cmd.Run() == nil
 }
 
+func rejectDestinationSymlink(dst string) error {
+	info, err := os.Lstat(dst)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unsafe destination symlink %q", dst)
+	}
+	return nil
+}
+
 // reflinkCopy copies src to dst using a copy-on-write reflink when the platform
 // supports it (instant, space-shared), falling back to a plain recursive copy.
 // macOS uses `cp -c`; Linux uses `cp --reflink=auto` (which itself falls back to
 // a full copy when the filesystem lacks reflink support).
 func reflinkCopy(src, dst string) error {
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return err
+	}
 	var args []string
 	switch runtime.GOOS {
 	case "darwin":
@@ -125,6 +173,9 @@ func reflinkCopy(src, dst string) error {
 // is absent) copy without failing — os.ReadFile would follow it and abort the
 // whole recursion, leaving a half-populated worktree.
 func plainCopy(src, dst string) error {
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return err
+	}
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err

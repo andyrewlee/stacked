@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,84 @@ func TestCopyWorktreeIncludesSkipsEscapingPattern(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "..", "outside.txt")); !os.IsNotExist(err) {
 		t.Errorf("outside file should not be copied")
+	}
+}
+
+func TestCopyWorktreeIncludesRefusesDestinationSymlink(t *testing.T) {
+	newRepo(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "ignored.txt\n")
+	write(t, "ignored.txt", "secret\n")
+	write(t, ".worktreeinclude", "ignored.txt\n")
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "wt")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dst, "ignored.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	copied, err := copyWorktreeIncludes(root, dst)
+
+	if b, readErr := os.ReadFile(outside); readErr != nil || string(b) != "outside\n" {
+		t.Fatalf("outside file = %q, %v; destination symlink was followed", b, readErr)
+	}
+	if err == nil {
+		t.Fatalf("copyWorktreeIncludes error = nil, copied = %v; want unsafe destination symlink error", copied)
+	}
+	if !strings.Contains(err.Error(), "destination symlink") {
+		t.Fatalf("copyWorktreeIncludes error = %v, want destination symlink context", err)
+	}
+}
+
+func TestCopyWorktreeIncludesRejectsUnsafePaths(t *testing.T) {
+	absolute := filepath.Join(t.TempDir(), "outside.txt")
+	unsafe := []string{
+		absolute,
+		".",
+		"..",
+		"../outside.txt",
+		"dir/../../outside.txt",
+	}
+	for _, rel := range unsafe {
+		if _, err := validateWorktreeIncludePath(rel); err == nil {
+			t.Errorf("validateWorktreeIncludePath(%q) error = nil, want unsafe path error", rel)
+		}
+	}
+
+	if got, err := validateWorktreeIncludePath("./safe/../ignored.txt"); err != nil || got != "ignored.txt" {
+		t.Fatalf("validateWorktreeIncludePath safe path = %q, %v; want ignored.txt, nil", got, err)
+	}
+}
+
+func TestCopyWorktreeIncludesRejectsUnsafePathBeforeCopy(t *testing.T) {
+	newRepo(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "ignored.txt\n")
+	write(t, "ignored.txt", "secret\n")
+	write(t, ".worktreeinclude", "ignored.txt\n../outside.txt\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err == nil {
+		t.Fatalf("copyWorktreeIncludes error = nil, copied = %v; want unsafe path error", copied)
+	}
+	if !strings.Contains(err.Error(), "unsafe .worktreeinclude path") {
+		t.Fatalf("copyWorktreeIncludes error = %v, want unsafe path context", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dst, "ignored.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("ignored.txt was copied before unsafe manifest rejection: %v", statErr)
 	}
 }
 
