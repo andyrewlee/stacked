@@ -84,6 +84,30 @@ func TestDeleteRefusesDirtyOwnedWorktree(t *testing.T) {
 	}
 }
 
+func TestDeleteNonForceUnmergedKeepsCleanOwnedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	mustCheckout(t, f, "main")
+
+	_, err := Delete(env, s, "a", false)
+	if err == nil {
+		t.Fatal("deleting an unmerged branch without --force must error")
+	}
+	if !strings.Contains(err.Error(), "not merged") {
+		t.Fatalf("error = %v, want not merged validation", err)
+	}
+	if !ownsWorktree(f, "a") {
+		t.Fatal("clean linked worktree must remain when non-force delete is rejected")
+	}
+	if !f.BranchExists("a") {
+		t.Fatal("a must not be deleted when non-force delete is rejected")
+	}
+	if !s.IsTracked("a") {
+		t.Fatal("a must stay tracked when non-force delete is rejected")
+	}
+}
+
 // Fold deletes the CURRENT branch, which git only lets you do when it is checked
 // out here — so the folded branch can never itself live in another worktree (a
 // branch is checked out in at most one worktree). The worktree-relevant Fold case

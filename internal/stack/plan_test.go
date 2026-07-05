@@ -261,6 +261,32 @@ func TestDeletePlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	assertPlanResultFields(t, preview, actual)
 }
 
+func TestDeletePlanNonForceUnmergedPrecedesDirtyWorktreeCheck(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	f.markWorktreeDirty("a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := capturePreviewState(t, f, s)
+	_, err := DeletePlan(env, s, "a", false)
+	if err == nil {
+		t.Fatal("DeletePlan without --force on an unmerged branch must error")
+	}
+	if !strings.Contains(err.Error(), "not merged") {
+		t.Fatalf("error = %v, want not merged validation", err)
+	}
+	if strings.Contains(err.Error(), "worktree") {
+		t.Fatalf("DeletePlan checked the dirty worktree before merge ancestry: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !ownsWorktree(f, "a") {
+		t.Fatal("dry-run delete must not remove the linked worktree")
+	}
+}
+
 func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()

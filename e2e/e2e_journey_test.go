@@ -1480,6 +1480,41 @@ func TestDeleteDryRun(t *testing.T) {
 	}
 }
 
+func TestSyncDryRunRefusesDirtyPrunedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	r.stOK("checkout", "main")
+	r.git("merge", "-q", "--ff-only", "feat-a")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+	if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty linked worktree: %v", err)
+	}
+
+	res := r.st("sync", "--dry-run", "--json")
+	if res.exitCode == 0 {
+		t.Fatalf("sync dry-run should fail for a dirty pruned worktree\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr+res.stdout, "uncommitted changes in its worktree") {
+		t.Fatalf("sync dry-run error should mention the dirty worktree\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("sync dry-run must not delete feat-a")
+	}
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("log --json invalid: %v\n%s", err, out)
+	}
+	if findNode(&root, "feat-a") == nil {
+		t.Fatalf("feat-a should remain tracked after refused sync dry-run:\n%s", out)
+	}
+}
+
 type dryRunResult struct {
 	Branch    string   `json:"branch"`
 	Restacked []string `json:"restacked"`
