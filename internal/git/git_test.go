@@ -219,6 +219,14 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 			run:  func() error { return Fetch("--upload-pack=true") },
 		},
 		{
+			name: "push branches remote",
+			run:  func() error { return PushBranches("--receive-pack=true", []string{"main"}, false) },
+		},
+		{
+			name: "push branches branch",
+			run:  func() error { return PushBranches("origin", []string{"--force"}, false) },
+		},
+		{
 			name: "force branch",
 			run:  func() error { return ForceBranch("-b", "HEAD") },
 		},
@@ -512,6 +520,19 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := PushRemote("origin", "main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "feat.txt", "feat\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "feat")
+	if err := PushBranches("origin", []string{"main", "feat"}, false); err != nil {
+		t.Fatalf("PushBranches: %v", err)
+	}
+	for _, branch := range []string{"main", "feat"} {
+		if got := mustGit(t, "--git-dir", bare, "rev-parse", "--verify", "refs/heads/"+branch); got == "" {
+			t.Fatalf("remote ref for %s is empty", branch)
+		}
 	}
 }
 
