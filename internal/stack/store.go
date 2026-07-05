@@ -85,7 +85,7 @@ func Load() (*State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parse state file: %w", err)
+		return nil, fmt.Errorf("parse state file %s (fix or delete it and re-run st init): %w", path, err)
 	}
 	if s.Branches == nil {
 		s.Branches = make(map[string]*Branch)

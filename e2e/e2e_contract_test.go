@@ -240,6 +240,38 @@ func TestHostileStateBranchNameRefused(t *testing.T) {
 	}
 }
 
+func TestCorruptState(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	statePath := filepath.Join(r.dir, ".git", "stacked", "state.json")
+	if err := os.WriteFile(statePath, []byte("{not json\n"), 0o644); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	res := r.st("log")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "state.json")
+
+	res = r.st("log", "--json")
+	wantExit(t, res, 1)
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
+		t.Fatalf("corrupt state --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
+	}
+	if env.Error.Code != "error" {
+		t.Errorf("corrupt state --json code = %q, want error", env.Error.Code)
+	}
+	if !strings.Contains(env.Error.Message, "state.json") {
+		t.Fatalf("corrupt state --json message = %q, want state path", env.Error.Message)
+	}
+}
+
 // TestSubmitDryRunAndURL asserts submit prints the planned pushes, exits 0 in
 // dry-run, and emits the repository URL; it also covers the at-trunk no-op and
 // the no-remote error.
