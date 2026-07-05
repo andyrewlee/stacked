@@ -99,9 +99,9 @@ func validateWorktreeIncludePath(rel string) (string, error) {
 }
 
 // parseIncludePatterns extracts the path entries from a .worktreeinclude file,
-// skipping blank lines and # comments. Each remaining line is treated as a
-// repo-root-relative path (the common case; full glob expansion is intentionally
-// out of scope for the foundation).
+// skipping blank lines and # comments. Validation later cleans or rejects each
+// entry so unsafe paths cannot be silently discarded after earlier entries have
+// been copied.
 func parseIncludePatterns(content string) []string {
 	var out []string
 	for _, line := range strings.Split(content, "\n") {
@@ -109,11 +109,7 @@ func parseIncludePatterns(content string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		clean := filepath.Clean(line)
-		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			continue
-		}
-		out = append(out, clean)
+		out = append(out, line)
 	}
 	return out
 }

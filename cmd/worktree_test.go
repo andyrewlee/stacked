@@ -10,7 +10,7 @@ import (
 func TestParseIncludePatterns(t *testing.T) {
 	in := "# a comment\n\nnode_modules\n  target  \n# trailing\n./build\n../outside.txt\n/abs/path\nsub/../../escape\n"
 	got := parseIncludePatterns(in)
-	want := []string{"node_modules", "target", "build"}
+	want := []string{"node_modules", "target", "./build", "../outside.txt", "/abs/path", "sub/../../escape"}
 	if len(got) != len(want) {
 		t.Fatalf("parseIncludePatterns = %v, want %v", got, want)
 	}
@@ -155,7 +155,7 @@ func TestCopyWorktreeIncludes(t *testing.T) {
 	}
 }
 
-func TestCopyWorktreeIncludesSkipsEscapingPattern(t *testing.T) {
+func TestCopyWorktreeIncludesRejectsEscapingPath(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	root, err := os.Getwd()
@@ -176,11 +176,11 @@ func TestCopyWorktreeIncludesSkipsEscapingPattern(t *testing.T) {
 		t.Fatal(err)
 	}
 	copied, err := copyWorktreeIncludes(root, dst)
-	if err != nil {
-		t.Fatalf("copyWorktreeIncludes: %v", err)
+	if err == nil {
+		t.Fatalf("copyWorktreeIncludes error = nil, copied = %v; want unsafe path error", copied)
 	}
-	if len(copied) != 0 {
-		t.Fatalf("copied = %v, want none", copied)
+	if !strings.Contains(err.Error(), "unsafe .worktreeinclude path") {
+		t.Fatalf("copyWorktreeIncludes error = %v, want unsafe path context", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "..", "outside.txt")); !os.IsNotExist(err) {
 		t.Errorf("outside file should not be copied")
