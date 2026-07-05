@@ -552,17 +552,7 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	// If name lives in another worktree, git refuses to delete it; tear that
-	// (clean) worktree down first. A dirty owner errors out and nothing changes.
-	if err := s.releaseOwnedWorktree(env, name); err != nil {
-		return nil, err
-	}
 	parent := b.Parent
-
-	start, err := g.CurrentBranch()
-	if err != nil {
-		return nil, err
-	}
 	if !force {
 		mergedIntoParent, err := g.IsAncestor(name, parent)
 		if err != nil {
@@ -571,6 +561,16 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		if !mergedIntoParent {
 			return nil, fmt.Errorf("branch %q is not merged into its stack parent %q (use --force to delete anyway)", name, parent)
 		}
+	}
+	// If name lives in another worktree, git refuses to delete it; tear that
+	// (clean) worktree down first. A dirty owner errors out and nothing changes.
+	if err := s.releaseOwnedWorktree(env, name); err != nil {
+		return nil, err
+	}
+
+	start, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
 	}
 	if start == name {
 		if err := g.Checkout(parent); err != nil {

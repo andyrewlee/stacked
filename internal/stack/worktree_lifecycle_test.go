@@ -52,6 +52,66 @@ func TestDeleteRemovesCleanOwnedWorktree(t *testing.T) {
 	checkInvariants(t, f, s, 0)
 }
 
+func TestDeleteRefusesUnmergedOwnedWorktreeWithoutRemovingIt(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	bTip, err := f.RevParse("b")
+	if err != nil {
+		t.Fatalf("rev-parse b before delete: %v", err)
+	}
+	cTip, err := f.RevParse("c")
+	if err != nil {
+		t.Fatalf("rev-parse c before delete: %v", err)
+	}
+	beforeB, ok := s.Get("b")
+	if !ok {
+		t.Fatal("b should be tracked before delete")
+	}
+	beforeBCopy := *beforeB
+	beforeC, ok := s.Get("c")
+	if !ok {
+		t.Fatal("c should be tracked before delete")
+	}
+	beforeCCopy := *beforeC
+
+	f.addWorktree("/wt/b", "b")
+	mustCheckout(t, f, "main")
+
+	_, err = Delete(env, s, "b", false)
+	if err == nil {
+		t.Fatal("non-force delete of an unmerged branch must error")
+	}
+	if !strings.Contains(err.Error(), "not merged into its stack parent") {
+		t.Fatalf("error should explain unmerged stack parent: %v", err)
+	}
+	if !ownsWorktree(f, "b") {
+		t.Fatal("failed non-force delete must leave b's worktree intact")
+	}
+	if got, err := f.RevParse("b"); err != nil || got != bTip {
+		t.Fatalf("b tip after failed delete = %q, %v; want %q, nil", got, err, bTip)
+	}
+	if got, err := f.RevParse("c"); err != nil || got != cTip {
+		t.Fatalf("c tip after failed delete = %q, %v; want %q, nil", got, err, cTip)
+	}
+	afterB, ok := s.Get("b")
+	if !ok {
+		t.Fatal("b should remain tracked after failed delete")
+	}
+	if *afterB != beforeBCopy {
+		t.Fatalf("b stack state changed: got %+v, want %+v", *afterB, beforeBCopy)
+	}
+	afterC, ok := s.Get("c")
+	if !ok {
+		t.Fatal("c should remain tracked after failed delete")
+	}
+	if *afterC != beforeCCopy {
+		t.Fatalf("c stack state changed: got %+v, want %+v", *afterC, beforeCCopy)
+	}
+}
+
 func TestDeleteRefusesDirtyOwnedWorktree(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
