@@ -1,9 +1,11 @@
 package stack
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -127,6 +129,35 @@ func TestLoadNotInitialized(t *testing.T) {
 
 	if _, err := Load(); err != ErrNotInitialized {
 		t.Errorf("Load on uninitialized repo = %v, want ErrNotInitialized", err)
+	}
+}
+
+func TestLoadCorruptState(t *testing.T) {
+	initGitRepo(t)
+	if _, err := Init("main"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	path, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not json\n"), 0o644); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load corrupt state succeeded, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, path) && !strings.Contains(msg, "state.json") {
+		t.Fatalf("Load corrupt state error = %q, want state path", msg)
+	}
+	if !strings.Contains(msg, "fix or delete") && !strings.Contains(msg, "re-run st init") {
+		t.Fatalf("Load corrupt state error = %q, want recovery hint", msg)
+	}
+	if errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Load corrupt state error = %v, want generic error not ErrNotInitialized", err)
 	}
 }
 
