@@ -125,41 +125,6 @@ func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 	return drift
 }
 
-// restackPlan returns, in order, the branches a restack starting at `start`
-// would rebase — without changing anything. A branch is rebased if it is out of
-// date, or its parent will be rebased (which moves the parent tip and forces the
-// child). When start is the trunk, the whole forest is considered.
-func (s *State) restackPlan(start string, tips map[string]string) ([]string, error) {
-	return s.restackPlanAgainst(start, tips)
-}
-
-func (s *State) restackPlanAgainst(start string, tips map[string]string) ([]string, error) {
-	var order []string
-	if start != s.Trunk {
-		order = append(order, start)
-		order = append(order, s.Descendants(start)...)
-	} else {
-		order = s.Descendants(s.Trunk)
-	}
-	inPlan := map[string]bool{}
-	var plan []string
-	for _, name := range order {
-		b, ok := s.Get(name)
-		if !ok {
-			continue
-		}
-		needs, err := s.needsRestackAgainstTips(name, tips)
-		if err != nil {
-			return nil, err
-		}
-		if needs || inPlan[b.Parent] {
-			plan = append(plan, name)
-			inPlan[name] = true
-		}
-	}
-	return plan, nil
-}
-
 // RestackPlan previews the branches a restack from the current branch would
 // rebase, without mutating anything.
 func RestackPlan(env Env, s *State) (*OpResult, error) {
@@ -180,15 +145,15 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if start != s.Trunk && !s.IsTracked(start) {
 		return nil, fmt.Errorf("branch %q is not tracked", start)
 	}
-	plan, err := s.restackPlan(start, tips)
+	preview, err := restackPlanAgainstWithWorktrees(env, s, start, tips)
 	if err != nil {
 		return nil, err
 	}
 	summary := "nothing to restack"
-	if len(plan) > 0 {
-		summary = fmt.Sprintf("would restack %d branch(es)", len(plan))
+	if len(preview.restacked) > 0 {
+		summary = fmt.Sprintf("would restack %d branch(es)", len(preview.restacked))
 	}
-	return &OpResult{Summary: summary, Restacked: plan, DryRun: true}, nil
+	return &OpResult{Summary: summary, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
 }
 
 // RestackUpstack restacks the descendants of name in topological order

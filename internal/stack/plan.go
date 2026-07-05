@@ -38,15 +38,16 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 	planState := cloneState(s)
 	planState.RemoveBranch(cur)
 	tips[parent] = curTip
-	restacked, err := planState.restackPlanAgainst(parent, tips)
+	preview, err := finishUpstackPlan(env, planState, parent, tips)
 	if err != nil {
 		return nil, err
 	}
 	return &OpResult{
 		Summary:   fmt.Sprintf("would fold %s into %s", cur, parent),
 		Branch:    parent,
-		Restacked: restacked,
+		Restacked: preview.restacked,
 		Deleted:   []string{cur},
+		Notes:     preview.notes(),
 		DryRun:    true,
 	}, nil
 }
@@ -82,14 +83,15 @@ func SquashPlan(env Env, s *State, message string) (*OpResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
-	restacked, err := planAfterTipChange(s, cur, tips, false)
+	preview, err := planAfterTipChange(env, s, cur, tips, false)
 	if err != nil {
 		return nil, err
 	}
 	return &OpResult{
 		Summary:   fmt.Sprintf("would squash %d commits on %s into one", len(subjects), cur),
 		Branch:    cur,
-		Restacked: restacked,
+		Restacked: preview.restacked,
+		Notes:     preview.notes(),
 		DryRun:    true,
 	}, nil
 }
@@ -131,14 +133,15 @@ func OntoPlan(env Env, s *State, target string) (*OpResult, error) {
 	planBranch, _ := planState.Get(cur)
 	planBranch.Parent = target
 	planBranch.ParentSHA = newParentTip
-	restacked, err := planAfterTipChange(planState, cur, tips, false)
+	preview, err := planAfterTipChange(env, planState, cur, tips, false)
 	if err != nil {
 		return nil, err
 	}
 	return &OpResult{
 		Summary:   fmt.Sprintf("would move %s onto %s", cur, target),
 		Branch:    cur,
-		Restacked: restacked,
+		Restacked: preview.restacked,
+		Notes:     preview.notes(),
 		DryRun:    true,
 	}, nil
 }
@@ -179,65 +182,152 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	}
 	planState := cloneState(s)
 	formerChildren := planState.RemoveBranch(name)
-	restacked, err := appendRestackPlans(planState, tips, formerChildren...)
+	preview, err := appendRestackPlans(env, planState, tips, formerChildren...)
 	if err != nil {
 		return nil, err
 	}
 
-	res := &OpResult{Summary: fmt.Sprintf("would delete %s", name), Deleted: []string{name}, Restacked: restacked, DryRun: true}
+	res := &OpResult{Summary: fmt.Sprintf("would delete %s", name), Deleted: []string{name}, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}
 	if len(formerChildren) > 0 {
 		res.Summary = fmt.Sprintf("would delete %s; re-parented %d branch(es) onto %s", name, len(formerChildren), parent)
 	}
 	return res, nil
 }
 
+type restackPreview struct {
+	restacked []string
+	skipped   []string
+}
+
+func (p restackPreview) notes() []string {
+	return skippedWorktreeNotesFrom(p.skipped)
+}
+
+type restackPreviewAccumulator struct {
+	restacked   []string
+	skipped     []string
+	moved       map[string]bool
+	seen        map[string]bool
+	seenSkipped map[string]bool
+}
+
+func newRestackPreviewAccumulator() *restackPreviewAccumulator {
+	return &restackPreviewAccumulator{
+		moved:       map[string]bool{},
+		seen:        map[string]bool{},
+		seenSkipped: map[string]bool{},
+	}
+}
+
+func (a *restackPreviewAccumulator) preview() restackPreview {
+	return restackPreview{restacked: a.restacked, skipped: a.skipped}
+}
+
+func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]string, name string) error {
+	b, ok := s.Get(name)
+	if !ok {
+		return nil
+	}
+	needs, err := s.needsRestackAgainstTips(name, tips)
+	if err != nil {
+		return err
+	}
+	if !needs && !a.moved[b.Parent] {
+		return nil
+	}
+	skipped, err := wouldSkipDirtyWorktreeRestack(env, s, name)
+	if err != nil {
+		return err
+	}
+	if skipped {
+		if !a.seenSkipped[name] {
+			a.seenSkipped[name] = true
+			a.skipped = append(a.skipped, name)
+		}
+		return nil
+	}
+	if !a.seen[name] {
+		a.seen[name] = true
+		a.restacked = append(a.restacked, name)
+	}
+	a.moved[name] = true
+	return nil
+}
+
+func wouldSkipDirtyWorktreeRestack(env Env, s *State, branch string) (bool, error) {
+	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+	if err != nil {
+		return false, err
+	}
+	if !elsewhere {
+		return false, nil
+	}
+	clean, err := env.Git.IsCleanIn(owner.Path)
+	if err != nil {
+		return false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	return !clean, nil
+}
+
+func restackPlanAgainstWithWorktrees(env Env, s *State, start string, tips map[string]string) (restackPreview, error) {
+	var order []string
+	if start != s.Trunk {
+		order = append(order, start)
+		order = append(order, s.Descendants(start)...)
+	} else {
+		order = s.Descendants(s.Trunk)
+	}
+	acc := newRestackPreviewAccumulator()
+	for _, name := range order {
+		if err := acc.consider(env, s, tips, name); err != nil {
+			return restackPreview{}, err
+		}
+	}
+	return acc.preview(), nil
+}
+
+func finishUpstackPlan(env Env, s *State, anchor string, tips map[string]string) (restackPreview, error) {
+	acc := newRestackPreviewAccumulator()
+	for _, name := range s.Descendants(anchor) {
+		if err := acc.consider(env, s, tips, name); err != nil {
+			return restackPreview{}, err
+		}
+	}
+	return acc.preview(), nil
+}
+
 // planAfterTipChange previews the upstack impact of an operation that rewrites
 // changed's tip. The rewritten branch is treated as moved even though previews
 // do not know its future SHA, so descendants whose parent moves are included.
-func planAfterTipChange(s *State, changed string, tips map[string]string, includeChanged bool) ([]string, error) {
+func planAfterTipChange(env Env, s *State, changed string, tips map[string]string, includeChanged bool) (restackPreview, error) {
 	if _, err := s.tracked(changed); err != nil {
-		return nil, err
+		return restackPreview{}, err
 	}
-	order := append([]string{changed}, s.Descendants(changed)...)
-	inPlan := map[string]bool{changed: true}
-	var plan []string
+	acc := newRestackPreviewAccumulator()
+	acc.moved[changed] = true
 	if includeChanged {
-		plan = append(plan, changed)
+		acc.seen[changed] = true
+		acc.restacked = append(acc.restacked, changed)
 	}
-	for _, name := range order[1:] {
-		b, ok := s.Get(name)
-		if !ok {
-			continue
-		}
-		needs, err := s.needsRestackAgainstTips(name, tips)
-		if err != nil {
-			return nil, err
-		}
-		if needs || inPlan[b.Parent] {
-			plan = append(plan, name)
-			inPlan[name] = true
+	for _, name := range s.Descendants(changed) {
+		if err := acc.consider(env, s, tips, name); err != nil {
+			return restackPreview{}, err
 		}
 	}
-	return plan, nil
+	return acc.preview(), nil
 }
 
 // appendRestackPlans previews the same child-by-child restack order Delete uses,
 // de-duplicating descendants reached through multiple former children.
-func appendRestackPlans(s *State, tips map[string]string, starts ...string) ([]string, error) {
-	seen := map[string]bool{}
-	var plan []string
+func appendRestackPlans(env Env, s *State, tips map[string]string, starts ...string) (restackPreview, error) {
+	acc := newRestackPreviewAccumulator()
 	for _, start := range starts {
-		next, err := s.restackPlanAgainst(start, tips)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range next {
-			if seen[name] {
-				continue
+		order := append([]string{start}, s.Descendants(start)...)
+		for _, name := range order {
+			if err := acc.consider(env, s, tips, name); err != nil {
+				return restackPreview{}, err
 			}
-			seen[name] = true
-			plan = append(plan, name)
 		}
 	}
-	return plan, nil
+	return acc.preview(), nil
 }

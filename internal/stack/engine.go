@@ -313,15 +313,22 @@ func Restack(env Env, s *State) (*OpResult, error) {
 // worktree was dirty, turning each into a human-readable note. Empty when the
 // cascade skipped nothing (the common, single-tree case).
 func skippedWorktreeNotes(s *State) []string {
-	skipped := s.SkippedWorktrees()
+	return skippedWorktreeNotesFrom(s.SkippedWorktrees())
+}
+
+func skippedWorktreeNotesFrom(skipped []string) []string {
 	if len(skipped) == 0 {
 		return nil
 	}
 	notes := make([]string, 0, len(skipped))
 	for _, name := range skipped {
-		notes = append(notes, fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name))
+		notes = append(notes, skippedWorktreeNote(name))
 	}
 	return notes
+}
+
+func skippedWorktreeNote(name string) string {
+	return fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name)
 }
 
 // Fold folds the current branch into its parent: the parent advances to include
@@ -730,17 +737,17 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 			}
 		}
 	}
-	full, err := planState.restackPlanAgainst(planState.Trunk, tips)
+	preview, err := restackPlanAgainstWithWorktrees(env, planState, planState.Trunk, tips)
 	if err != nil {
 		return nil, err
 	}
 	var plan []string
-	for _, name := range full {
+	for _, name := range preview.restacked {
 		if !deleted[name] {
 			plan = append(plan, name)
 		}
 	}
-	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, DryRun: true}, nil
+	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, Notes: preview.notes(), DryRun: true}, nil
 }
 
 func cloneState(s *State) *State {

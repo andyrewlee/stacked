@@ -1407,6 +1407,37 @@ func TestSquashDryRun(t *testing.T) {
 	assertTips(t, r, beforeTips)
 }
 
+func TestSquashDryRunSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.writeFile("a2.txt", "a2\n")
+	r.stOK("modify", "--commit", "-m", "a2")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-b")
+	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty linked worktree: %v", err)
+	}
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b")
+	got := decodeDryRunResult(t, r.stOK("squash", "-m", "squashed", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", nil, nil)
+	wantNote := "skipped feat-b: its worktree is dirty (commit/stash there, then re-run)"
+	if !reflect.DeepEqual(got.Notes, []string{wantNote}) {
+		t.Fatalf("notes = %v, want [%q]", got.Notes, wantNote)
+	}
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("squash dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
 func TestOntoDryRun(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
@@ -1453,6 +1484,7 @@ type dryRunResult struct {
 	Branch    string   `json:"branch"`
 	Restacked []string `json:"restacked"`
 	Deleted   []string `json:"deleted"`
+	Notes     []string `json:"notes"`
 	DryRun    bool     `json:"dryRun"`
 }
 

@@ -224,6 +224,113 @@ func TestDeletePlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	assertPlanResultFields(t, preview, actual)
 }
 
+func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("a2")
+		mkBranch(t, env, s, f, "a", "b")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/b", "b")
+		f.markWorktreeDirty("b")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := SquashPlan(env, s, "squashed")
+	if err != nil {
+		t.Fatalf("SquashPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("b")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("SquashPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Squash(env2, s2, "squashed")
+	if err != nil {
+		t.Fatalf("Squash: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestOntoPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		if err := f.Checkout("b"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/c", "c")
+		f.markWorktreeDirty("c")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := OntoPlan(env, s, "main")
+	if err != nil {
+		t.Fatalf("OntoPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("c")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("OntoPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Onto(env2, s2, "main")
+	if err != nil {
+		t.Fatalf("Onto: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestDeletePlanSkipsDirtyLinkedWorktreeFormerChild(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/b", "b")
+		f.markWorktreeDirty("b")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := DeletePlan(env, s, "a", true)
+	if err != nil {
+		t.Fatalf("DeletePlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("b")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("DeletePlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Delete(env2, s2, "a", true)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
 func TestTopologyPlansMatchValidationErrors(t *testing.T) {
 	t.Run("fold into trunk", func(t *testing.T) {
 		f, s, env := newEnvState()
@@ -359,6 +466,9 @@ func assertPlanResultFields(t *testing.T, preview, actual *OpResult) {
 	}
 	if !reflect.DeepEqual(preview.Deleted, actual.Deleted) {
 		t.Fatalf("Deleted preview=%v actual=%v", preview.Deleted, actual.Deleted)
+	}
+	if !reflect.DeepEqual(preview.Notes, actual.Notes) {
+		t.Fatalf("Notes preview=%v actual=%v", preview.Notes, actual.Notes)
 	}
 }
 
