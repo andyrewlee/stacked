@@ -64,7 +64,7 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return copied, err
 		}
-		if err := rejectDestinationSymlink(dst); err != nil {
+		if err := rejectUnsafeDestination(dstRoot, dst); err != nil {
 			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
 		}
 		if err := reflinkCopy(src, dst); err != nil {
@@ -120,6 +120,22 @@ func parseIncludePatterns(content string) []string {
 func isGitIgnored(root, rel string) bool {
 	cmd := exec.Command("git", "-C", root, "check-ignore", "-q", "--", rel)
 	return cmd.Run() == nil
+}
+
+func rejectUnsafeDestination(dstRoot, dst string) error {
+	realRoot, err := filepath.EvalSymlinks(dstRoot)
+	if err != nil {
+		return err
+	}
+	parent := filepath.Dir(dst)
+	realParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return err
+	}
+	if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
+		return fmt.Errorf("unsafe destination parent %q resolves outside worktree", parent)
+	}
+	return rejectDestinationSymlink(dst)
 }
 
 func rejectDestinationSymlink(dst string) error {

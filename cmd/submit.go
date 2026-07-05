@@ -97,30 +97,21 @@ func runSubmit(args []string) error {
 			}
 		}
 	} else {
-		if err := git.PushBranches(remote, stackBranches, true); err != nil {
-			for _, name := range stackBranches {
-				if err := git.PushRemote(remote, name, true); err != nil {
-					// Earlier branches were already pushed to the remote. In --json mode
-					// the per-branch lines are suppressed, so emit a partial result (the
-					// branches pushed so far plus the one that failed) before returning,
-					// so a machine consumer can see the partial state — the non-zero exit
-					// and error envelope on stderr still signal the failure.
-					if asJSON {
-						_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
-					}
-					return fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(stackBranches), err)
+		for _, name := range stackBranches {
+			if err := git.PushRemote(remote, name, true); err != nil {
+				// Earlier branches were already pushed to the remote. In --json mode
+				// the per-branch lines are suppressed, so emit a partial result (the
+				// branches pushed so far plus the one that failed) before returning,
+				// so a machine consumer can see the partial state — the non-zero exit
+				// and error envelope on stderr still signal the failure.
+				if asJSON {
+					_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
 				}
-				pushed = append(pushed, name)
-				if !asJSON {
-					out("pushed %s\n", name)
-				}
+				return fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(stackBranches), err)
 			}
-		} else {
-			pushed = append(pushed, stackBranches...)
-			for _, name := range pushed {
-				if !asJSON {
-					out("pushed %s\n", name)
-				}
+			pushed = append(pushed, name)
+			if !asJSON {
+				out("pushed %s\n", name)
 			}
 		}
 	}
