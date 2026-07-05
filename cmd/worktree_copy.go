@@ -60,11 +60,8 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
 			continue // resolves outside the repo, for example through a symlinked dir
 		}
-		dst := filepath.Join(dstRoot, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return copied, err
-		}
-		if err := rejectUnsafeDestination(dstRoot, dst); err != nil {
+		dst, err := prepareSafeDestination(dstRoot, rel)
+		if err != nil {
 			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
 		}
 		if err := reflinkCopy(src, dst); err != nil {
@@ -122,20 +119,67 @@ func isGitIgnored(root, rel string) bool {
 	return cmd.Run() == nil
 }
 
-func rejectUnsafeDestination(dstRoot, dst string) error {
+func prepareSafeDestination(dstRoot, rel string) (string, error) {
+	dst := filepath.Join(dstRoot, rel)
+	if err := os.MkdirAll(dstRoot, 0o755); err != nil {
+		return "", err
+	}
 	realRoot, err := filepath.EvalSymlinks(dstRoot)
 	if err != nil {
-		return err
+		return "", err
 	}
-	parent := filepath.Dir(dst)
-	realParent, err := filepath.EvalSymlinks(parent)
+	parentRel := filepath.Dir(rel)
+	if parentRel != "." {
+		cur := dstRoot
+		for _, part := range strings.Split(parentRel, string(filepath.Separator)) {
+			if part == "" || part == "." {
+				continue
+			}
+			cur = filepath.Join(cur, part)
+			if err := ensureSafeDestinationDir(realRoot, cur); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+func ensureSafeDestinationDir(realRoot, dir string) error {
+	info, err := os.Lstat(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return os.Mkdir(dir, 0o755)
+		}
 		return err
 	}
-	if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
-		return fmt.Errorf("unsafe destination parent %q resolves outside worktree", parent)
+	if info.Mode()&os.ModeSymlink != 0 {
+		realDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return err
+		}
+		if !pathWithin(realRoot, realDir) {
+			return fmt.Errorf("unsafe destination parent %q resolves outside worktree", dir)
+		}
+		stat, err := os.Stat(dir)
+		if err != nil {
+			return err
+		}
+		if !stat.IsDir() {
+			return fmt.Errorf("destination parent %q is not a directory", dir)
+		}
+		return nil
 	}
-	return rejectDestinationSymlink(dst)
+	if !info.IsDir() {
+		return fmt.Errorf("destination parent %q is not a directory", dir)
+	}
+	return nil
+}
+
+func pathWithin(root, path string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 func rejectDestinationSymlink(dst string) error {

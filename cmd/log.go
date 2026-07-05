@@ -106,8 +106,12 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 	if !stack.IsMultiWorktree(wts) {
 		return map[string]worktreeInfo{}, nil
 	}
+	main, _ := stack.MainWorktree(wts)
 	info := make(map[string]worktreeInfo, len(wts))
 	for _, wt := range wts {
+		if wt.Path == main.Path {
+			continue
+		}
 		if wt.Branch == "" || !rendered[wt.Branch] {
 			continue
 		}

@@ -26,6 +26,11 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 	if _, err := s.ownedWorktreeReleaseTarget(env, cur); err != nil {
 		return nil, err
 	}
+	if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
+		return nil, err
+	} else if elsewhere {
+		return nil, fmt.Errorf("cannot fold into %q because it is checked out in another worktree %q", parent, owner.Path)
+	}
 
 	curTip, err := g.RevParse(branchTipRef(cur))
 	if err != nil {

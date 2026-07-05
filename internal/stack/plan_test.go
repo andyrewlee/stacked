@@ -336,6 +336,20 @@ func TestDeletePlanNonForceUnmergedPrecedesDirtyWorktreeCheck(t *testing.T) {
 	}
 }
 
+func TestFoldPlanRejectsParentCheckedOutInLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := FoldPlan(env, s); err == nil {
+		t.Fatal("FoldPlan with parent checked out in another worktree returned nil error")
+	}
+}
+
 func TestDeletePlanForceErrorsWhenBranchTipIsMissing(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

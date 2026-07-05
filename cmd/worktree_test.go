@@ -251,18 +251,15 @@ func TestCopyWorktreeIncludesRejectsDestinationParentSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, ".gitignore", "cache/token\n")
-	if err := os.MkdirAll("cache", 0o755); err != nil {
+	write(t, ".gitignore", "cache/sub/token\n")
+	if err := os.MkdirAll(filepath.Join("cache", "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write(t, "cache/token", "secret\n")
-	write(t, ".worktreeinclude", "cache/token\n")
+	write(t, filepath.Join("cache", "sub", "token"), "secret\n")
+	write(t, ".worktreeinclude", "cache/sub/token\n")
 
 	outside := t.TempDir()
-	outsideToken := filepath.Join(outside, "token")
-	if err := os.WriteFile(outsideToken, []byte("outside\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	outsideSubdir := filepath.Join(outside, "sub")
 	dst := filepath.Join(t.TempDir(), "wt")
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		t.Fatal(err)
@@ -278,8 +275,8 @@ func TestCopyWorktreeIncludesRejectsDestinationParentSymlink(t *testing.T) {
 	if !strings.Contains(err.Error(), "destination parent") {
 		t.Fatalf("copyWorktreeIncludes error = %v, want destination parent context", err)
 	}
-	if b, readErr := os.ReadFile(outsideToken); readErr != nil || string(b) != "outside\n" {
-		t.Fatalf("outside token = %q, %v; destination parent symlink was followed", b, readErr)
+	if _, statErr := os.Stat(outsideSubdir); !os.IsNotExist(statErr) {
+		t.Fatalf("outside subdir was created before destination parent rejection: %v", statErr)
 	}
 }
 

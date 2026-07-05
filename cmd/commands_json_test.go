@@ -224,6 +224,34 @@ func TestLogJSONOmitsUnrelatedLocalBranch(t *testing.T) {
 	}
 }
 
+func TestLogJSONDoesNotAnnotateMainWorktreeBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "tracked subject")
+	linkedMain := filepath.Join(t.TempDir(), "main-wt")
+	mustRun(t, "git", "worktree", "add", "-q", linkedMain, "main")
+	resetWorktreeCache()
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if !sameExistingPath(root.Worktree, linkedMain) {
+		t.Fatalf("trunk worktree = %q, want linked worktree %q", root.Worktree, linkedMain)
+	}
+	if len(root.Children) != 1 || root.Children[0].Name != "feat-a" {
+		t.Fatalf("log tree = %+v, want feat-a child", root)
+	}
+	if got := root.Children[0].Worktree; got != "" {
+		t.Fatalf("main worktree branch got linked-worktree annotation %q", got)
+	}
+}
+
 // --- status ----------------------------------------------------------------
 
 type statusPayload struct {
