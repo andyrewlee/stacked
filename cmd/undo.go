@@ -60,7 +60,7 @@ func runUndo(args []string) error {
 		s = nil
 		env.Save = func() error { return stack.RestoreState(entry.State) }
 	}
-	if err := prepareUndoCurrentCreatedWorktree(entry); err != nil {
+	if err := prepareUndoCurrentCreatedWorktree(entry, s); err != nil {
 		return err
 	}
 
@@ -90,12 +90,12 @@ func runUndo(args []string) error {
 	})
 }
 
-func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry) error {
+func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) error {
 	cur, err := currentBranch()
 	if err != nil {
 		return nil
 	}
-	if !undoEntryCreatedBranch(entry, cur) {
+	if !undoEntryCreatedBranch(entry, s, cur) {
 		return nil
 	}
 	wts, err := worktrees()
@@ -122,11 +122,16 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry) error {
 	if err := os.Chdir(main.Path); err != nil {
 		return fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
 	}
+	if inProgress, err := git.RebaseInProgress(); err != nil {
+		return err
+	} else if inProgress {
+		return fmt.Errorf("cannot undo while a rebase is in progress in the main worktree %q; run st abort or resolve conflicts and run st continue there", main.Path)
+	}
 	writeCDDirective(dest)
 	return nil
 }
 
-func undoEntryCreatedBranch(entry *stack.UndoEntry, name string) bool {
+func undoEntryCreatedBranch(entry *stack.UndoEntry, s *stack.State, name string) bool {
 	if entry == nil || name == "" {
 		return false
 	}
@@ -136,6 +141,9 @@ func undoEntryCreatedBranch(entry *stack.UndoEntry, name string) bool {
 		}
 	}
 	if entry.LocalBranches == nil {
+		return false
+	}
+	if s == nil || !s.IsTracked(name) {
 		return false
 	}
 	for _, existed := range entry.LocalBranches {

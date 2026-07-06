@@ -401,6 +401,31 @@ func TestUndoCreateWorktreeRemovesLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestUndoFromUnrelatedLinkedWorktreeDoesNotTreatItAsCreated(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustRun(t, "git", "branch", "loose", "main")
+	linked := filepath.Join(t.TempDir(), "loose")
+	mustRun(t, "git", "worktree", "add", "-q", linked, "loose")
+	t.Chdir(linked)
+	resetWorktreeCache()
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo from unrelated linked worktree: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo left created branch feat-a behind")
+	}
+	if !git.BranchExists("loose") {
+		t.Fatal("undo deleted unrelated linked branch loose")
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo left feat-a tracked")
+	}
+}
+
 func TestUndoDeleteCurrentRestoresCheckout(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
