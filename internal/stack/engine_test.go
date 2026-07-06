@@ -132,6 +132,36 @@ func TestEngineFoldAbsorbs(t *testing.T) {
 	}
 }
 
+func TestFoldRefusesParentInOtherWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+	bTip, _ := f.RevParse("b")
+
+	_, err := Fold(env, s)
+	want := `cannot fold into "a" because it is checked out in another worktree "/wt/a"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Fold error = %v, want %q", err, want)
+	}
+	if after, _ := f.RevParse("a"); after != aTip {
+		t.Fatalf("a tip = %s after refused fold, want %s", after, aTip)
+	}
+	if after, _ := f.RevParse("b"); after != bTip {
+		t.Fatalf("b tip = %s after refused fold, want %s", after, bTip)
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("refused fold removed branch b or its metadata")
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q after refused fold, want b", f.head)
+	}
+}
+
 // If the branch delete fails mid-fold, the git side must roll back: the parent
 // ref must not have absorbed cur's commits, cur must survive, HEAD must be
 // restored, and the metadata must be untouched (ENG-4). Otherwise git and
@@ -326,6 +356,64 @@ func TestEngineDeleteDropsCommits(t *testing.T) {
 	}
 	if subs, _ := f.CommitSubjects("a", "c"); len(subs) != 1 {
 		t.Fatalf("c should have 1 commit on a, got %d", len(subs))
+	}
+}
+
+func TestDeleteCurrentRefusesParentInOtherWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+	bTip, _ := f.RevParse("b")
+
+	_, err := Delete(env, s, "b", true)
+	want := `cannot delete current branch "b" because its parent "a" is checked out in another worktree "/wt/a"`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Delete error = %v, want %q", err, want)
+	}
+	if after, _ := f.RevParse("a"); after != aTip {
+		t.Fatalf("a tip = %s after refused delete, want %s", after, aTip)
+	}
+	if after, _ := f.RevParse("b"); after != bTip {
+		t.Fatalf("b tip = %s after refused delete, want %s", after, bTip)
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("refused delete removed branch b or its metadata")
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q after refused delete, want b", f.head)
+	}
+}
+
+func TestCrossWorktreeConflictAbortFailureSurfaces(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.conflictOn("feat-a")
+	abortErr := errors.New("abort failed")
+	f.rebaseAbortErr = abortErr
+
+	_, err := s.RestackBranch(env, "feat-a")
+	if err == nil {
+		t.Fatal("cross-worktree conflict with abort failure returned nil error")
+	}
+	if !errors.Is(err, abortErr) {
+		t.Fatalf("RestackBranch error = %v, want abort failure matchable", err)
+	}
+	for _, want := range []string{
+		`rebasing "feat-a" in its worktree "/wt/feat-a"`,
+		`conflict rebasing "feat-a"`,
+		`abort the paused rebase in "/wt/feat-a" (it is still in progress there)`,
+		"abort failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("RestackBranch error = %v, want it to contain %q", err, want)
+		}
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("failed abort should leave the owner worktree rebase in progress")
 	}
 }
 
