@@ -182,10 +182,11 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 			indent += "  "
 		}
 
-		marker, label := "○", name
+		safeName := sanitizeForTerminal(name)
+		marker, label := "○", safeName
 		if name == cur {
 			marker = paint("◉", ansiBold, ansiGreen)
-			label = paint(name, ansiBold, ansiGreen)
+			label = paint(safeName, ansiBold, ansiGreen)
 		}
 		line := fmt.Sprintf("%s%s %s", indent, marker, label)
 
@@ -194,13 +195,14 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 				line += " " + paint("(needs restack)", ansiYellow)
 			}
 			if subject, ok := topSubject(b, tips, subjects, graph); ok {
-				line += "  " + paint(subject, ansiDim)
+				line += "  " + paint(sanitizeForTerminal(subject), ansiDim)
 			}
 		}
 		if wt, ok := wtInfo[name]; ok {
-			tag := "(worktree: " + wt.path + ")"
+			safePath := sanitizeForTerminal(wt.path)
+			tag := "(worktree: " + safePath + ")"
 			if wt.dirty {
-				tag = "(worktree: " + wt.path + ", dirty)"
+				tag = "(worktree: " + safePath + ", dirty)"
 			}
 			line += " " + paint(tag, ansiCyan)
 		}

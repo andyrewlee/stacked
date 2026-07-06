@@ -82,9 +82,9 @@ func runUp(args []string) error {
 				Summary  string   `json:"summary"`
 				Children []string `json:"children"`
 			}{cur, "branch point: pick a child with st checkout", names}, func() {
-				out("multiple children of %s; pick one and run \"st checkout <name>\":\n", cur)
+				out("multiple children of %s; pick one and run \"st checkout <name>\":\n", sanitizeForTerminal(cur))
 				for _, name := range names {
-					out("  %s\n", name)
+					out("  %s\n", sanitizeForTerminal(name))
 				}
 			})
 		}

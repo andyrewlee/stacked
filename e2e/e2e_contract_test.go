@@ -157,6 +157,19 @@ func TestNavigationEdges(t *testing.T) {
 	wantStderrContains(t, res, "at least 1")
 }
 
+func TestLogEscapesControlBytesInSubject(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "evil.txt", "evil\n", "evil\x1b[2Ksubject")
+
+	res := r.stOK("log")
+	if strings.Contains(res.stdout, "\x1b") {
+		t.Fatalf("log output contains a raw escape byte:\n%q", res.stdout)
+	}
+	wantStdoutContains(t, res, `evil\x1b[2Ksubject`)
+}
+
 // TestExitCodeContract maps each documented exit code (docs/AGENT.md) to a
 // triggering scenario, guarding the exit-code contract against drift (LOOP-3).
 func TestExitCodeContract(t *testing.T) {

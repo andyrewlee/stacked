@@ -42,7 +42,7 @@ func runInit(args []string) error {
 	// with a low-level message.
 	if existing, err := stack.Load(); err == nil {
 		return emit(asJSON, initResult{Trunk: existing.Trunk, AlreadyInitialized: true}, func() {
-			out("stacked already initialized (trunk: %s)\n", existing.Trunk)
+			out("stacked already initialized (trunk: %s)\n", sanitizeForTerminal(existing.Trunk))
 		})
 	} else if !errors.Is(err, stack.ErrNotInitialized) {
 		return err
@@ -60,7 +60,7 @@ func runInit(args []string) error {
 	}
 
 	return emit(asJSON, initResult{Trunk: trunk, Initialized: true}, func() {
-		out("initialized stacked (trunk: %s)\n", trunk)
+		out("initialized stacked (trunk: %s)\n", sanitizeForTerminal(trunk))
 		out("next: st create <name>\n")
 	})
 }

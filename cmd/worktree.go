@@ -149,7 +149,9 @@ func worktreeRemove(branch string, asJSON bool) error {
 		Branch  string `json:"branch"`
 		Removed string `json:"removed"`
 	}{branch, wt.Path}
-	return emit(asJSON, payload, func() { out("removed worktree %s (%s)\n", branch, wt.Path) })
+	return emit(asJSON, payload, func() {
+		out("removed worktree %s (%s)\n", sanitizeForTerminal(branch), sanitizeForTerminal(wt.Path))
+	})
 }
 
 // worktreeList renders every worktree linked to the repository.
@@ -168,7 +170,7 @@ func worktreeList(asJSON bool) error {
 			case label == "":
 				label = "(detached)"
 			}
-			out("%s\t%s\n", label, wt.Path)
+			out("%s\t%s\n", sanitizeForTerminal(label), sanitizeForTerminal(wt.Path))
 		}
 	})
 }
@@ -182,9 +184,13 @@ func emitWorktree(asJSON bool, branch, path string, copied []string, summary str
 		Summary string   `json:"summary"`
 	}{branch, path, copied, summary}
 	return emit(asJSON, payload, func() {
-		out("%s: %s -> %s\n", summary, branch, path)
+		out("%s: %s -> %s\n", summary, sanitizeForTerminal(branch), sanitizeForTerminal(path))
 		if len(copied) > 0 {
-			out("copied: %s\n", joinNames(copied))
+			safeCopied := make([]string, 0, len(copied))
+			for _, name := range copied {
+				safeCopied = append(safeCopied, sanitizeForTerminal(name))
+			}
+			out("copied: %s\n", joinNames(safeCopied))
 		}
 	})
 }

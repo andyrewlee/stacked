@@ -86,13 +86,13 @@ func runValidate(args []string) error {
 		if len(problems) > 0 {
 			out("problems:\n")
 			for _, p := range problems {
-				out("  - %s\n", p)
+				out("  - %s\n", sanitizeForTerminal(p))
 			}
 		}
 		if len(warnings) > 0 {
 			out("warnings:\n")
 			for _, w := range warnings {
-				out("  - %s\n", w)
+				out("  - %s\n", sanitizeForTerminal(w))
 			}
 		}
 	}); err != nil {
