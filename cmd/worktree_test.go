@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"stacked/internal/git"
 )
 
 func TestParseIncludePatterns(t *testing.T) {
@@ -18,6 +20,36 @@ func TestParseIncludePatterns(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("entry[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
+	orig := cachedWorktrees
+	t.Cleanup(func() { cachedWorktrees = orig })
+
+	cached := []git.Worktree{
+		{Path: "/repo-z", Branch: "main", Head: "111"},
+		{Path: "/repo-a", Branch: "feat-a", Head: "222"},
+	}
+	cachedWorktrees = func() ([]git.Worktree, error) {
+		return cached, nil
+	}
+
+	out := captureStdout(t, func() {
+		if err := worktreeList(false); err != nil {
+			t.Fatalf("worktreeList: %v", err)
+		}
+	})
+	if !strings.HasPrefix(out, "feat-a\t/repo-a\nmain\t/repo-z\n") {
+		t.Fatalf("worktreeList text output = %q, want sorted by path", out)
+	}
+
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees after list: %v", err)
+	}
+	if wts[0].Path != "/repo-z" || wts[0].Branch != "main" {
+		t.Fatalf("worktreeList mutated cached order: %+v", wts)
 	}
 }
 
