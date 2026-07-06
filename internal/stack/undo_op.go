@@ -3,6 +3,7 @@ package stack
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -46,9 +47,9 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		sort.Strings(extra)
 		for _, name := range extra {
-			if s != nil {
-				if err := s.releaseOwnedWorktree(env, name); err != nil {
-					return nil, fmt.Errorf("releasing worktree for branch %q created by undone command: %w", name, err)
+			if path := entry.CreatedWorktrees[name]; path != "" {
+				if err := removeCreatedWorktree(env, name, path); err != nil {
+					return nil, fmt.Errorf("removing worktree for branch %q created by undone command: %w", name, err)
 				}
 			}
 			target := prev.Trunk
@@ -135,6 +136,40 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		Restacked: names,
 		Notes:     []string{entry.Label},
 	}, nil
+}
+
+func removeCreatedWorktree(env Env, branch, path string) error {
+	wts, err := env.Git.Worktrees()
+	if err != nil {
+		return err
+	}
+	owner, ok := LinkedOwnerOf(wts, branch)
+	if !ok {
+		return nil
+	}
+	if !sameWorktreePath(owner.Path, path) {
+		return fmt.Errorf("branch is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", owner.Path, path)
+	}
+	clean, err := env.Git.IsCleanIn(owner.Path)
+	if err != nil {
+		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	if !clean {
+		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
+	}
+	if err := env.Git.WorktreeRemove(owner.Path, false); err != nil {
+		return fmt.Errorf("removing worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	return nil
+}
+
+func sameWorktreePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 func checkoutBlockedByLocalChanges(err error) bool {

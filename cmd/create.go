@@ -85,6 +85,9 @@ func runCreateWorktree(name string, asJSON bool) error {
 		}
 		return err
 	}
+	if err := stack.SetLastUndoCreatedWorktrees(map[string]string{name: created.Path}); err != nil {
+		return err
+	}
 	if err := s.Save(); err != nil {
 		return fmt.Errorf("saving stack state: %w", err)
 	}

@@ -99,7 +99,7 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) (
 	if err != nil {
 		return "", nil
 	}
-	if !undoEntryCreatedBranch(entry, s, cur) {
+	if !undoEntryCreatedWorktree(entry, cur) {
 		return "", nil
 	}
 	wts, err := worktrees()
@@ -134,25 +134,9 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) (
 	return dest, nil
 }
 
-func undoEntryCreatedBranch(entry *stack.UndoEntry, s *stack.State, name string) bool {
+func undoEntryCreatedWorktree(entry *stack.UndoEntry, name string) bool {
 	if entry == nil || name == "" {
 		return false
 	}
-	for _, created := range entry.CreatedBranches {
-		if created == name {
-			return true
-		}
-	}
-	if entry.LocalBranches == nil {
-		return false
-	}
-	if s == nil || !s.IsTracked(name) {
-		return false
-	}
-	for _, existed := range entry.LocalBranches {
-		if existed == name {
-			return false
-		}
-	}
-	return true
+	return entry.CreatedWorktrees[name] != ""
 }

@@ -91,6 +91,7 @@ func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
 		t.Fatalf("create in worktree prep: %v", err)
 	}
 	f.addWorktree("/wt/b", "b")
+	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
 
 	if _, err := Undo(env, s, entry); err != nil {
 		t.Fatalf("undo: %v", err)
@@ -102,6 +103,27 @@ func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
 		t.Fatal("undo left the created branch worktree behind")
 	}
 	assertUndoRestored(t, f, s, entry)
+}
+
+func TestUndoCreateDoesNotRemoveUnrecordedLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/preexisting", "b")
+
+	if _, err := Undo(env, s, entry); err == nil {
+		t.Fatal("undo succeeded after created branch moved into an unrecorded linked worktree; want delete failure")
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("undo removed an unrecorded linked worktree")
+	}
 }
 
 func TestUndoCurrentCreatedBranchDetachesWhenParentCheckedOutElsewhere(t *testing.T) {
@@ -140,6 +162,7 @@ func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 		t.Fatalf("create in worktree prep: %v", err)
 	}
 	f.addWorktree("/wt/b", "b")
+	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
 	if err := f.Checkout("main"); err != nil {
 		t.Fatal(err)
 	}
