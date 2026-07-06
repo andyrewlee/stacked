@@ -1326,6 +1326,75 @@ func TestSyncPrunesMerged(t *testing.T) {
 	r.stOK("validate")
 }
 
+func TestSyncUndoRestoresPrunedBranchesAndTrunk(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+
+	preFeatA := r.rev("feat-a")
+	preFeatB := r.rev("feat-b")
+	r.stOK("checkout", "main")
+	preTrunk := r.rev("main")
+
+	r.git("merge", "-q", "--no-ff", "feat-a", "-m", "merge feat-a")
+	if r.rev("main") == preTrunk {
+		t.Fatal("test setup did not advance local main before push")
+	}
+	r.git("push", "-q", "origin", "main")
+	r.git("reset", "--hard", preTrunk)
+	if got := r.rev("main"); got != preTrunk {
+		t.Fatalf("local main after reset = %s, want pre-sync trunk %s", got, preTrunk)
+	}
+
+	res := r.stOK("sync")
+	wantStdoutContains(t, res, "sync complete")
+	wantStdoutContains(t, res, "deleted: feat-a")
+	if r.branchExists("feat-a") {
+		t.Fatal("feat-a should be pruned after sync")
+	}
+	if got := r.rev("main"); got == preTrunk {
+		t.Fatalf("sync did not fast-forward main from %s", preTrunk)
+	}
+
+	res = r.stOK("undo")
+	wantStdoutContains(t, res, "undid: sync")
+	if !r.branchExists("feat-a") {
+		t.Fatal("undo did not restore pruned feat-a")
+	}
+	if got := r.rev("feat-a"); got != preFeatA {
+		t.Fatalf("feat-a after undo = %s, want %s", got, preFeatA)
+	}
+	if got := r.rev("main"); got != preTrunk {
+		t.Fatalf("main after undo = %s, want pre-sync trunk %s", got, preTrunk)
+	}
+	if got := r.rev("feat-b"); got != preFeatB {
+		t.Fatalf("feat-b after undo = %s, want %s", got, preFeatB)
+	}
+
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("log --json invalid after undo: %v\n%s", err, out)
+	}
+	a := findNode(&root, "feat-a")
+	if a == nil || a.Parent != "main" {
+		t.Fatalf("feat-a after undo = %+v, want parent main\n%s", a, out)
+	}
+	b := findNode(&root, "feat-b")
+	if b == nil || b.Parent != "feat-a" {
+		t.Fatalf("feat-b after undo = %+v, want parent feat-a\n%s", b, out)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()
