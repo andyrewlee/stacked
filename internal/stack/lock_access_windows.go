@@ -5,6 +5,7 @@ package stack
 import (
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -14,7 +15,15 @@ const (
 )
 
 func retryableLockFileAccess(err error) bool {
-	return errors.Is(err, os.ErrPermission) ||
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrPermission) ||
 		errors.Is(err, windowsAccessDenied) ||
-		errors.Is(err, windowsSharingViolation)
+		errors.Is(err, windowsSharingViolation) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "access is denied") ||
+		strings.Contains(msg, "sharing violation")
 }
