@@ -328,10 +328,14 @@ func joinTerminalNames(names []string) string {
 // navEmit renders the result of a navigation command (the branch HEAD ended on
 // plus a human summary) as JSON or text.
 func navEmit(asJSON bool, branch, summary string) error {
+	return navEmitText(asJSON, branch, summary, sanitizeForTerminal(summary))
+}
+
+func navEmitText(asJSON bool, branch, summary, textSummary string) error {
 	return emit(asJSON, struct {
 		Branch  string `json:"branch"`
 		Summary string `json:"summary"`
-	}{branch, summary}, func() { out("%s\n", sanitizeForTerminal(summary)) })
+	}{branch, summary}, func() { out("%s\n", textSummary) })
 }
 
 // parseArgs parses args with fs after moving flag arguments ahead of positional

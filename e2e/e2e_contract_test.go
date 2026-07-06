@@ -162,12 +162,16 @@ func TestLogEscapesControlBytesInSubject(t *testing.T) {
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "evil.txt", "evil\n", "evil\x1b[2Ksubject")
+	r.create("feat-b", "raw-c1.txt", "raw-c1\n", string([]byte{'r', 'a', 'w', 0x9b, 'c', 's', 'i'}))
 
 	res := r.stOK("log")
-	if strings.Contains(res.stdout, "\x1b") {
-		t.Fatalf("log output contains a raw escape byte:\n%q", res.stdout)
+	for _, b := range []byte{0x1b, 0x9b} {
+		if strings.Contains(res.stdout, string([]byte{b})) {
+			t.Fatalf("log output contains raw control byte 0x%02x:\n%q", b, res.stdout)
+		}
 	}
 	wantStdoutContains(t, res, `evil\x1b[2Ksubject`)
+	wantStdoutContains(t, res, `raw\x9bcsi`)
 }
 
 // TestExitCodeContract maps each documented exit code (docs/AGENT.md) to a

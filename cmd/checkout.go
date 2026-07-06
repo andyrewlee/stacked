@@ -60,7 +60,7 @@ func runCheckout(args []string) error {
 			safeDest := sanitizeForTerminal(dest)
 			switch {
 			case teleportedNoShim:
-				out("%s\n", sanitizeForTerminal(teleportHint(name, dest)))
+				out("%s\n", teleportHintForTerminal(name, dest))
 			case dest != "":
 				out("switched to %s (worktree: %s)\n", safeName, safeDest)
 			default:

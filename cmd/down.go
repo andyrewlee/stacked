@@ -32,7 +32,7 @@ func runDown(args []string) error {
 	}
 
 	if cur == s.Trunk {
-		return navEmit(asJSON, s.Trunk, fmt.Sprintf("already at trunk: %s", s.Trunk))
+		return navEmitText(asJSON, s.Trunk, alreadyAtSummary("already at trunk", s.Trunk), alreadyAtSummaryForTerminal("already at trunk", s.Trunk))
 	}
 
 	for i := 0; i < n; i++ {
@@ -50,5 +50,5 @@ func runDown(args []string) error {
 	if err != nil {
 		return err
 	}
-	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
+	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), terminalSummary("switched to", cur, dest))
 }
