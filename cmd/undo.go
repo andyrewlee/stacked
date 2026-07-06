@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"stacked/internal/git"
 	"stacked/internal/stack"
@@ -59,6 +60,9 @@ func runUndo(args []string) error {
 		s = nil
 		env.Save = func() error { return stack.RestoreState(entry.State) }
 	}
+	if err := prepareUndoCurrentCreatedWorktree(entry); err != nil {
+		return err
+	}
 
 	res, err := stack.Undo(env, s, entry)
 	if err != nil {
@@ -84,4 +88,54 @@ func runUndo(args []string) error {
 		}
 		out("note: your working tree was not modified; run `git status` to review.\n")
 	})
+}
+
+func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry) error {
+	cur, err := currentBranch()
+	if err != nil {
+		return nil
+	}
+	if !undoEntryCreatedBranch(entry, cur) {
+		return nil
+	}
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	owner, ok := stack.LinkedOwnerOf(wts, cur)
+	if !ok {
+		return nil
+	}
+	main, ok := stack.MainWorktree(wts)
+	if !ok || main.Path == "" {
+		return fmt.Errorf("cannot undo creation of current worktree branch %q: main worktree not found", cur)
+	}
+	if !shimActive() {
+		return fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
+	}
+	if err := os.Chdir(main.Path); err != nil {
+		return fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
+	}
+	writeCDDirective(main.Path)
+	return nil
+}
+
+func undoEntryCreatedBranch(entry *stack.UndoEntry, name string) bool {
+	if entry == nil || name == "" {
+		return false
+	}
+	for _, created := range entry.CreatedBranches {
+		if created == name {
+			return true
+		}
+	}
+	if entry.LocalBranches == nil {
+		return false
+	}
+	for _, existed := range entry.LocalBranches {
+		if existed == name {
+			return false
+		}
+	}
+	return true
 }

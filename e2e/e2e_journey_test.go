@@ -221,6 +221,43 @@ func TestCreateWorktreeFlagJourney(t *testing.T) {
 	}
 }
 
+func TestUndoCreateWorktreeFromCreatedWorktreeWithShim(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	out := r.stOK("create", "feat-a", "--worktree", "--json").stdout
+	var created struct {
+		Worktree string `json:"worktree"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode create --worktree json: %v\n%s", err, out)
+	}
+	directive := filepath.Join(t.TempDir(), "cd")
+	cmd := exec.Command(stBin, "undo")
+	cmd.Dir = created.Worktree
+	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
+	if undoOut, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("st undo from created worktree: %v\n%s", err, undoOut)
+	}
+	got, err := os.ReadFile(directive)
+	if err != nil {
+		t.Fatalf("read cd directive: %v", err)
+	}
+	gotResolved, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got)))
+	wantResolved, _ := filepath.EvalSymlinks(r.dir)
+	if gotResolved != wantResolved {
+		t.Fatalf("undo cd directive = %q, want main worktree %q", got, r.dir)
+	}
+	if r.branchExists("feat-a") {
+		t.Fatal("undo left feat-a branch behind")
+	}
+	if _, err := os.Stat(created.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("undo left created worktree at %q: %v", created.Worktree, err)
+	}
+	r.stOK("validate")
+}
+
 func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
