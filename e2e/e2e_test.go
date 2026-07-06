@@ -128,6 +128,14 @@ func cleanEnv(home string) []string {
 		"GIT_PAGER=cat",
 		"GIT_EDITOR=true",
 	}
+	if runtime.GOOS == "windows" {
+		env = append(env, "USERPROFILE="+home)
+		for _, key := range []string{"COMSPEC", "PATHEXT", "SYSTEMROOT", "WINDIR"} {
+			if v := os.Getenv(key); v != "" {
+				env = append(env, key+"="+v)
+			}
+		}
+	}
 	// Preserve the Go toolchain location for the one-time build path; harmless
 	// otherwise.
 	if v := os.Getenv("GOPATH"); v != "" {
