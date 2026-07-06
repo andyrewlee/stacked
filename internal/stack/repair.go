@@ -78,9 +78,10 @@ func (s *State) Inconsistencies(tips map[string]string) []Problem {
 // engine operation over the Git port it is visible to the invariant model.
 func Repair(env Env, s *State) (*OpResult, error) {
 	g := env.Git
-	// One scoped tip read answers every branch-exists and tip question for the
-	// tracked forest, instead of a show-ref/rev-parse spawn per branch.
-	tips, err := g.TipsFor(stateTipNames(s))
+	// Repair is a recovery path: tracked names may already be corrupt enough
+	// that they cannot be safely passed back to git. Read all branch tips and
+	// classify invalid tracked names as missing so repair can remove them.
+	tips, err := g.Tips()
 	if err != nil {
 		return nil, err
 	}
