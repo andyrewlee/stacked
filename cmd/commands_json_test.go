@@ -400,6 +400,88 @@ func TestInitJSONFreshAndRepeatedShape(t *testing.T) {
 	}
 }
 
+// --- create --worktree -----------------------------------------------------
+
+func TestCreateWorktreeJSONShapeAndState(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	write(t, ".gitignore", "secret.env\n")
+	write(t, "secret.env", "TOKEN=1\n")
+	write(t, ".worktreeinclude", "secret.env\n")
+	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
+	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
+	parentTip := mustRun(t, "git", "rev-parse", "main")
+
+	type createWorktreeJSON struct {
+		Branch   string   `json:"branch"`
+		Parent   string   `json:"parent"`
+		Worktree string   `json:"worktree"`
+		Copied   []string `json:"copied"`
+		Switched bool     `json:"switched"`
+		Summary  string   `json:"summary"`
+	}
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-x", "--worktree", "--json"}); err != nil {
+			t.Fatalf("create feat-x --worktree --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "create --worktree --json", out, "branch", "parent", "worktree", "copied", "switched", "summary")
+	var created createWorktreeJSON
+	decodeStrictJSON(t, "create --worktree --json", out, &created)
+	if created.Branch != "feat-x" || created.Parent != "main" || created.Worktree == "" {
+		t.Fatalf("create --worktree payload = %+v", created)
+	}
+	if created.Switched {
+		t.Fatalf("create --worktree switched = true without the shell shim")
+	}
+	if created.Summary != "Created feat-x on top of main" {
+		t.Fatalf("create --worktree summary = %q", created.Summary)
+	}
+	if want := []string{"secret.env"}; !reflect.DeepEqual(created.Copied, want) {
+		t.Fatalf("create --worktree copied = %v, want %v", created.Copied, want)
+	}
+	if cur := curBranch(t); cur != "main" {
+		t.Fatalf("current branch = %q, want main", cur)
+	}
+	if got := mustRun(t, "git", "rev-parse", "feat-x"); got != parentTip {
+		t.Fatalf("feat-x tip = %s, want parent tip %s", got, parentTip)
+	}
+	if b, ok := stateT(t).Get("feat-x"); !ok || b.Parent != "main" || b.ParentSHA != parentTip {
+		t.Fatalf("tracked feat-x = %+v, ok=%v; want parent main at %s", b, ok, parentTip)
+	}
+	if _, err := os.Stat(filepath.Join(created.Worktree, "secret.env")); err != nil {
+		t.Fatalf("gitignored .worktreeinclude file not copied into created worktree: %v", err)
+	}
+}
+
+func TestCreateWorktreeRejectsCommitFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"feat-x", "--worktree", "-m", "msg"},
+		{"feat-x", "--worktree", "-a"},
+	} {
+		newRepo(t)
+		mustInit(t)
+		err := runCreate(args)
+		if err == nil || err.Error() != createWorktreeCommitFlagErr {
+			t.Fatalf("runCreate(%v) error = %v, want %q", args, err, createWorktreeCommitFlagErr)
+		}
+	}
+}
+
+func TestCreateWorktreeRejectsExistingBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "branch", "feat-x", "main")
+
+	err := runCreate([]string{"feat-x", "--worktree"})
+	want := `branch "feat-x" already exists`
+	if err == nil || err.Error() != want {
+		t.Fatalf("create existing --worktree error = %v, want %q", err, want)
+	}
+}
+
 // --- worktree --------------------------------------------------------------
 
 func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {

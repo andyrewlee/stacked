@@ -20,6 +20,7 @@ type Git interface {
 	Checkout(name string) error
 	CheckoutDetach(ref string) error
 	CreateBranch(name string) error
+	CreateBranchAt(name, ref string) error
 	DeleteBranch(name string, force bool) error
 	ForceBranch(name, ref string) error
 	UpdateRef(ref, sha string) error

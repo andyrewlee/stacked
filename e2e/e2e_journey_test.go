@@ -157,6 +157,70 @@ func TestWorktreeCommand(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeFlagJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	parentTip := r.rev("feat-a")
+
+	out := r.stOK("create", "feat-b", "--worktree", "--json").stdout
+	var created struct {
+		Branch   string `json:"branch"`
+		Parent   string `json:"parent"`
+		Worktree string `json:"worktree"`
+		Switched bool   `json:"switched"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode create --worktree json: %v\n%s", err, out)
+	}
+	if created.Branch != "feat-b" || created.Parent != "feat-a" || created.Worktree == "" {
+		t.Fatalf("unexpected create --worktree result: %+v", created)
+	}
+	if created.Switched {
+		t.Fatalf("create --worktree switched without shell shim: %+v", created)
+	}
+	if cur := r.currentBranch(); cur != "feat-a" {
+		t.Fatalf("main worktree branch = %q, want feat-a", cur)
+	}
+	if got := r.rev("feat-b"); got != parentTip {
+		t.Fatalf("feat-b tip = %s, want parent tip %s", got, parentTip)
+	}
+
+	var root logNode
+	if err := json.Unmarshal([]byte(r.stOK("log", "--json").stdout), &root); err != nil {
+		t.Fatalf("decode log after create --worktree: %v", err)
+	}
+	node := findNode(&root, "feat-b")
+	if node == nil {
+		t.Fatalf("feat-b missing from log:\n%s", r.stOK("log", "--json").stdout)
+	}
+	gotResolved, _ := filepath.EvalSymlinks(node.Worktree)
+	wantResolved, _ := filepath.EvalSymlinks(created.Worktree)
+	if gotResolved != wantResolved {
+		t.Fatalf("feat-b log node = %+v, want worktree %q", node, created.Worktree)
+	}
+
+	if err := os.WriteFile(filepath.Join(created.Worktree, "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatalf("write in created worktree: %v", err)
+	}
+	r.gitIn(created.Worktree, "add", "b.txt")
+	r.gitIn(created.Worktree, "commit", "-q", "-m", "b")
+
+	r.writeFile("a2.txt", "a2\n")
+	r.git("add", "a2.txt")
+	r.git("commit", "-q", "-m", "advance feat-a")
+	r.stOK("restack")
+
+	if !r.isAncestor("feat-a", "feat-b") {
+		t.Fatal("feat-b was not restacked onto the advanced feat-a")
+	}
+	if cur := r.currentBranch(); cur != "feat-a" {
+		t.Fatalf("main worktree branch = %q after restack, want feat-a", cur)
+	}
+}
+
 func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)

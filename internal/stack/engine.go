@@ -209,6 +209,35 @@ func Create(env Env, s *State, name, message string, all bool) (*OpResult, error
 	return &OpResult{Summary: fmt.Sprintf("Created %s on top of %s", name, cur), Branch: name}, nil
 }
 
+// CreateInWorktreePrep creates and tracks a new branch at the current branch's
+// tip without switching the current worktree to it. The command layer can then
+// materialize a dedicated linked worktree for the new branch.
+func CreateInWorktreePrep(env Env, s *State, name string) (*OpResult, error) {
+	g := env.Git
+	if g.BranchExists(name) {
+		return nil, fmt.Errorf("branch %q already exists", name)
+	}
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	if cur != s.Trunk && !s.IsTracked(cur) {
+		return nil, fmt.Errorf("current branch %q is not the trunk or a tracked branch", cur)
+	}
+	parentSHA, err := g.RevParse(branchTipRef(cur))
+	if err != nil {
+		return nil, fmt.Errorf("resolving parent %q: %w", cur, err)
+	}
+	if err := g.CreateBranchAt(name, parentSHA); err != nil {
+		return nil, fmt.Errorf("creating branch %q: %w", name, err)
+	}
+	s.Track(name, cur, parentSHA)
+	if err := env.save(); err != nil {
+		return nil, err
+	}
+	return &OpResult{Summary: fmt.Sprintf("Created %s on top of %s", name, cur), Branch: name}, nil
+}
+
 // Modify amends (or, with commit, adds) a commit on the current branch and
 // restacks its descendants onto the new tip.
 func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, error) {
