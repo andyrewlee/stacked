@@ -1272,3 +1272,20 @@ func TestPruneMergedBatchesMergedSet(t *testing.T) {
 		t.Fatal("unmerged branch c should remain tracked")
 	}
 }
+
+func TestPruneMergedErrorsWhenTrackedBranchTipMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	delete(f.branches, "a")
+
+	_, err := PruneMerged(env, s)
+	if err == nil {
+		t.Fatal("PruneMerged with a missing tracked branch returned nil error")
+	}
+	if !strings.Contains(err.Error(), `tracked branch "a" does not exist`) {
+		t.Fatalf("PruneMerged error = %v, want missing branch context", err)
+	}
+	if !s.IsTracked("a") {
+		t.Fatal("failed prune untracked missing branch a")
+	}
+}
