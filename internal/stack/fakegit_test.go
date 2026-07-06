@@ -30,19 +30,21 @@ type fakeGit struct {
 	// conflict modeling: a branch in conflictNext stops mid-rebase the next time
 	// it is rebased, mirroring a real merge conflict that the caller resolves with
 	// RebaseContinue.
-	conflictNext   map[string]bool
-	rebaseActive   bool
-	rebaseRestall  bool // when set, RebaseContinue fails and leaves the rebase paused
-	rebaseBranch   string
-	rebaseNewBase  string
-	rebaseOldBase  string
-	rebaseAbortErr error
-	staged         bool
-	clean          bool
-	checkoutErr    map[string]error
-	deleteErr      map[string]error
-	rebaseErr      map[string]error
-	commitErr      error
+	conflictNext    map[string]bool
+	rebaseActive    bool
+	rebaseRestall   bool // when set, RebaseContinue fails and leaves the rebase paused
+	rebaseBranch    string
+	rebaseNewBase   string
+	rebaseOldBase   string
+	rebaseAbortErr  error
+	staged          bool
+	clean           bool
+	checkoutErr     map[string]error
+	deleteErr       map[string]error
+	rebaseErr       map[string]error
+	commitErr       error
+	isAncestorCalls int
+	mergedIntoCalls int
 	// detachedAt is the commit a CheckoutDetach left HEAD on ("" when HEAD is
 	// on a branch).
 	detachedAt string
@@ -166,6 +168,7 @@ func (g *tipReadSpyGit) TipsFor(names []string) (map[string]string, error) {
 }
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
+	f.mergedIntoCalls++
 	target := f.resolve(ref)
 	if target == "" {
 		return nil, fmt.Errorf("unknown revision %q", ref)
@@ -554,6 +557,7 @@ func (f *fakeGit) RebaseContinue() error {
 }
 
 func (f *fakeGit) IsAncestor(ancestor, descendant string) (bool, error) {
+	f.isAncestorCalls++
 	a := f.resolve(ancestor)
 	d := f.resolve(descendant)
 	if a == "" || d == "" {

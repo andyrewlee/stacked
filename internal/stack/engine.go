@@ -910,15 +910,25 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 	g := env.Git
 	trunk := s.Trunk
 	var deleted []string
-	for _, name := range sortedBranchNames(s) {
+	names := sortedBranchNames(s)
+	tips, err := g.TipsFor(names)
+	if err != nil {
+		return nil, fmt.Errorf("read tracked branch tips: %w", err)
+	}
+	for _, name := range names {
+		if _, ok := tips[name]; !ok {
+			return nil, fmt.Errorf("tracked branch %q does not exist", name)
+		}
+	}
+	merged, err := g.MergedInto(trunk)
+	if err != nil {
+		return nil, fmt.Errorf("list branches merged into %q: %w", trunk, err)
+	}
+	for _, name := range names {
 		if _, ok := s.Get(name); !ok {
 			continue
 		}
-		merged, err := g.IsAncestor(name, trunk)
-		if err != nil {
-			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunk, err)
-		}
-		if !merged {
+		if !merged[name] {
 			continue
 		}
 		// A merged branch living in another worktree can't be deleted by git until
