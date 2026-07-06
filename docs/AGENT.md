@@ -83,9 +83,12 @@ message.
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
 - **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }`. `st shell install` emits a shell script, not JSON.
 - **`submit --json`** — one shape for every outcome:
-  `{ "remote", "dryRun", "pushed": [], "repoURL", "summary", "failed" }`
-  (`repoURL`, `summary`, and `failed` are `omitempty`; from trunk, `pushed` is
-  empty and `summary` explains why). On a partial push failure the result is the
+  `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "summary", "failed" }`
+  (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
+  `pushed` is empty and `summary` explains why). On successful non-trunk submits,
+  `prHints` lists `{ "head", "base", "compareURL" }` objects so each stacked PR
+  targets its stack parent; `compareURL` is present for known compare URL shapes
+  such as github.com and gitlab.com. On a partial push failure the result is the
   same shape carrying `{ "remote", "dryRun", "pushed", "failed" }`: `failed` names the
   branch whose push failed, the branches in `pushed` were already pushed to the
   remote, and the process still exits non-zero with the error envelope on stderr.

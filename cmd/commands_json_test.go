@@ -585,11 +585,12 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
-	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed")
+	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed", "prHints")
 	type submitDryRunJSON struct {
-		Remote string   `json:"remote"`
-		DryRun bool     `json:"dryRun"`
-		Pushed []string `json:"pushed"`
+		Remote  string   `json:"remote"`
+		DryRun  bool     `json:"dryRun"`
+		Pushed  []string `json:"pushed"`
+		PRHints []prHint `json:"prHints"`
 	}
 	var got submitDryRunJSON
 	decodeStrictJSON(t, "submit --dry-run --json", out, &got)
@@ -601,6 +602,10 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 	}
 	if want := []string{"feat-a", "feat-b"}; !reflect.DeepEqual(got.Pushed, want) {
 		t.Fatalf("dry-run pushed = %v, want %v", got.Pushed, want)
+	}
+	wantHints := []prHint{{Head: "feat-a", Base: "main"}, {Head: "feat-b", Base: "feat-a"}}
+	if !reflect.DeepEqual(got.PRHints, wantHints) {
+		t.Fatalf("dry-run prHints = %+v, want %+v", got.PRHints, wantHints)
 	}
 	if refs := mustRun(t, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/heads"); refs != "" {
 		t.Fatalf("dry-run created remote refs:\n%s", refs)
@@ -650,6 +655,58 @@ func TestSubmitJSONSingleShape(t *testing.T) {
 	}
 	if trunk.Pushed == nil || len(trunk.Pushed) != 0 {
 		t.Fatalf("trunk-case pushed = %v, want present-but-empty", trunk.Pushed)
+	}
+}
+
+func TestSubmitPRHintsGitHubJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@github.com:owner/repo.git")
+	mustCreate(t, "feat/slash", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit pr hints", out, &got)
+	want := []prHint{
+		{
+			Head:       "feat/slash",
+			Base:       "main",
+			CompareURL: "https://github.com/owner/repo/compare/main...feat%2Fslash",
+		},
+		{
+			Head:       "feat-b",
+			Base:       "feat/slash",
+			CompareURL: "https://github.com/owner/repo/compare/feat%2Fslash...feat-b",
+		},
+	}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
+	}
+}
+
+func TestSubmitPRHintsUnknownRemoteJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit unknown remote pr hints", out, &got)
+	want := []prHint{{Head: "feat-a", Base: "main"}}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
 	}
 }
 
