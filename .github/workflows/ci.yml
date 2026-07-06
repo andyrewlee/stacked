@@ -72,6 +72,9 @@ jobs:
     name: ci (windows, tests only)
     runs-on: windows-latest
     steps:
+      - name: Disable checkout CRLF conversion
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
