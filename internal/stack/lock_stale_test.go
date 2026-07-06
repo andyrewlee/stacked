@@ -3,9 +3,16 @@ package stack
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func isBusyLockErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "another st command is running in this repository")
+}
 
 func TestRemoveLockFileIfContent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lock.excl")
@@ -202,5 +209,105 @@ func TestAcquireExclLockReleaseLeavesReplacement(t *testing.T) {
 	}
 	if string(got) != other {
 		t.Fatalf("release removed or altered another owner's lock: %q", got)
+	}
+}
+
+func TestAcquireExclLockMutualExclusion(t *testing.T) {
+	dir := t.TempDir()
+	const goroutines = 8
+	const iterations = 25
+
+	var holders atomic.Int32
+	errCh := make(chan string, goroutines*iterations*2)
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				var release func()
+				for {
+					var err error
+					release, err = acquireExclLock(dir)
+					if err == nil {
+						break
+					}
+					if !isBusyLockErr(err) {
+						errCh <- err.Error()
+						return
+					}
+					time.Sleep(10 * time.Microsecond)
+				}
+				if got := holders.Add(1); got != 1 {
+					errCh <- "concurrent lock holders observed"
+				}
+				time.Sleep(100 * time.Microsecond)
+				if got := holders.Add(-1); got != 0 {
+					errCh <- "holder count did not return to zero"
+				}
+				release()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for msg := range errCh {
+		t.Error(msg)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lock.excl")); !os.IsNotExist(err) {
+		t.Fatalf("lock.excl should be removed after all releases, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lock.reclaim")); !os.IsNotExist(err) {
+		t.Fatalf("lock.reclaim should be removed after all releases, stat err = %v", err)
+	}
+}
+
+func TestStaleLockSingleReclaimer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lock.excl")
+	dead := lockFileContent(999999999, time.Now(), "dead")
+	if err := os.WriteFile(path, []byte(dead), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 8
+	start := make(chan struct{})
+	type result struct {
+		release func()
+		err     error
+	}
+	results := make(chan result, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			<-start
+			release, err := acquireExclLock(dir)
+			results <- result{release: release, err: err}
+		}()
+	}
+	close(start)
+
+	var releases []func()
+	for i := 0; i < goroutines; i++ {
+		res := <-results
+		switch {
+		case res.err == nil:
+			releases = append(releases, res.release)
+		case isBusyLockErr(res.err):
+		default:
+			t.Fatalf("unexpected acquire error: %v", res.err)
+		}
+	}
+	if len(releases) != 1 {
+		for _, release := range releases {
+			release()
+		}
+		t.Fatalf("successful reclaimers = %d, want 1", len(releases))
+	}
+	releases[0]()
+	if _, err := os.Stat(filepath.Join(dir, "lock.excl")); !os.IsNotExist(err) {
+		t.Fatalf("lock.excl should be removed after winner release, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lock.reclaim")); !os.IsNotExist(err) {
+		t.Fatalf("lock.reclaim should be removed after reclaim race, stat err = %v", err)
 	}
 }
