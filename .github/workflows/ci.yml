@@ -67,3 +67,54 @@ jobs:
       # exact same command.
       - name: make ci
         run: make ci
+
+  ci-windows:
+    name: ci (windows, tests only)
+    runs-on: windows-latest
+    steps:
+      - name: Disable checkout CRLF conversion
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so `git describe` can produce a version
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
+
+      - name: Resolve Go build cache dir
+        id: gocache
+        shell: bash
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+      - name: Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: gobuild-${{ runner.os }}-go1.26-${{ github.sha }}
+          restore-keys: |
+            gobuild-${{ runner.os }}-go1.26-
+
+      # The lint/fmt/coverage gates are platform-independent and owned by the
+      # ubuntu/macos `make ci` legs. This job exists to execute the
+      # windows-only code (lock_other.go, lock_owner_windows.go) that
+      # vet-cross only compiles.
+      - name: Vet
+        run: go vet ./...
+
+      - name: Engine tests (includes the windows lock path)
+        run: go test ./internal/stack/... -race -count=1
+
+      # e2e is intentionally excluded on Windows for now. The first Windows run
+      # proved the engine/lock path passes, then the full suite hit two
+      # Windows-specific e2e incompatibilities:
+      # - TestWorktreeIncludeCopyFailureRollsBackWorktree relies on unsafe
+      #   destination symlink behavior that does not fail on Windows here.
+      # - TestLogEscapesControlBytesInSubject observes Windows replacing raw C1
+      #   bytes before the CLI can render the expected \x9b escape.
+      - name: Non-e2e package tests
+        run: go test ./cmd/... ./internal/... -race -count=1
