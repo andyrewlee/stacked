@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const malformedLockReclaimAfter = 10 * time.Minute
+const (
+	malformedLockReclaimAfter   = 10 * time.Minute
+	lockFileAccessRetryAttempts = 10
+)
 
 // newLockToken returns an opaque per-acquisition token used to avoid removing
 // another process's replacement lock during release.
@@ -31,11 +34,37 @@ func lockFileContent(pid int, now time.Time, token string) string {
 }
 
 func removeLockFileIfContent(path, want string) bool {
-	content, err := os.ReadFile(path)
-	if err != nil || string(content) != want {
+	for attempt := 0; attempt < lockFileAccessRetryAttempts; attempt++ {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			if retryableLockFileAccess(err) {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			return false
+		}
+		if string(content) != want {
+			return false
+		}
+		if err := os.Remove(path); err == nil {
+			return true
+		} else if !retryableLockFileAccess(err) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+func lockCreateConflict(path string, err error) bool {
+	if errors.Is(err, os.ErrExist) {
+		return true
+	}
+	if !retryableLockFileAccess(err) {
 		return false
 	}
-	return os.Remove(path) == nil
+	_, statErr := os.Stat(path)
+	return statErr == nil
 }
 
 // lockOwnerPID parses the holder pid recorded on a lock file's first line,
@@ -86,7 +115,7 @@ func acquireReclaimGuard(dir string) (func(), bool) {
 				_ = removeLockFileIfContent(path, contents)
 			}, true
 		}
-		if attempt > 0 {
+		if !lockCreateConflict(path, err) || attempt > 0 {
 			return nil, false
 		}
 		existing, readErr := os.ReadFile(path)
@@ -137,7 +166,7 @@ func acquireExclLock(dir string) (func(), error) {
 				_ = removeLockFileIfContent(path, contents)
 			}, nil
 		}
-		if !errors.Is(err, os.ErrExist) {
+		if !lockCreateConflict(path, err) {
 			return nil, fmt.Errorf("open lock file: %w", err)
 		}
 		if attempt > 0 {
