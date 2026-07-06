@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,17 +10,17 @@ import (
 )
 
 // worktreeIncludeFile is the manifest, in the repo root, listing paths to copy
-// into a freshly-created worktree. It uses .gitignore syntax and is adopted
-// verbatim from Claude Code's mechanism: only entries that BOTH match a pattern
-// AND are gitignored are copied, so tracked files (already materialized by `git
-// worktree add`) are never duplicated.
+// into a freshly-created worktree. Each non-comment line is treated as a literal
+// repo-root-relative path, and only listed paths that are gitignored are copied,
+// so tracked files (already materialized by `git worktree add`) are never
+// duplicated.
 const worktreeIncludeFile = ".worktreeinclude"
 
-// copyWorktreeIncludes copies, from srcRoot into dstRoot, every path listed in
-// srcRoot/.worktreeinclude that is also gitignored. It returns the relative
-// paths copied. Missing manifest => nothing to do (nil, nil). The copy prefers a
-// copy-on-write reflink (instant for big dirs like node_modules) and falls back
-// to a plain recursive copy.
+// copyWorktreeIncludes copies, from srcRoot into dstRoot, every literal path
+// listed in srcRoot/.worktreeinclude that is also gitignored. It returns the
+// relative paths copied. Missing manifest => nothing to do (nil, nil). The copy
+// prefers a copy-on-write reflink (instant for big dirs like node_modules) and
+// falls back to a plain recursive copy.
 func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	manifest := filepath.Join(srcRoot, worktreeIncludeFile)
 	data, err := os.ReadFile(manifest)
@@ -29,9 +30,13 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		}
 		return nil, err
 	}
-	patterns := parseIncludePatterns(string(data))
-	if len(patterns) == 0 {
+	entries := parseIncludePatterns(string(data))
+	if len(entries) == 0 {
 		return nil, nil
+	}
+	entries, err = validateWorktreeIncludePaths(entries)
+	if err != nil {
+		return nil, err
 	}
 
 	realRoot, err := filepath.EvalSymlinks(srcRoot)
@@ -40,7 +45,7 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	}
 
 	var copied []string
-	for _, rel := range patterns {
+	for _, rel := range entries {
 		src := filepath.Join(srcRoot, rel)
 		if _, err := os.Lstat(src); err != nil {
 			continue // listed but absent: skip rather than fail the whole create
@@ -55,9 +60,9 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
 			continue // resolves outside the repo, for example through a symlinked dir
 		}
-		dst := filepath.Join(dstRoot, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return copied, err
+		dst, err := prepareSafeDestination(dstRoot, rel)
+		if err != nil {
+			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
 		}
 		if err := reflinkCopy(src, dst); err != nil {
 			return copied, err
@@ -67,10 +72,33 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	return copied, nil
 }
 
+func validateWorktreeIncludePaths(entries []string) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, rel := range entries {
+		cleaned, err := validateWorktreeIncludePath(rel)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cleaned)
+	}
+	return out, nil
+}
+
+func validateWorktreeIncludePath(rel string) (string, error) {
+	cleaned := filepath.Clean(rel)
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("unsafe .worktreeinclude path %q: absolute paths are not allowed", rel)
+	}
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("unsafe .worktreeinclude path %q: path must stay within the repository", rel)
+	}
+	return cleaned, nil
+}
+
 // parseIncludePatterns extracts the path entries from a .worktreeinclude file,
-// skipping blank lines and # comments. Each remaining line is treated as a
-// repo-root-relative path (the common case; full glob expansion is intentionally
-// out of scope for the foundation).
+// skipping blank lines and # comments. Validation later cleans or rejects each
+// entry so unsafe paths cannot be silently discarded after earlier entries have
+// been copied.
 func parseIncludePatterns(content string) []string {
 	var out []string
 	for _, line := range strings.Split(content, "\n") {
@@ -78,11 +106,7 @@ func parseIncludePatterns(content string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		clean := filepath.Clean(line)
-		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			continue
-		}
-		out = append(out, clean)
+		out = append(out, line)
 	}
 	return out
 }
@@ -95,11 +119,91 @@ func isGitIgnored(root, rel string) bool {
 	return cmd.Run() == nil
 }
 
+func prepareSafeDestination(dstRoot, rel string) (string, error) {
+	dst := filepath.Join(dstRoot, rel)
+	if err := os.MkdirAll(dstRoot, 0o755); err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(dstRoot)
+	if err != nil {
+		return "", err
+	}
+	parentRel := filepath.Dir(rel)
+	if parentRel != "." {
+		cur := dstRoot
+		for _, part := range strings.Split(parentRel, string(filepath.Separator)) {
+			if part == "" || part == "." {
+				continue
+			}
+			cur = filepath.Join(cur, part)
+			if err := ensureSafeDestinationDir(realRoot, cur); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+func ensureSafeDestinationDir(realRoot, dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.Mkdir(dir, 0o755)
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		realDir, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return err
+		}
+		if !pathWithin(realRoot, realDir) {
+			return fmt.Errorf("unsafe destination parent %q resolves outside worktree", dir)
+		}
+		stat, err := os.Stat(dir)
+		if err != nil {
+			return err
+		}
+		if !stat.IsDir() {
+			return fmt.Errorf("destination parent %q is not a directory", dir)
+		}
+		return nil
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("destination parent %q is not a directory", dir)
+	}
+	return nil
+}
+
+func pathWithin(root, path string) bool {
+	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+func rejectDestinationSymlink(dst string) error {
+	info, err := os.Lstat(dst)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unsafe destination symlink %q", dst)
+	}
+	return nil
+}
+
 // reflinkCopy copies src to dst using a copy-on-write reflink when the platform
 // supports it (instant, space-shared), falling back to a plain recursive copy.
 // macOS uses `cp -c`; Linux uses `cp --reflink=auto` (which itself falls back to
 // a full copy when the filesystem lacks reflink support).
 func reflinkCopy(src, dst string) error {
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return err
+	}
 	var args []string
 	switch runtime.GOOS {
 	case "darwin":
@@ -125,6 +229,9 @@ func reflinkCopy(src, dst string) error {
 // is absent) copy without failing — os.ReadFile would follow it and abort the
 // whole recursion, leaving a half-populated worktree.
 func plainCopy(src, dst string) error {
+	if err := rejectDestinationSymlink(dst); err != nil {
+		return err
+	}
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err

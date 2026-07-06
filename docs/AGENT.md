@@ -30,7 +30,7 @@ Branch on the exit code; do not parse messages.
 
 ## JSON output
 
-Every subcommand except `completion` accepts `--json`. The built-ins `help`,
+Every subcommand except `completion` and `shell` accepts `--json`. The built-ins `help`,
 `-h`/`--help`, `version`, and `-v`/`--version` also accept `--json`. Successful
 JSON output is a single indented object on **stdout**. On failure, `--json`
 writes a structured envelope to **stderr** and the process still exits with the
@@ -57,7 +57,8 @@ message.
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
   `branch`, `restacked`, `deleted`, `notes`, and `dryRun` are all `omitempty` —
-  absent when empty or false. Preview-capable commands (`restack`, `sync`) add
+  absent when empty or false. Preview-capable commands (`restack`, `sync`,
+  `onto`, `fold`, `squash`, `delete`) return the same result shape with
   `"dryRun": true` under `--dry-run`. In a multi-worktree repo, `restack`/`sync`
   rebase a dependent branch that lives in another worktree *inside that worktree*;
   a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
@@ -101,11 +102,12 @@ message.
 ## Idempotency & safety
 
 - `restack`, `sync`, `validate`, `log`, `status` are safe to re-run.
-- `st restack --dry-run` previews the branches that *would* be rebased.
-  `st sync --dry-run` previews prune/restack work without fetching, using the
-  current local trunk or already-cached `refs/remotes/<remote>/<trunk>`. Both
-  return a `{"dryRun": true, ...}` result without changing stack metadata or
-  branch refs.
+- `st restack --dry-run`, `st sync --dry-run`, `st onto --dry-run`,
+  `st fold --dry-run`, `st squash --dry-run`, and `st delete --dry-run` preview
+  the branches that *would* be rebased, moved, folded, squashed, or deleted.
+  They return a `{"dryRun": true, ...}` result without changing stack metadata or
+  branch refs. `sync --dry-run` does not fetch; it uses the current local trunk or
+  already-cached `refs/remotes/<remote>/<trunk>`.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not

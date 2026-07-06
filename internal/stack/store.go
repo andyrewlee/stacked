@@ -6,23 +6,39 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"stacked/internal/git"
 )
+
+var stackedDirCache sync.Map // cwd -> dir
 
 // stackedDir returns the absolute path of the per-repository stacked metadata
 // directory. It uses the common git dir so the stack is shared across all linked
 // worktrees of a repository rather than being per-worktree.
 func stackedDir() (string, error) {
-	gitDir, err := git.GitCommonDir()
-	if err != nil {
-		return "", fmt.Errorf("locate git dir: %w", err)
+	cwd, err := os.Getwd()
+	if err == nil {
+		if dir, ok := stackedDirCache.Load(cwd); ok {
+			return dir.(string), nil
+		}
 	}
-	return filepath.Join(gitDir, "stacked"), nil
+
+	gitDir, gerr := git.GitCommonDir()
+	if gerr != nil {
+		return "", fmt.Errorf("locate git dir: %w", gerr)
+	}
+	dir := filepath.Join(gitDir, "stacked")
+	// Key by cwd, not sync.Once: cmd integration tests chdir between repos in
+	// one process, and each repo must resolve its own common git dir.
+	if err == nil {
+		stackedDirCache.Store(cwd, dir)
+	}
+	return dir, nil
 }
 
 // statePath returns the absolute path of the stacked state file,
-// <GitCommonDir>/stacked/state.json.
+// <common git dir>/stacked/state.json.
 func statePath() (string, error) {
 	dir, err := stackedDir()
 	if err != nil {
@@ -69,7 +85,7 @@ func Load() (*State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parse state file: %w", err)
+		return nil, fmt.Errorf("parse state file %s (fix or delete it and re-run st init): %w", path, err)
 	}
 	if s.Branches == nil {
 		s.Branches = make(map[string]*Branch)

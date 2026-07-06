@@ -29,6 +29,37 @@ func (s *State) needsRestackAgainst(g Git, name, trunkRef string) (bool, error) 
 	return parentTip != b.ParentSHA, nil
 }
 
+func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bool, error) {
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
+	}
+	if err := requireBranchTip(tips, name); err != nil {
+		return false, err
+	}
+	parentTip, ok := tips[b.Parent]
+	if !ok {
+		return false, fmt.Errorf("resolve parent %q: branch tip not found", b.Parent)
+	}
+	return parentTip != b.ParentSHA, nil
+}
+
+func requireStateTips(s *State, tips map[string]string) error {
+	for _, name := range stateTipNames(s) {
+		if err := requireBranchTip(tips, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireBranchTip(tips map[string]string, name string) error {
+	if _, ok := tips[name]; !ok {
+		return fmt.Errorf("resolve branch %q: branch tip not found", name)
+	}
+	return nil
+}
+
 // rebaseFailure classifies a failed RebaseOnto. paused is true when the rebase
 // stopped mid-way and left a rebase in progress — a conflict the caller turns
 // into a ConflictError (and may record bookkeeping such as a PendingReparent
@@ -120,52 +151,6 @@ func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 	return drift
 }
 
-func tipsWithTrunk(tips map[string]string, trunk, trunkTip string) map[string]string {
-	if trunkTip == "" {
-		return tips
-	}
-	cp := make(map[string]string, len(tips)+1)
-	for name, tip := range tips {
-		cp[name] = tip
-	}
-	cp[trunk] = trunkTip
-	return cp
-}
-
-// restackPlanFromTips returns, in order, the branches a restack starting at
-// `start` would rebase — without changing anything. trunkTip overrides the
-// trunk's map entry so sync can preview against a freshly fetched remote trunk.
-// A branch is rebased if it is out of date, or its parent will be rebased
-// (which moves the parent tip and forces the child). When start is the trunk,
-// the whole forest is considered.
-func (s *State) restackPlanFromTips(tips map[string]string, trunkTip, start string) ([]string, error) {
-	tips = tipsWithTrunk(tips, s.Trunk, trunkTip)
-	drift := s.DriftAgainst(tips)
-	var order []string
-	if start != s.Trunk {
-		order = append(order, start)
-		order = append(order, s.Descendants(start)...)
-	} else {
-		order = s.Descendants(s.Trunk)
-	}
-	inPlan := map[string]bool{}
-	var plan []string
-	for _, name := range order {
-		b, ok := s.Get(name)
-		if !ok {
-			continue
-		}
-		if _, ok := tips[b.Parent]; !ok {
-			return nil, fmt.Errorf("resolve parent %q: missing branch tip", b.Parent)
-		}
-		if drift[name] || inPlan[b.Parent] {
-			plan = append(plan, name)
-			inPlan[name] = true
-		}
-	}
-	return plan, nil
-}
-
 // RestackPlan previews the branches a restack from the current branch would
 // rebase, without mutating anything.
 func RestackPlan(env Env, s *State) (*OpResult, error) {
@@ -175,6 +160,10 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
+	tips, err := env.Git.TipsFor(stateTipNames(s))
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
 	start, err := env.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
@@ -182,19 +171,15 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if start != s.Trunk && !s.IsTracked(start) {
 		return nil, fmt.Errorf("branch %q is not tracked", start)
 	}
-	tips, err := env.Git.Tips()
-	if err != nil {
-		return nil, err
-	}
-	plan, err := s.restackPlanFromTips(tips, "", start)
+	preview, err := restackPlanAgainstWithWorktrees(env, s, start, tips)
 	if err != nil {
 		return nil, err
 	}
 	summary := "nothing to restack"
-	if len(plan) > 0 {
-		summary = fmt.Sprintf("would restack %d branch(es)", len(plan))
+	if len(preview.restacked) > 0 {
+		summary = fmt.Sprintf("would restack %d branch(es)", len(preview.restacked))
 	}
-	return &OpResult{Summary: summary, Restacked: plan, DryRun: true}, nil
+	return &OpResult{Summary: summary, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
 }
 
 // RestackUpstack restacks the descendants of name in topological order

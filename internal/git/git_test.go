@@ -219,6 +219,14 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 			run:  func() error { return Fetch("--upload-pack=true") },
 		},
 		{
+			name: "push branches remote",
+			run:  func() error { return PushBranches("--receive-pack=true", []string{"main"}, false) },
+		},
+		{
+			name: "push branches branch",
+			run:  func() error { return PushBranches("origin", []string{"--force"}, false) },
+		},
+		{
 			name: "force branch",
 			run:  func() error { return ForceBranch("-b", "HEAD") },
 		},
@@ -390,6 +398,44 @@ func TestTipSubjects(t *testing.T) {
 	}
 }
 
+func TestTipSubjectsForScopesToRequestedBranches(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+	mustGit(t, "checkout", "-q", "-b", "unrelated")
+	writeFile(t, "u.txt", "u\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unrelated subject")
+	unrelatedSHA := mustGit(t, "rev-parse", "refs/heads/unrelated")
+	mustGit(t, "tag", "main", unrelatedSHA) // decoy tag sharing the branch name
+
+	subjects, err := TipSubjectsFor([]string{"main", "main", "missing"})
+	if err != nil {
+		t.Fatalf("TipSubjectsFor: %v", err)
+	}
+	if len(subjects) != 1 {
+		t.Fatalf("TipSubjectsFor = %v, want only main", subjects)
+	}
+	if subjects["main"] != "init" {
+		t.Fatalf("TipSubjectsFor[main] = %q, want init from branch %s", subjects["main"], mainSHA)
+	}
+	if _, ok := subjects["unrelated"]; ok {
+		t.Fatalf("TipSubjectsFor included unrelated branch: %v", subjects)
+	}
+}
+
+func TestTipSubjectsForDoesNotTreatPrefixAsBranch(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "foo/bar")
+
+	subjects, err := TipSubjectsFor([]string{"foo"})
+	if err != nil {
+		t.Fatalf("TipSubjectsFor: %v", err)
+	}
+	if len(subjects) != 0 {
+		t.Fatalf("TipSubjectsFor(foo) = %v, want missing despite foo/bar", subjects)
+	}
+}
+
 func TestCommitSubjects(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "-b", "feat")
@@ -512,6 +558,19 @@ func TestFetchAndPush(t *testing.T) {
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
 	if err := PushRemote("origin", "main", true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
+	}
+
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "feat.txt", "feat\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "feat")
+	if err := PushBranches("origin", []string{"main", "feat"}, false); err != nil {
+		t.Fatalf("PushBranches: %v", err)
+	}
+	for _, branch := range []string{"main", "feat"} {
+		if got := mustGit(t, "--git-dir", bare, "rev-parse", "--verify", "refs/heads/"+branch); got == "" {
+			t.Fatalf("remote ref for %s is empty", branch)
+		}
 	}
 }
 
@@ -726,6 +785,88 @@ func TestTips(t *testing.T) {
 	}
 	if tips["feat"] != featSHA {
 		t.Fatalf("tips[feat] = %q, want branch tip %s (not the tag)", tips["feat"], featSHA)
+	}
+}
+
+func TestTipsForScopesToRequestedBranches(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+	mustGit(t, "checkout", "-q", "-b", "unrelated")
+	writeFile(t, "u.txt", "u\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unrelated subject")
+	unrelatedSHA := mustGit(t, "rev-parse", "refs/heads/unrelated")
+	mustGit(t, "tag", "main", unrelatedSHA) // decoy tag sharing the branch name
+
+	tips, err := TipsFor([]string{"main", "main", "missing"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 1 {
+		t.Fatalf("TipsFor = %v, want only main", tips)
+	}
+	if tips["main"] != mainSHA {
+		t.Fatalf("TipsFor[main] = %q, want branch tip %s", tips["main"], mainSHA)
+	}
+	if tips["main"] == unrelatedSHA {
+		t.Fatalf("TipsFor[main] used same-named tag target %s", unrelatedSHA)
+	}
+	if _, ok := tips["unrelated"]; ok {
+		t.Fatalf("TipsFor included unrelated branch: %v", tips)
+	}
+}
+
+func TestTipsForDoesNotTreatPrefixAsBranch(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "foo/bar")
+
+	tips, err := TipsFor([]string{"foo"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 0 {
+		t.Fatalf("TipsFor(foo) = %v, want missing despite foo/bar", tips)
+	}
+}
+
+func TestTipsForDoesNotResolveRevisionSyntax(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "refs/heads/main")
+
+	tips, err := TipsFor([]string{"main", "main^{commit}", "main~0"})
+	if err != nil {
+		t.Fatalf("TipsFor: %v", err)
+	}
+	if len(tips) != 1 || tips["main"] != mainSHA {
+		t.Fatalf("TipsFor revision syntax = %v, want only exact main tip %s", tips, mainSHA)
+	}
+}
+
+func TestMergedInto(t *testing.T) {
+	newRepo(t)
+	base := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "checkout", "-q", "-b", "merged")
+	writeFile(t, "merged.txt", "merged\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "merged")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "merge", "-q", "--ff-only", "merged")
+	mustGit(t, "checkout", "-q", "-b", "unmerged", base)
+	writeFile(t, "unmerged.txt", "unmerged\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unmerged")
+	mustGit(t, "tag", "merged", base) // decoy tag with a branch's name
+	mustGit(t, "checkout", "-q", "main")
+
+	merged, err := MergedInto("main")
+	if err != nil {
+		t.Fatalf("MergedInto: %v", err)
+	}
+	if len(merged) != 2 || !merged["main"] || !merged["merged"] {
+		t.Fatalf("MergedInto(main) = %v, want exactly main and merged", merged)
+	}
+	if merged["unmerged"] {
+		t.Fatalf("MergedInto(main) included unmerged branch: %v", merged)
 	}
 }
 

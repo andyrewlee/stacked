@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 
 	"stacked/internal/git"
 )
+
+const repoKeyHashBytes = 6
 
 // WorktreesRoot is the central per-repo directory under the user's home where
 // lazily-materialized worktrees live: ~/.stacked/worktrees. This mirrors the
@@ -21,17 +24,45 @@ func WorktreesRoot() (string, error) {
 	return filepath.Join(home, ".stacked", "worktrees"), nil
 }
 
+// StableRepoKey returns the repo path segment for generated worktrees. The
+// readable prefix comes from the repository basename, while the hash input is a
+// stable repository identity such as GitCommonDir.
+func StableRepoKey(repoBase, identityPath string) (string, error) {
+	absIdentity, err := filepath.Abs(identityPath)
+	if err != nil {
+		return "", err
+	}
+	absIdentity = filepath.Clean(absIdentity)
+	sum := sha256.Sum256([]byte(absIdentity))
+	return fmt.Sprintf("%s-%x", sanitizeSegment(repoBase), sum[:repoKeyHashBytes]), nil
+}
+
+// StableRepoBase returns the human-readable basename to pair with a common git
+// dir identity. For normal repositories, GitCommonDir points at the main
+// worktree's .git directory even when called from a linked worktree, so its
+// parent is the stable basename. Other layouts fall back to the current repo
+// root's basename.
+func StableRepoBase(repoRoot, commonDir string) string {
+	cleanCommon := filepath.Clean(commonDir)
+	if filepath.Base(cleanCommon) == ".git" {
+		parent := filepath.Dir(cleanCommon)
+		if parent != "." && parent != string(os.PathSeparator) {
+			return filepath.Base(parent)
+		}
+	}
+	return filepath.Base(repoRoot)
+}
+
 // WorktreePath returns the canonical on-disk path a worktree for branch would
-// live at: ~/.stacked/worktrees/<repo>/<branch>. It is a PURE path computation
-// — the worktree need not exist. repo and branch are sanitized so nested
-// branch names (feat/foo) and odd repo identifiers stay within a single
-// directory level (slashes and separators collapse to dashes).
+// live under: ~/.stacked/worktrees/<repo-key>/<encoded-branch>. It is a PURE
+// path computation — the worktree need not exist. repo is sanitized into one
+// path segment, while branch is losslessly encoded into one path segment.
 func WorktreePath(repo, branch string) (string, error) {
 	root, err := WorktreesRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, sanitizeSegment(repo), sanitizeSegment(branch)), nil
+	return filepath.Join(root, sanitizeSegment(repo), encodeBranchSegment(branch)), nil
 }
 
 // sanitizeSegment turns an arbitrary identifier into a single safe path
@@ -54,6 +85,38 @@ func sanitizeSegment(s string) string {
 		return "_"
 	}
 	return out
+}
+
+// encodeBranchSegment encodes an arbitrary branch name into a single
+// filesystem-safe path segment without collapsing distinct branch names. Safe
+// ASCII branch bytes stay readable; unsafe bytes are percent-encoded.
+func encodeBranchSegment(s string) string {
+	if s == "" {
+		return "~"
+	}
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if isSafeBranchSegmentByte(c) && (i != 0 || c != '.') {
+			out.WriteByte(c)
+			continue
+		}
+		out.WriteByte('%')
+		out.WriteByte(upperHex[c>>4])
+		out.WriteByte(upperHex[c&0x0f])
+	}
+	return out.String()
+}
+
+const upperHex = "0123456789ABCDEF"
+
+func isSafeBranchSegmentByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' ||
+		c == '_' ||
+		c == '.'
 }
 
 // OwnerOf returns the worktree that has branch checked out, and whether one
@@ -148,31 +211,56 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 // so a follow-up branch deletion is not refused by git ("checked out in another
 // worktree"). It is a no-op in a single-tree repo, when branch is checked out
 // here (the current worktree, which git lets us delete from after a checkout
-// elsewhere), or when branch owns no worktree.
+// elsewhere), or when branch owns no worktree. It rejects a branch owned by the
+// main worktree while the command runs elsewhere: the main worktree is not a
+// removable linked worktree.
 //
 // DESIGN: only a CLEAN owning worktree is auto-removed. A dirty one is left in
 // place and an error is returned so the caller deletes nothing — in-progress
 // work in another worktree is never silently discarded; the user is told to
 // commit/stash or `st worktree rm` first.
 func (s *State) releaseOwnedWorktree(env Env, branch string) error {
-	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+	path, err := s.ownedWorktreeReleaseTarget(env, branch)
 	if err != nil {
 		return err
 	}
-	if !elsewhere {
+	if path == "" {
 		return nil
+	}
+	if err := env.Git.WorktreeRemove(path, false); err != nil {
+		return fmt.Errorf("removing worktree %q for %q: %w", path, branch, err)
+	}
+	return nil
+}
+
+func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, error) {
+	wts, err := env.Git.Worktrees()
+	if err != nil {
+		return "", err
+	}
+	if !IsMultiWorktree(wts) {
+		return "", nil
+	}
+	owner, ok := OwnerOf(wts, branch)
+	if !ok {
+		return "", nil
+	}
+	cur, _ := env.Git.CurrentBranch()
+	if branch == cur {
+		return "", nil
+	}
+	main, _ := MainWorktree(wts)
+	if owner.Path == main.Path {
+		return "", fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", branch, owner.Path)
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
-		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+		return "", fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
 	}
 	if !clean {
-		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
+		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}
-	if err := env.Git.WorktreeRemove(owner.Path, false); err != nil {
-		return fmt.Errorf("removing worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	return nil
+	return owner.Path, nil
 }
 
 // IsMultiWorktree reports whether the repository has more than one worktree.

@@ -187,11 +187,8 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if entry == nil {
 		return TrimUndo()
 	}
-	tips, err := g.Tips()
-	if err != nil {
-		tips = nil
-	}
-	created := createdBranchesSince(tips, entry)
+	tips, tipsOK := readUndoTips(g)
+	created := createdBranchesSinceTips(entry, tips, tipsOK)
 	if len(created) > 0 {
 		if err := SetLastUndoCreatedBranches(created); err != nil {
 			return err
@@ -204,7 +201,7 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if !unchanged {
 		return TrimUndo()
 	}
-	if refsUnchanged(tips, entry) {
+	if refsUnchangedAgainstTips(entry, tips, tipsOK) {
 		return DropUndo()
 	}
 	return TrimUndo()
@@ -217,20 +214,13 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 // that left a rebase in progress.
 func CleanupUndoOnError(g Git, s *State, opErr error) error {
 	entry, _, _ := PeekUndo()
-	tips, tipsErr := g.Tips()
-	if tipsErr != nil {
-		tips = nil
-	}
-	dropped, err := dropNoopUndo(g, tips, s, entry, opErr)
+	dropped, created, err := dropNoopUndo(g, s, entry, opErr)
 	if err != nil {
 		return err
 	}
-	if !dropped {
-		created := createdBranchesSince(tips, entry)
-		if len(created) > 0 {
-			if err := SetLastUndoCreatedBranches(created); err != nil {
-				return err
-			}
+	if !dropped && len(created) > 0 {
+		if err := SetLastUndoCreatedBranches(created); err != nil {
+			return err
 		}
 	}
 	return TrimUndo()
@@ -240,34 +230,48 @@ func CleanupUndoOnError(g Git, s *State, opErr error) error {
 // same state, every recorded ref on its recorded tip, and no branch created.
 // A conflict with a rebase still in progress always keeps the entry — the
 // mutation is half-applied, exactly what undo protects.
-func dropNoopUndo(g Git, tips map[string]string, s *State, entry *UndoEntry, opErr error) (bool, error) {
+func dropNoopUndo(g Git, s *State, entry *UndoEntry, opErr error) (dropped bool, created []string, err error) {
 	if entry == nil {
-		return false, nil
+		return false, nil, nil
 	}
 	if errors.Is(opErr, ErrConflict) {
 		if inProgress, err := g.RebaseInProgress(); err != nil {
-			return false, err
+			return false, nil, err
 		} else if inProgress {
-			return false, nil
+			tips, tipsOK := readUndoTips(g)
+			return false, createdBranchesSinceTips(entry, tips, tipsOK), nil
 		}
 	}
 	unchanged, err := sameState(s, entry.State)
-	if err != nil || !unchanged {
-		return false, err
+	if err != nil {
+		return false, nil, err
 	}
-	if !refsUnchanged(tips, entry) {
-		return false, nil
+	tips, tipsOK := readUndoTips(g)
+	created = createdBranchesSinceTips(entry, tips, tipsOK)
+	if !unchanged {
+		return false, created, nil
 	}
-	if len(createdBranchesSince(tips, entry)) > 0 {
-		return false, nil
+	if !refsUnchangedAgainstTips(entry, tips, tipsOK) {
+		return false, created, nil
 	}
-	return true, DropUndo()
+	if len(created) > 0 {
+		return false, created, nil
+	}
+	return true, nil, DropUndo()
 }
 
-// createdBranchesSince returns the local branches that exist now but were not
-// in the entry's captured branch list, sorted.
-func createdBranchesSince(tips map[string]string, entry *UndoEntry) []string {
-	if tips == nil || entry == nil || entry.LocalBranches == nil {
+func readUndoTips(g Git) (map[string]string, bool) {
+	tips, err := g.Tips()
+	if err != nil {
+		return nil, false
+	}
+	return tips, true
+}
+
+// createdBranchesSinceTips returns the local branches that exist now but were
+// not in the entry's captured branch list, sorted.
+func createdBranchesSinceTips(entry *UndoEntry, tips map[string]string, ok bool) []string {
+	if entry == nil || entry.LocalBranches == nil || !ok {
 		return nil
 	}
 	existed := map[string]bool{}
@@ -284,14 +288,15 @@ func createdBranchesSince(tips map[string]string, entry *UndoEntry) []string {
 	return created
 }
 
-// refsUnchanged reports whether every ref the entry recorded still resolves to
-// its recorded tip.
-func refsUnchanged(tips map[string]string, entry *UndoEntry) bool {
-	if tips == nil {
+// refsUnchangedAgainstTips reports whether every ref the entry recorded still
+// resolves to its recorded tip.
+func refsUnchangedAgainstTips(entry *UndoEntry, tips map[string]string, ok bool) bool {
+	if entry == nil || !ok {
 		return false
 	}
 	for name, want := range entry.Refs {
-		if tips[name] != want {
+		got, exists := tips[name]
+		if !exists || got != want {
 			return false
 		}
 	}

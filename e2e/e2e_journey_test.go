@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -96,7 +97,7 @@ func TestWorktreeAnnotationsInLog(t *testing.T) {
 }
 
 // TestWorktreeCommand materializes a worktree for a tracked branch via
-// `st worktree`, confirms it is listed and copies .worktreeinclude matches, and
+// `st worktree`, confirms it is listed and copies .worktreeinclude entries, and
 // then removes it.
 func TestWorktreeCommand(t *testing.T) {
 	t.Parallel()
@@ -154,6 +155,118 @@ func TestWorktreeCommand(t *testing.T) {
 	if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
 		t.Errorf("worktree dir still present after rm: %v", err)
 	}
+}
+
+func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "main")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "main")
+
+	mainOut := r.stOK("worktree", "feat-b", "--json").stdout
+	var mainCreated struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(mainOut), &mainCreated); err != nil {
+		t.Fatalf("decode main worktree create: %v\n%s", err, mainOut)
+	}
+	mainParts := generatedWorktreePathParts(t, r.home, mainCreated.Path)
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	r.git("worktree", "add", "-q", linked, "feat-a")
+	cmd := exec.Command(stBin, "worktree", "feat-c", "--json")
+	cmd.Dir = linked
+	cmd.Env = cleanEnv(r.home)
+	linkedOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st worktree from linked worktree: %v\n%s", err, linkedOut)
+	}
+	var linkedCreated struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(linkedOut, &linkedCreated); err != nil {
+		t.Fatalf("decode linked worktree create: %v\n%s", err, linkedOut)
+	}
+	linkedParts := generatedWorktreePathParts(t, r.home, linkedCreated.Path)
+	if linkedParts[0] != mainParts[0] {
+		t.Fatalf("linked worktree repo segment = %q, want main repo segment %q", linkedParts[0], mainParts[0])
+	}
+}
+
+func TestWorktreeIncludeCopyFailureRollsBackWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.writeFile(".gitignore", "secret.env\n")
+	r.writeFile(".worktreeinclude", "secret.env\n")
+	r.writeFile("secret.env", "TOKEN=source\n")
+	r.git("add", ".gitignore", ".worktreeinclude")
+	r.git("commit", "-q", "-m", "add worktree include config")
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("write outside target: %v", err)
+	}
+	if err := os.Remove(filepath.Join(r.dir, "secret.env")); err != nil {
+		t.Fatalf("remove source secret before symlink: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(r.dir, "secret.env")); err != nil {
+		t.Fatalf("create tracked symlink: %v", err)
+	}
+	r.git("add", "-f", "secret.env")
+	r.git("commit", "-q", "-m", "track symlink at include path")
+
+	r.stOK("checkout", "main")
+	r.writeFile("secret.env", "TOKEN=source\n")
+
+	res := r.st("worktree", "feat-a")
+	if res.exitCode == 0 {
+		t.Fatalf("st worktree feat-a succeeded; want unsafe destination symlink failure\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr, "destination symlink") {
+		t.Fatalf("st worktree feat-a stderr = %q, want destination symlink context", res.stderr)
+	}
+	if b, err := os.ReadFile(outside); err != nil || string(b) != "outside\n" {
+		t.Fatalf("outside file = %q, %v; destination symlink was followed", b, err)
+	}
+
+	list := r.git("worktree", "list", "--porcelain")
+	if strings.Contains(list, "branch refs/heads/feat-a") {
+		t.Fatalf("failed worktree still registered:\n%s", list)
+	}
+	matches, err := filepath.Glob(filepath.Join(r.home, ".stacked", "worktrees", "*", "feat-a"))
+	if err != nil {
+		t.Fatalf("glob failed worktree path: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("failed worktree paths still exist: %v", matches)
+	}
+}
+
+func generatedWorktreePathParts(t *testing.T, home, path string) []string {
+	t.Helper()
+	root := filepath.Join(home, ".stacked", "worktrees")
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		t.Fatalf("Rel: %v", err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		t.Fatalf("path %q is not under worktrees root %q", path, root)
+	}
+	parts := strings.Split(rel, string(os.PathSeparator))
+	if len(parts) != 2 {
+		t.Fatalf("expected generated path to have two segments below root, got %q (%v)", rel, parts)
+	}
+	return parts
 }
 
 // TestShellInstallEmitsShim asserts `st shell install` prints a cd shim that
@@ -1246,4 +1359,209 @@ func TestRestackDryRun(t *testing.T) {
 
 	res = r.stOK("restack", "--dry-run", "--json")
 	wantStdoutContains(t, res, `"dryRun": true`)
+}
+
+func TestFoldDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "feat-a")
+	r.create("feat-d", "d.txt", "d\n", "d")
+	r.stOK("checkout", "feat-b")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b", "feat-c", "feat-d")
+	got := decodeDryRunResult(t, r.stOK("fold", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", []string{"feat-d"}, []string{"feat-b"})
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("fold dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+	if !r.branchExists("feat-b") {
+		t.Fatal("fold dry-run deleted feat-b")
+	}
+}
+
+func TestSquashDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.writeFile("a2.txt", "a2\n")
+	r.stOK("modify", "--commit", "-m", "a2")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b")
+	got := decodeDryRunResult(t, r.stOK("squash", "-m", "squashed", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", []string{"feat-b"}, nil)
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("squash dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
+func TestSquashDryRunSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.writeFile("a2.txt", "a2\n")
+	r.stOK("modify", "--commit", "-m", "a2")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "feat-a")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-b")
+	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty linked worktree: %v", err)
+	}
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-a", "feat-b")
+	got := decodeDryRunResult(t, r.stOK("squash", "-m", "squashed", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-a", nil, nil)
+	wantNote := "skipped feat-b: its worktree is dirty (commit/stash there, then re-run)"
+	if !reflect.DeepEqual(got.Notes, []string{wantNote}) {
+		t.Fatalf("notes = %v, want [%q]", got.Notes, wantNote)
+	}
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("squash dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
+func TestOntoDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "feat-b")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-b", "feat-c")
+	got := decodeDryRunResult(t, r.stOK("onto", "main", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "feat-b", []string{"feat-c"}, nil)
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("onto dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+}
+
+func TestDeleteDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+
+	beforeLog := r.stOK("log", "--json").stdout
+	beforeTips := captureTips(t, r, "feat-b", "feat-c")
+	got := decodeDryRunResult(t, r.stOK("delete", "feat-b", "--force", "--dry-run", "--json"))
+	assertDryRunResult(t, got, "", []string{"feat-c"}, []string{"feat-b"})
+
+	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
+		t.Fatalf("delete dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+	assertTips(t, r, beforeTips)
+	if !r.branchExists("feat-b") {
+		t.Fatal("delete dry-run deleted feat-b")
+	}
+}
+
+func TestSyncDryRunRefusesDirtyPrunedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	r.stOK("checkout", "main")
+	r.git("merge", "-q", "--ff-only", "feat-a")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+	if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty linked worktree: %v", err)
+	}
+
+	res := r.st("sync", "--dry-run", "--json")
+	if res.exitCode == 0 {
+		t.Fatalf("sync dry-run should fail for a dirty pruned worktree\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr+res.stdout, "uncommitted changes in its worktree") {
+		t.Fatalf("sync dry-run error should mention the dirty worktree\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("sync dry-run must not delete feat-a")
+	}
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("log --json invalid: %v\n%s", err, out)
+	}
+	if findNode(&root, "feat-a") == nil {
+		t.Fatalf("feat-a should remain tracked after refused sync dry-run:\n%s", out)
+	}
+}
+
+type dryRunResult struct {
+	Branch    string   `json:"branch"`
+	Restacked []string `json:"restacked"`
+	Deleted   []string `json:"deleted"`
+	Notes     []string `json:"notes"`
+	DryRun    bool     `json:"dryRun"`
+}
+
+func decodeDryRunResult(t *testing.T, res result) dryRunResult {
+	t.Helper()
+	var got dryRunResult
+	if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+		t.Fatalf("dry-run JSON invalid: %v\n%s", err, res.stdout)
+	}
+	return got
+}
+
+func assertDryRunResult(t *testing.T, got dryRunResult, branch string, restacked, deleted []string) {
+	t.Helper()
+	if !got.DryRun {
+		t.Fatalf("dryRun = false in %+v", got)
+	}
+	if got.Branch != branch {
+		t.Fatalf("branch = %q, want %q in %+v", got.Branch, branch, got)
+	}
+	if !reflect.DeepEqual(got.Restacked, restacked) {
+		t.Fatalf("restacked = %v, want %v in %+v", got.Restacked, restacked, got)
+	}
+	if !reflect.DeepEqual(got.Deleted, deleted) {
+		t.Fatalf("deleted = %v, want %v in %+v", got.Deleted, deleted, got)
+	}
+}
+
+func captureTips(t *testing.T, r *repo, names ...string) map[string]string {
+	t.Helper()
+	tips := make(map[string]string, len(names))
+	for _, name := range names {
+		tips[name] = r.git("rev-parse", name)
+	}
+	return tips
+}
+
+func assertTips(t *testing.T, r *repo, want map[string]string) {
+	t.Helper()
+	for name, tip := range want {
+		if got := r.git("rev-parse", name); got != tip {
+			t.Fatalf("%s tip changed: before=%s after=%s", name, tip, got)
+		}
+	}
 }

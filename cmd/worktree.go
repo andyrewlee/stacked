@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 
 	"stacked/internal/git"
@@ -54,19 +53,23 @@ func runWorktree(args []string) error {
 	}
 }
 
-// repoIdentifier returns the sanitized repository name used as the <repo>
-// segment of a worktree path: the base name of the repository's top level.
+// repoIdentifier returns the stable repository key used as the <repo-key>
+// segment of a generated worktree path.
 func repoIdentifier() (string, error) {
 	root, err := git.RepoRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Base(root), nil
+	commonDir, err := git.GitCommonDir()
+	if err != nil {
+		return "", err
+	}
+	return stack.StableRepoKey(stack.StableRepoBase(root, commonDir), commonDir)
 }
 
 // worktreeAdd materializes a worktree for an existing tracked branch at the
-// canonical ~/.stacked/worktrees/<repo>/<branch> path, then copies any
-// .worktreeinclude matches into it.
+// canonical ~/.stacked/worktrees/<repo-key>/<encoded-branch> path, then copies
+// any .worktreeinclude matches into it.
 func worktreeAdd(branch string, asJSON bool) error {
 	s, err := loadState()
 	if err != nil {
@@ -111,7 +114,11 @@ func worktreeAdd(branch string, asJSON bool) error {
 	}
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
-		return fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+		if removeErr := git.WorktreeRemove(path, true); removeErr != nil {
+			return stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
+		}
+		return copyErr
 	}
 
 	return emitWorktree(asJSON, branch, path, copied, "created worktree")

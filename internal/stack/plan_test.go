@@ -1,6 +1,11 @@
 package stack
 
-import "testing"
+import (
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestRestackPlanListsOutOfDateAndDescendants(t *testing.T) {
 	f, s, env := newEnvState()
@@ -38,26 +43,37 @@ func TestRestackPlanListsOutOfDateAndDescendants(t *testing.T) {
 	}
 }
 
-func TestRestackPlanUsesSingleTipsRead(t *testing.T) {
+func TestRestackPlanUsesScopedTipsForStateBranches(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-	mkBranch(t, env, s, f, "c", "d")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.Checkout("a"); err != nil {
 		t.Fatal(err)
 	}
 
-	counting := &countingSnapshotGit{Git: f}
-	env.Git = counting
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
 	if _, err := RestackPlan(env, s); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RestackPlan: %v", err)
 	}
-	if counting.revParseCalls != 0 {
-		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
+	if spy.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0", spy.revParseCalls)
 	}
-	if counting.tipsCalls != 1 {
-		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
+	if spy.tipsCalls != 0 {
+		t.Fatalf("Tips calls = %d, want 0", spy.tipsCalls)
+	}
+	if spy.tipsForCalls != 1 {
+		t.Fatalf("TipsFor calls = %d, want 1", spy.tipsForCalls)
+	}
+	wantNames := []string{"main", "a", "b"}
+	if got := spy.tipsForNames[0]; !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("TipsFor names = %v, want %v", got, wantNames)
 	}
 }
 
@@ -86,6 +102,44 @@ func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 	}
 }
 
+func TestTrackBranchInferParentUsesScopedTipsForStateBranches(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("manual")
+
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+	if _, err := TrackBranch(env, s, ""); err != nil {
+		t.Fatalf("TrackBranch: %v", err)
+	}
+	if spy.tipsCalls != 0 {
+		t.Fatalf("Tips calls = %d, want 0", spy.tipsCalls)
+	}
+	if spy.tipsForCalls != 1 {
+		t.Fatalf("TipsFor calls = %d, want 1", spy.tipsForCalls)
+	}
+	wantNames := []string{"main", "a", "b"}
+	if got := spy.tipsForNames[0]; !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("TipsFor names = %v, want %v", got, wantNames)
+	}
+	if b, ok := s.Get("manual"); !ok || b.Parent != "a" {
+		t.Fatalf("tracked manual = %+v, want parent a", b)
+	}
+}
+
 func TestSyncPlanPreviewsPrune(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -109,5 +163,534 @@ func TestSyncPlanPreviewsPrune(t *testing.T) {
 	}
 	if !s.IsTracked("a") {
 		t.Fatal("a dry-run sync must not actually untrack anything")
+	}
+}
+
+func TestFoldPlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		mkBranch(t, env, s, f, "a", "d")
+		if err := f.Checkout("b"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := FoldPlan(env, s)
+	if err != nil {
+		t.Fatalf("FoldPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("FoldPlan should be marked DryRun")
+	}
+	if got := preview.Deleted; !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("FoldPlan Deleted = %v, want [b]", got)
+	}
+
+	f2, s2, env2 := setup(t)
+	actual, err := Fold(env2, s2)
+	if err != nil {
+		t.Fatalf("Fold: %v", err)
+	}
+	if preview.Branch != actual.Branch {
+		t.Fatalf("Branch preview=%q actual=%q", preview.Branch, actual.Branch)
+	}
+	if !reflect.DeepEqual(preview.Restacked, actual.Restacked) {
+		t.Fatalf("Restacked preview=%v actual=%v", preview.Restacked, actual.Restacked)
+	}
+	if s2.IsTracked("b") || f2.BranchExists("b") {
+		t.Fatal("actual fold should delete b")
+	}
+}
+
+func TestSquashPlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("a2")
+		mkBranch(t, env, s, f, "a", "b")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := SquashPlan(env, s, "squashed")
+	if err != nil {
+		t.Fatalf("SquashPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("SquashPlan should be marked DryRun")
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Squash(env2, s2, "squashed")
+	if err != nil {
+		t.Fatalf("Squash: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestOntoPlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "d")
+		mkBranch(t, env, s, f, "main", "c")
+		if err := f.Checkout("b"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := OntoPlan(env, s, "c")
+	if err != nil {
+		t.Fatalf("OntoPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("OntoPlan should be marked DryRun")
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Onto(env2, s2, "c")
+	if err != nil {
+		t.Fatalf("Onto: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestOntoPlanSameTipReparentDoesNotForceDescendants(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mainTip, err := f.RevParse("main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.CreateBranch("empty-parent"); err != nil {
+			t.Fatal(err)
+		}
+		s.Track("empty-parent", "main", mainTip)
+		mkBranch(t, env, s, f, "empty-parent", "feat-b")
+		mkBranch(t, env, s, f, "feat-b", "feat-c")
+		if err := f.Checkout("feat-b"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := OntoPlan(env, s, "main")
+	if err != nil {
+		t.Fatalf("OntoPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if len(preview.Restacked) != 0 {
+		t.Fatalf("OntoPlan Restacked = %v, want none for same-tip reparent", preview.Restacked)
+	}
+
+	// The fake rebase model always replays commits, but real git reports the
+	// branch up to date when old and new bases are the same commit. Pin the
+	// planner behavior directly for this production no-op shape.
+}
+
+func TestDeletePlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := DeletePlan(env, s, "a", true)
+	if err != nil {
+		t.Fatalf("DeletePlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("DeletePlan should be marked DryRun")
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Delete(env2, s2, "a", true)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestDeletePlanNonForceUnmergedPrecedesDirtyWorktreeCheck(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	f.markWorktreeDirty("a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := capturePreviewState(t, f, s)
+	_, err := DeletePlan(env, s, "a", false)
+	if err == nil {
+		t.Fatal("DeletePlan without --force on an unmerged branch must error")
+	}
+	if !strings.Contains(err.Error(), "not merged") {
+		t.Fatalf("error = %v, want not merged validation", err)
+	}
+	if strings.Contains(err.Error(), "worktree") {
+		t.Fatalf("DeletePlan checked the dirty worktree before merge ancestry: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !ownsWorktree(f, "a") {
+		t.Fatal("dry-run delete must not remove the linked worktree")
+	}
+}
+
+func TestFoldPlanRejectsParentCheckedOutInLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := FoldPlan(env, s); err == nil {
+		t.Fatal("FoldPlan with parent checked out in another worktree returned nil error")
+	}
+}
+
+func TestDeletePlanForceErrorsWhenBranchTipIsMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.branches, "a")
+
+	if _, err := DeletePlan(env, s, "a", true); err == nil {
+		t.Fatal("DeletePlan --force with a missing branch returned nil error")
+	}
+}
+
+func TestDeletePlanCurrentBranchRejectsParentCheckedOutInLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := DeletePlan(env, s, "b", true); err == nil {
+		t.Fatal("DeletePlan for current branch with parent checked out elsewhere returned nil error")
+	}
+}
+
+func TestDeletePlanRejectsMainWorktreeOwnerFromLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b")
+	env.Git = mainOwnerFromLinkedGit(f, "a", "b")
+
+	before := capturePreviewState(t, f, s)
+	_, err := DeletePlan(env, s, "a", true)
+	if err == nil {
+		t.Fatal("DeletePlan for a branch checked out in the main worktree returned nil error")
+	}
+	if !strings.Contains(err.Error(), "main worktree") {
+		t.Fatalf("DeletePlan error = %v, want main worktree context", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+}
+
+func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("a2")
+		mkBranch(t, env, s, f, "a", "b")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/b", "b")
+		f.markWorktreeDirty("b")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := SquashPlan(env, s, "squashed")
+	if err != nil {
+		t.Fatalf("SquashPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("b")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("SquashPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Squash(env2, s2, "squashed")
+	if err != nil {
+		t.Fatalf("Squash: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestOntoPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		if err := f.Checkout("b"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/c", "c")
+		f.markWorktreeDirty("c")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := OntoPlan(env, s, "main")
+	if err != nil {
+		t.Fatalf("OntoPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("c")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("OntoPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Onto(env2, s2, "main")
+	if err != nil {
+		t.Fatalf("Onto: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestDeletePlanSkipsDirtyLinkedWorktreeFormerChild(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		f.addWorktree("/wt/b", "b")
+		f.markWorktreeDirty("b")
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := DeletePlan(env, s, "a", true)
+	if err != nil {
+		t.Fatalf("DeletePlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	wantNotes := []string{skippedWorktreeNote("b")}
+	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("DeletePlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Delete(env2, s2, "a", true)
+	if err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestTopologyPlansMatchValidationErrors(t *testing.T) {
+	t.Run("fold into trunk", func(t *testing.T) {
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		assertSameError(t, "cannot fold", func() error {
+			_, err := FoldPlan(env, s)
+			return err
+		}, func() error {
+			_, err := Fold(env, s)
+			return err
+		})
+	})
+
+	t.Run("squash needing restack", func(t *testing.T) {
+		setup := func(t *testing.T) (*State, Env) {
+			t.Helper()
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "a")
+			if err := f.Checkout("main"); err != nil {
+				t.Fatal(err)
+			}
+			f.commit("main2")
+			if err := f.Checkout("a"); err != nil {
+				t.Fatal(err)
+			}
+			return s, env
+		}
+		s, env := setup(t)
+		s2, env2 := setup(t)
+		assertSameError(t, "needs restack before squashing", func() error {
+			_, err := SquashPlan(env, s, "")
+			return err
+		}, func() error {
+			_, err := Squash(env2, s2, "")
+			return err
+		})
+	})
+
+	t.Run("onto own descendant", func(t *testing.T) {
+		setup := func(t *testing.T) (*State, Env) {
+			t.Helper()
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "a")
+			mkBranch(t, env, s, f, "a", "b")
+			if err := f.Checkout("a"); err != nil {
+				t.Fatal(err)
+			}
+			return s, env
+		}
+		s, env := setup(t)
+		s2, env2 := setup(t)
+		assertSameError(t, "own descendant", func() error {
+			_, err := OntoPlan(env, s, "b")
+			return err
+		}, func() error {
+			_, err := Onto(env2, s2, "b")
+			return err
+		})
+	})
+
+	t.Run("delete non-force unmerged", func(t *testing.T) {
+		setup := func(t *testing.T) (*State, Env) {
+			t.Helper()
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "a")
+			if err := f.Checkout("main"); err != nil {
+				t.Fatal(err)
+			}
+			return s, env
+		}
+		s, env := setup(t)
+		s2, env2 := setup(t)
+		assertSameError(t, "not merged into its stack parent", func() error {
+			_, err := DeletePlan(env, s, "a", false)
+			return err
+		}, func() error {
+			_, err := Delete(env2, s2, "a", false)
+			return err
+		})
+	})
+}
+
+type previewSnapshot struct {
+	tips  map[string]string
+	head  string
+	state *State
+}
+
+func capturePreviewState(t *testing.T, f *fakeGit, s *State) previewSnapshot {
+	t.Helper()
+	tips, err := f.Tips()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := f.CurrentBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return previewSnapshot{tips: tips, head: head, state: cloneState(s)}
+}
+
+func assertPreviewDidNotMutate(t *testing.T, f *fakeGit, s *State, before previewSnapshot) {
+	t.Helper()
+	afterTips, err := f.Tips()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterTips, before.tips) {
+		t.Fatalf("preview changed branch tips: before=%v after=%v", before.tips, afterTips)
+	}
+	head, err := f.CurrentBranch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head != before.head {
+		t.Fatalf("preview changed HEAD: before=%q after=%q", before.head, head)
+	}
+	if after := cloneState(s); !reflect.DeepEqual(after, before.state) {
+		t.Fatalf("preview changed state: before=%+v after=%+v", before.state, after)
+	}
+}
+
+func assertPlanResultFields(t *testing.T, preview, actual *OpResult) {
+	t.Helper()
+	if preview.Branch != actual.Branch {
+		t.Fatalf("Branch preview=%q actual=%q", preview.Branch, actual.Branch)
+	}
+	if !reflect.DeepEqual(preview.Restacked, actual.Restacked) {
+		t.Fatalf("Restacked preview=%v actual=%v", preview.Restacked, actual.Restacked)
+	}
+	if !reflect.DeepEqual(preview.Deleted, actual.Deleted) {
+		t.Fatalf("Deleted preview=%v actual=%v", preview.Deleted, actual.Deleted)
+	}
+	if !reflect.DeepEqual(preview.Notes, actual.Notes) {
+		t.Fatalf("Notes preview=%v actual=%v", preview.Notes, actual.Notes)
+	}
+}
+
+func assertSameError(t *testing.T, want string, preview func() error, actual func() error) {
+	t.Helper()
+	previewErr := preview()
+	actualErr := actual()
+	for label, err := range map[string]error{"preview": previewErr, "actual": actualErr} {
+		if err == nil {
+			t.Fatalf("%s error is nil, want it to contain %q", label, want)
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s error = %v, want it to contain %q", label, err, want)
+		}
+	}
+	if errors.Is(previewErr, ErrDirty) != errors.Is(actualErr, ErrDirty) {
+		t.Fatalf("dirty sentinel mismatch: preview=%v actual=%v", previewErr, actualErr)
 	}
 }

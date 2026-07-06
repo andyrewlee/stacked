@@ -1,9 +1,18 @@
 package stack
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
+
+type noTipsForRepairGit struct {
+	Git
+}
+
+func (g noTipsForRepairGit) TipsFor([]string) (map[string]string, error) {
+	return nil, fmt.Errorf("repair should not call TipsFor")
+}
 
 // TestInconsistenciesClassifiesEveryKind asserts the single classifier reports
 // each kind, with the parent kinds kept distinct, in validate's order.
@@ -86,6 +95,43 @@ func TestRepairUntracksMissingBranch(t *testing.T) {
 	}
 	if b, ok := s.Get("b"); !ok || b.Parent != "main" {
 		t.Errorf("child b parent = %+v, want re-parented onto main", b)
+	}
+	reconcileAndCheck(t, f, s, env)
+}
+
+// TestRepairUntracksCorruptMissingBranchWithoutScopedLookup covers recovery
+// from hostile or corrupt metadata: the name is tracked in state, absent from
+// git, and unsafe to pass back as a scoped ref argument.
+func TestRepairUntracksCorruptMissingBranchWithoutScopedLookup(t *testing.T) {
+	f, s, env := newEnvState()
+	mainTip, err := f.RevParse("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkBranch(t, env, s, f, "main", "child")
+
+	corrupt := "--exec=touch pwned"
+	s.Track(corrupt, "main", mainTip)
+	s.Branches["child"].Parent = corrupt
+	s.Branches["child"].ParentSHA = ""
+	env.Git = noTipsForRepairGit{Git: env.Git}
+
+	res, err := Repair(env, s)
+	if err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	if len(res.Notes) == 0 {
+		t.Fatal("Repair reported no fixes for a corrupt missing branch")
+	}
+	if s.IsTracked(corrupt) {
+		t.Errorf("corrupt missing branch %q is still tracked after repair", corrupt)
+	}
+	child, ok := s.Get("child")
+	if !ok {
+		t.Fatal("child branch is no longer tracked")
+	}
+	if child.Parent != "main" || child.ParentSHA != mainTip {
+		t.Errorf("child parent = (%s, %s), want (main, %s)", child.Parent, child.ParentSHA, mainTip)
 	}
 	reconcileAndCheck(t, f, s, env)
 }

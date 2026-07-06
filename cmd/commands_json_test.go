@@ -3,10 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -15,6 +17,54 @@ import (
 
 // Read-only command output and the machine (JSON) contract: log, status,
 // submit, completion, guide, and the quiet-git JSON environment.
+
+func decodeStrictJSON(t *testing.T, label, raw string, dst any) {
+	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		t.Fatalf("%s did not match its strict JSON shape: %v\n%s", label, err, raw)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		t.Fatalf("%s emitted trailing JSON/content after the payload: %v\n%s", label, err, raw)
+	}
+}
+
+func requireJSONObjectKeys(t *testing.T, label, raw string, want ...string) {
+	t.Helper()
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		t.Fatalf("%s was not a JSON object: %v\n%s", label, err, raw)
+	}
+	for _, key := range want {
+		if _, ok := obj[key]; !ok {
+			t.Fatalf("%s missing JSON key %q in %v", label, key, sortedJSONKeys(obj))
+		}
+	}
+	if len(obj) != len(want) {
+		t.Fatalf("%s JSON keys = %v, want exactly %v", label, sortedJSONKeys(obj), want)
+	}
+}
+
+func sortedJSONKeys(obj map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sameExistingPath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
 // --- log -------------------------------------------------------------------
 
 func TestLogTextAndJSON(t *testing.T) {
@@ -148,6 +198,60 @@ func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
 	}
 }
 
+func TestLogJSONOmitsUnrelatedLocalBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "tracked subject")
+
+	unrelatedName := "unrelated-log-branch"
+	unrelatedSubject := "unrelated log subject 025"
+	mustRun(t, "git", "checkout", "-q", "-b", unrelatedName, "main")
+	write(t, "unrelated.txt", "unrelated\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", unrelatedSubject)
+	mustCheckout(t, "feat-a")
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	if strings.Contains(jsonOut, unrelatedName) {
+		t.Fatalf("log --json included unrelated branch name %q:\n%s", unrelatedName, jsonOut)
+	}
+	if strings.Contains(jsonOut, unrelatedSubject) {
+		t.Fatalf("log --json included unrelated branch subject %q:\n%s", unrelatedSubject, jsonOut)
+	}
+}
+
+func TestLogJSONDoesNotAnnotateMainWorktreeBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "tracked subject")
+	linkedMain := filepath.Join(t.TempDir(), "main-wt")
+	mustRun(t, "git", "worktree", "add", "-q", linkedMain, "main")
+	resetWorktreeCache()
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	if !sameExistingPath(root.Worktree, linkedMain) {
+		t.Fatalf("trunk worktree = %q, want linked worktree %q", root.Worktree, linkedMain)
+	}
+	if len(root.Children) != 1 || root.Children[0].Name != "feat-a" {
+		t.Fatalf("log tree = %+v, want feat-a child", root)
+	}
+	if got := root.Children[0].Worktree; got != "" {
+		t.Fatalf("main worktree branch got linked-worktree annotation %q", got)
+	}
+}
+
 // --- status ----------------------------------------------------------------
 
 type statusPayload struct {
@@ -260,6 +364,154 @@ func TestStatusDirtyWorktree(t *testing.T) {
 	}
 }
 
+// --- init ------------------------------------------------------------------
+
+func TestInitJSONFreshAndRepeatedShape(t *testing.T) {
+	newRepo(t)
+
+	type initJSON struct {
+		Trunk              string `json:"trunk"`
+		Initialized        bool   `json:"initialized"`
+		AlreadyInitialized bool   `json:"alreadyInitialized"`
+	}
+
+	freshOut := captureStdout(t, func() {
+		if err := runInit([]string{"--trunk", "main", "--json"}); err != nil {
+			t.Fatalf("fresh init --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "fresh init --json", freshOut, "trunk", "initialized", "alreadyInitialized")
+	var fresh initJSON
+	decodeStrictJSON(t, "fresh init --json", freshOut, &fresh)
+	if fresh.Trunk != "main" || !fresh.Initialized || fresh.AlreadyInitialized {
+		t.Fatalf("fresh init payload = %+v, want initialized main", fresh)
+	}
+
+	repeatedOut := captureStdout(t, func() {
+		if err := runInit([]string{"--json"}); err != nil {
+			t.Fatalf("repeated init --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "repeated init --json", repeatedOut, "trunk", "initialized", "alreadyInitialized")
+	var repeated initJSON
+	decodeStrictJSON(t, "repeated init --json", repeatedOut, &repeated)
+	if repeated.Trunk != "main" || repeated.Initialized || !repeated.AlreadyInitialized {
+		t.Fatalf("repeated init payload = %+v, want alreadyInitialized main", repeated)
+	}
+}
+
+// --- worktree --------------------------------------------------------------
+
+func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, ".gitignore", "secret.env\n")
+	write(t, "secret.env", "TOKEN=1\n")
+	write(t, ".worktreeinclude", "secret.env\na.txt\n")
+	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
+	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+
+	type worktreeCreateJSON struct {
+		Branch  string   `json:"branch"`
+		Path    string   `json:"path"`
+		Copied  []string `json:"copied"`
+		Summary string   `json:"summary"`
+	}
+	createOut := captureStdout(t, func() {
+		if err := runWorktree([]string{"feat-a", "--json"}); err != nil {
+			t.Fatalf("worktree feat-a --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "worktree create --json", createOut, "branch", "path", "copied", "summary")
+	var created worktreeCreateJSON
+	decodeStrictJSON(t, "worktree create --json", createOut, &created)
+	t.Cleanup(func() {
+		resetWorktreeCache()
+		_ = runWorktree([]string{"rm", "feat-a"})
+	})
+	if created.Branch != "feat-a" || created.Path == "" || created.Summary != "created worktree" {
+		t.Fatalf("worktree create payload = %+v, want created feat-a worktree", created)
+	}
+	if want := []string{"secret.env"}; !reflect.DeepEqual(created.Copied, want) {
+		t.Fatalf("worktree create copied = %v, want %v", created.Copied, want)
+	}
+
+	resetWorktreeCache()
+	listOut := captureStdout(t, func() {
+		if err := runWorktree([]string{"ls", "--json"}); err != nil {
+			t.Fatalf("worktree ls --json: %v", err)
+		}
+	})
+	var rawEntries []json.RawMessage
+	if err := json.Unmarshal([]byte(listOut), &rawEntries); err != nil {
+		t.Fatalf("worktree ls --json did not emit an array: %v\n%s", err, listOut)
+	}
+	for i, raw := range rawEntries {
+		requireJSONObjectKeys(t, fmt.Sprintf("worktree ls --json entry %d", i), string(raw), "path", "branch", "head")
+	}
+	type worktreeListJSON struct {
+		Path   string `json:"path"`
+		Branch string `json:"branch"`
+		Head   string `json:"head"`
+	}
+	var listed []worktreeListJSON
+	decodeStrictJSON(t, "worktree ls --json", listOut, &listed)
+	if len(listed) != 2 {
+		t.Fatalf("worktree ls entries = %+v, want main and feat-a", listed)
+	}
+	byBranch := map[string]worktreeListJSON{}
+	for _, entry := range listed {
+		if entry.Path == "" || entry.Branch == "" || entry.Head == "" {
+			t.Fatalf("worktree ls entry missing populated fields: %+v", entry)
+		}
+		byBranch[entry.Branch] = entry
+	}
+	if byBranch["main"].Path != root {
+		if !sameExistingPath(byBranch["main"].Path, root) {
+			t.Fatalf("main worktree path = %q, want %q", byBranch["main"].Path, root)
+		}
+	}
+	listedFeatPath := byBranch["feat-a"].Path
+	if !sameExistingPath(listedFeatPath, created.Path) {
+		t.Fatalf("feat-a worktree path = %q, want %q", listedFeatPath, created.Path)
+	}
+
+	resetWorktreeCache()
+	type worktreeRemoveJSON struct {
+		Branch  string `json:"branch"`
+		Removed string `json:"removed"`
+	}
+	removeOut := captureStdout(t, func() {
+		if err := runWorktree([]string{"rm", "feat-a", "--json"}); err != nil {
+			t.Fatalf("worktree rm feat-a --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "worktree rm --json", removeOut, "branch", "removed")
+	var removed worktreeRemoveJSON
+	decodeStrictJSON(t, "worktree rm --json", removeOut, &removed)
+	if removed.Branch != "feat-a" || removed.Removed != listedFeatPath {
+		t.Fatalf("worktree rm payload = %+v, want feat-a removed from %q", removed, listedFeatPath)
+	}
+	if _, err := os.Stat(removed.Removed); !os.IsNotExist(err) {
+		t.Fatalf("worktree path still exists after rm: %v", err)
+	}
+	if created.Path != removed.Removed {
+		if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+			t.Fatalf("created worktree path still exists after rm: %v", err)
+		}
+	}
+}
+
 // --- submit ----------------------------------------------------------------
 
 func TestSubmitNoRemote(t *testing.T) {
@@ -311,6 +563,44 @@ func TestSubmitDryRun(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("dry-run output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestSubmitDryRunJSONShape(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-b")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed")
+	type submitDryRunJSON struct {
+		Remote string   `json:"remote"`
+		DryRun bool     `json:"dryRun"`
+		Pushed []string `json:"pushed"`
+	}
+	var got submitDryRunJSON
+	decodeStrictJSON(t, "submit --dry-run --json", out, &got)
+	if got.Remote != "origin" {
+		t.Fatalf("dry-run remote = %q, want origin", got.Remote)
+	}
+	if !got.DryRun {
+		t.Fatalf("dry-run payload = %+v, want dryRun true", got)
+	}
+	if want := []string{"feat-a", "feat-b"}; !reflect.DeepEqual(got.Pushed, want) {
+		t.Fatalf("dry-run pushed = %v, want %v", got.Pushed, want)
+	}
+	if refs := mustRun(t, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/heads"); refs != "" {
+		t.Fatalf("dry-run created remote refs:\n%s", refs)
 	}
 }
 

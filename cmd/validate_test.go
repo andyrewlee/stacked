@@ -107,3 +107,40 @@ func TestValidateProblemCategories(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateIgnoresUnrelatedLocalBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustRun(t, "git", "branch", "unrelated-validate", "main")
+
+	var err error
+	out := captureStdout(t, func() { err = runValidate(nil) })
+	if err != nil {
+		t.Fatalf("validate with unrelated local branch: %v\n%s", err, out)
+	}
+	if want := "ok: 1 tracked branch(es), no problems found\n"; out != want {
+		t.Fatalf("validate output = %q, want %q", out, want)
+	}
+}
+
+func TestValidateReportsMissingBranchDespitePrefixBranch(t *testing.T) {
+	newRepo(t)
+	mustRun(t, "git", "branch", "foo/bar")
+	sha := mustRun(t, "git", "rev-parse", "HEAD")
+	if err := (&stack.State{Trunk: "main", Branches: map[string]*stack.Branch{
+		"foo": {Name: "foo", Parent: "main", ParentSHA: sha},
+	}}).Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	var err error
+	out := captureStdout(t, func() { err = runValidate(nil) })
+	if err == nil {
+		t.Fatalf("validate returned nil error, want missing branch problem; output:\n%s", out)
+	}
+	want := "foo is tracked but its git branch is missing (run: st untrack foo)"
+	if !strings.Contains(out, want) {
+		t.Fatalf("validate output missing %q:\n%s", want, out)
+	}
+}

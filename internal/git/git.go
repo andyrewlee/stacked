@@ -4,11 +4,13 @@
 package git
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -149,6 +151,62 @@ func Tips() (map[string]string, error) {
 	return tips, nil
 }
 
+// TipsFor returns the tip SHA of the named local branches, keyed by branch
+// name, using exact full-ref matches. Missing branches are omitted.
+func TipsFor(names []string) (map[string]string, error) {
+	unique, refs, err := scopedBranchRefs(names)
+	if err != nil {
+		return nil, err
+	}
+	tips := map[string]string{}
+	if len(refs) == 0 {
+		return tips, nil
+	}
+	args := append([]string{"for-each-ref", "--format=%(refname) %(objectname)"}, refs...)
+	out, err := Run(args...)
+	if err != nil {
+		return nil, err
+	}
+	refToName := make(map[string]string, len(refs))
+	for i, ref := range refs {
+		refToName[ref] = unique[i]
+	}
+	for _, line := range strings.Split(out, "\n") {
+		ref, sha, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		if name, ok := refToName[ref]; ok {
+			tips[name] = sha
+		}
+	}
+	return tips, nil
+}
+
+// MergedInto returns the local branch names whose tips are ancestors of ref in
+// one git invocation, matching `merge-base --is-ancestor <branch> <ref>` for
+// every local branch.
+func MergedInto(ref string) (map[string]bool, error) {
+	if err := validRefArg("ref", ref); err != nil {
+		return nil, err
+	}
+	out, err := Run("for-each-ref", "--format=%(refname)", "--merged", localBranchRef(ref), "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	merged := map[string]bool{}
+	if out == "" {
+		return merged, nil
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		merged[strings.TrimPrefix(line, "refs/heads/")] = true
+	}
+	return merged, nil
+}
+
 // TipSubjects returns the subject line of every local branch's tip commit,
 // keyed by branch name, in a single git invocation — so a caller rendering a
 // whole forest (log) does one spawn instead of one `git log` per branch. A NUL
@@ -171,6 +229,127 @@ func TipSubjects() (map[string]string, error) {
 		subjects[strings.TrimPrefix(ref, "refs/heads/")] = subject
 	}
 	return subjects, nil
+}
+
+// TipSubjectsFor returns the subject line of each named local branch's tip
+// commit, keyed by branch name, in a single exact-ref cat-file invocation.
+// Missing branches and non-commit objects are omitted.
+func TipSubjectsFor(names []string) (map[string]string, error) {
+	unique, refs, err := scopedBranchRefs(names)
+	if err != nil {
+		return nil, err
+	}
+	subjects := map[string]string{}
+	if len(refs) == 0 {
+		return subjects, nil
+	}
+	out, err := catFile(refs, "--batch")
+	if err != nil {
+		return nil, err
+	}
+	pos := 0
+	for _, name := range unique {
+		header, next, ok := readCatFileLine(out, pos)
+		if !ok {
+			return nil, fmt.Errorf("git cat-file --batch ended before ref %q", name)
+		}
+		pos = next
+		fields := strings.Fields(header)
+		if len(fields) == 2 && fields[1] == "missing" {
+			continue
+		}
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected git cat-file --batch header %q", header)
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 {
+			return nil, fmt.Errorf("unexpected git cat-file object size in header %q", header)
+		}
+		if pos+size > len(out) {
+			return nil, fmt.Errorf("git cat-file --batch object for %q ended early", name)
+		}
+		body := out[pos : pos+size]
+		pos += size
+		if pos < len(out) && out[pos] == '\n' {
+			pos++
+		}
+		if fields[1] != "commit" {
+			continue
+		}
+		if subject, ok := commitSubject(body); ok {
+			subjects[name] = subject
+		}
+	}
+	if pos != len(out) {
+		return nil, fmt.Errorf("git cat-file --batch returned trailing data")
+	}
+	return subjects, nil
+}
+
+func scopedBranchRefs(names []string) (unique, refs []string, err error) {
+	seen := map[string]bool{}
+	unique = make([]string, 0, len(names))
+	refs = make([]string, 0, len(names))
+	for _, name := range names {
+		if err := validRefArg("branch", name); err != nil {
+			return nil, nil, err
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		unique = append(unique, name)
+		refs = append(refs, localBranchNameRef(name))
+	}
+	return unique, refs, nil
+}
+
+func catFile(stdin []string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"cat-file"}, args...)...)
+	cmd.Env = gitEnv()
+	input := strings.Join(stdin, "\n")
+	if input != "" {
+		input += "\n"
+	}
+	cmd.Stdin = strings.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg != "" {
+			return stdout.Bytes(), fmt.Errorf("git cat-file %s: %s: %w", strings.Join(args, " "), msg, err)
+		}
+		return stdout.Bytes(), fmt.Errorf("git cat-file %s: %w", strings.Join(args, " "), err)
+	}
+	return stdout.Bytes(), nil
+}
+
+func readCatFileLine(out []byte, pos int) (line string, next int, ok bool) {
+	if pos >= len(out) {
+		return "", pos, false
+	}
+	offset := bytes.IndexByte(out[pos:], '\n')
+	if offset < 0 {
+		return string(out[pos:]), len(out), true
+	}
+	end := pos + offset
+	return string(out[pos:end]), end + 1, true
+}
+
+func commitSubject(body []byte) (string, bool) {
+	_, message, ok := bytes.Cut(body, []byte("\n\n"))
+	if !ok {
+		return "", false
+	}
+	if end := bytes.IndexByte(message, '\n'); end >= 0 {
+		message = message[:end]
+	}
+	return string(message), true
 }
 
 // Worktree describes a single git worktree linked to the repository, as
@@ -654,6 +833,34 @@ func PushRemote(remote, branch string, force bool) error {
 	return err
 }
 
+// PushBranches pushes the given branches to remote in a single git invocation
+// and records upstreams (-u) for each branch.
+func PushBranches(remote string, branches []string, force bool) error {
+	if err := validRefArg("remote", remote); err != nil {
+		return err
+	}
+	for _, branch := range branches {
+		if err := validRefArg("branch", branch); err != nil {
+			return err
+		}
+	}
+	if len(branches) == 0 {
+		return nil
+	}
+
+	args := []string{"push", "-u"}
+	if force {
+		args = append(args, "--force-with-lease")
+	}
+	args = append(args, remote)
+	for _, branch := range branches {
+		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+		args = append(args, refspec)
+	}
+	_, err := Run(args...)
+	return err
+}
+
 // RemoteExists reports whether a remote with the given name is configured.
 func RemoteExists(name string) bool {
 	return ok("remote", "get-url", name)
@@ -741,7 +948,7 @@ func GitCommonDir() (string, error) {
 	if err == nil && isSingleAbsolutePath(dir) {
 		return dir, nil
 	}
-	// Fall back for git versions without --path-format: resolve a possibly
+	// Fall back for git < 2.31 (no --path-format): resolve a possibly
 	// relative --git-common-dir from the current working directory.
 	dir, err = Run("rev-parse", "--git-common-dir")
 	if err != nil {

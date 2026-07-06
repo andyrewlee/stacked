@@ -19,10 +19,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   branch. A *dirty* owning worktree is refused with a clear error — nothing is
   deleted and no in-progress work is discarded; commit/stash or `st worktree rm`
   first. Single-tree behavior is unchanged.
+- `--dry-run` on `onto`, `fold`, `squash`, and `delete` previews the branches
+  that would be moved, folded, squashed, deleted, or restacked (a
+  `{"dryRun":true,...}` result) without changing stack metadata or branch refs.
 - **`st worktree` (alias `wt`)** materializes, lists, and removes a branch's own
-  git worktree at `~/.stacked/worktrees/<repo>/<branch>`, copying `.worktreeinclude`
-  matches (gitignore syntax, gitignored-only, copy-on-write reflink) into it — so
-  multiple agents can work different branches of one stack in parallel.
+  git worktree under `~/.stacked/worktrees/` using a collision-resistant repo key
+  and encoded branch segment, copying `.worktreeinclude` matches (gitignore
+  syntax, gitignored-only, copy-on-write reflink) into it — so multiple agents
+  can work different branches of one stack in parallel.
 - **`st shell install [bash|zsh|fish]`** prints a shell shim so `st checkout`/`up`/
   `down`/`top`/`bottom` can teleport (`cd`) into a branch's worktree; without the
   shim the destination path is printed.

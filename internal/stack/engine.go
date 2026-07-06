@@ -313,15 +313,22 @@ func Restack(env Env, s *State) (*OpResult, error) {
 // worktree was dirty, turning each into a human-readable note. Empty when the
 // cascade skipped nothing (the common, single-tree case).
 func skippedWorktreeNotes(s *State) []string {
-	skipped := s.SkippedWorktrees()
+	return skippedWorktreeNotesFrom(s.SkippedWorktrees())
+}
+
+func skippedWorktreeNotesFrom(skipped []string) []string {
 	if len(skipped) == 0 {
 		return nil
 	}
 	notes := make([]string, 0, len(skipped))
 	for _, name := range skipped {
-		notes = append(notes, fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name))
+		notes = append(notes, skippedWorktreeNote(name))
 	}
 	return notes
+}
+
+func skippedWorktreeNote(name string) string {
+	return fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name)
 }
 
 // Fold folds the current branch into its parent: the parent advances to include
@@ -552,17 +559,8 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	// If name lives in another worktree, git refuses to delete it; tear that
-	// (clean) worktree down first. A dirty owner errors out and nothing changes.
-	if err := s.releaseOwnedWorktree(env, name); err != nil {
-		return nil, err
-	}
 	parent := b.Parent
 
-	start, err := g.CurrentBranch()
-	if err != nil {
-		return nil, err
-	}
 	if !force {
 		mergedIntoParent, err := g.IsAncestor(name, parent)
 		if err != nil {
@@ -571,6 +569,15 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		if !mergedIntoParent {
 			return nil, fmt.Errorf("branch %q is not merged into its stack parent %q (use --force to delete anyway)", name, parent)
 		}
+	}
+	// If name lives in another worktree, git refuses to delete it; tear that
+	// (clean) worktree down first. A dirty owner errors out and nothing changes.
+	if err := s.releaseOwnedWorktree(env, name); err != nil {
+		return nil, err
+	}
+	start, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
 	}
 	if start == name {
 		if err := g.Checkout(parent); err != nil {
@@ -703,41 +710,50 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
+	tips, err := g.TipsFor(stateTipNames(s))
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	if err := requireStateTips(s, tips); err != nil {
+		return nil, err
+	}
+	if trunkRef != s.Trunk && trunkRef != branchTipRef(s.Trunk) {
+		trunkTip, err := g.RevParse(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("resolve trunk ref %q: %w", trunkRef, err)
+		}
+		tips[s.Trunk] = trunkTip
+	}
 	planState := cloneState(s)
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
+		mergedIntoTrunk, err := g.MergedInto(trunkRef)
+		if err != nil {
+			return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
+		}
 		for _, name := range sortedBranchNames(planState) {
-			merged, err := g.IsAncestor(name, trunkRef)
-			if err != nil {
-				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, trunkRef, err)
-			}
-			if merged {
+			if mergedIntoTrunk[name] {
+				if _, err := planState.ownedWorktreeReleaseTarget(env, name); err != nil {
+					return nil, err
+				}
 				planState.RemoveBranch(name)
 				deleted[name] = true
 				deletedList = append(deletedList, name)
 			}
 		}
 	}
-	trunkTip, err := g.RevParse(trunkRef)
-	if err != nil {
-		return nil, err
-	}
-	tips, err := g.Tips()
-	if err != nil {
-		return nil, err
-	}
-	full, err := planState.restackPlanFromTips(tips, trunkTip, planState.Trunk)
+	preview, err := restackPlanAgainstWithWorktrees(env, planState, planState.Trunk, tips)
 	if err != nil {
 		return nil, err
 	}
 	var plan []string
-	for _, name := range full {
+	for _, name := range preview.restacked {
 		if !deleted[name] {
 			plan = append(plan, name)
 		}
 	}
-	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, DryRun: true}, nil
+	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, Notes: preview.notes(), DryRun: true}, nil
 }
 
 func cloneState(s *State) *State {
@@ -969,7 +985,7 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("list ancestors of %q: %w", s.Trunk, err)
 	}
-	tips, err := g.Tips()
+	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
 		return "", fmt.Errorf("read branch tips: %w", err)
 	}
