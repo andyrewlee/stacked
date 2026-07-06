@@ -278,6 +278,42 @@ func TestOntoPlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	assertPlanResultFields(t, preview, actual)
 }
 
+func TestOntoPlanSameTipReparentDoesNotForceDescendants(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mainTip, err := f.RevParse("main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.CreateBranch("empty-parent"); err != nil {
+			t.Fatal(err)
+		}
+		s.Track("empty-parent", "main", mainTip)
+		mkBranch(t, env, s, f, "empty-parent", "feat-b")
+		mkBranch(t, env, s, f, "feat-b", "feat-c")
+		if err := f.Checkout("feat-b"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := OntoPlan(env, s, "main")
+	if err != nil {
+		t.Fatalf("OntoPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if len(preview.Restacked) != 0 {
+		t.Fatalf("OntoPlan Restacked = %v, want none for same-tip reparent", preview.Restacked)
+	}
+
+	// The fake rebase model always replays commits, but real git reports the
+	// branch up to date when old and new bases are the same commit. Pin the
+	// planner behavior directly for this production no-op shape.
+}
+
 func TestDeletePlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()

@@ -138,7 +138,12 @@ func OntoPlan(env Env, s *State, target string) (*OpResult, error) {
 	planBranch, _ := planState.Get(cur)
 	planBranch.Parent = target
 	planBranch.ParentSHA = newParentTip
-	preview, err := planAfterTipChange(env, planState, cur, tips, false)
+	var preview restackPreview
+	if newParentTip != b.ParentSHA {
+		preview, err = planAfterTipChange(env, planState, cur, tips, false)
+	} else {
+		preview, err = finishUpstackPlan(env, planState, cur, tips)
+	}
 	if err != nil {
 		return nil, err
 	}
