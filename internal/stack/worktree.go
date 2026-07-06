@@ -211,7 +211,9 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 // so a follow-up branch deletion is not refused by git ("checked out in another
 // worktree"). It is a no-op in a single-tree repo, when branch is checked out
 // here (the current worktree, which git lets us delete from after a checkout
-// elsewhere), or when branch owns no worktree.
+// elsewhere), or when branch owns no worktree. It rejects a branch owned by the
+// main worktree while the command runs elsewhere: the main worktree is not a
+// removable linked worktree.
 //
 // DESIGN: only a CLEAN owning worktree is auto-removed. A dirty one is left in
 // place and an error is returned so the caller deletes nothing — in-progress
@@ -232,12 +234,24 @@ func (s *State) releaseOwnedWorktree(env Env, branch string) error {
 }
 
 func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, error) {
-	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+	wts, err := env.Git.Worktrees()
 	if err != nil {
 		return "", err
 	}
-	if !elsewhere {
+	if !IsMultiWorktree(wts) {
 		return "", nil
+	}
+	owner, ok := OwnerOf(wts, branch)
+	if !ok {
+		return "", nil
+	}
+	cur, _ := env.Git.CurrentBranch()
+	if branch == cur {
+		return "", nil
+	}
+	main, _ := MainWorktree(wts)
+	if owner.Path == main.Path {
+		return "", fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", branch, owner.Path)
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {

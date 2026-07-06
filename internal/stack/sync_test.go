@@ -288,6 +288,29 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 	}
 }
 
+func TestSyncPlanRejectsPrunedMainWorktreeOwnerFromLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "main", "feat-b")
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	env.Git = mainOwnerFromLinkedGit(f, "feat-a", "feat-b")
+
+	before := cloneState(s)
+	_, err := SyncPlan(env, s, false)
+	if err == nil {
+		t.Fatal("SyncPlan pruning a branch checked out in the main worktree returned nil error")
+	}
+	if !strings.Contains(err.Error(), "main worktree") {
+		t.Fatalf("SyncPlan error = %v, want main worktree context", err)
+	}
+	if after := cloneState(s); !reflect.DeepEqual(after, before) {
+		t.Fatalf("SyncPlan mutated state: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestSyncPlanErrorsWhenTrackedBranchTipIsMissing(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")

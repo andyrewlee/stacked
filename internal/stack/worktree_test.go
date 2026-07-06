@@ -9,6 +9,31 @@ import (
 	"stacked/internal/git"
 )
 
+type worktreeViewGit struct {
+	Git
+	current   string
+	worktrees []git.Worktree
+}
+
+func (g worktreeViewGit) CurrentBranch() (string, error) {
+	return g.current, nil
+}
+
+func (g worktreeViewGit) Worktrees() ([]git.Worktree, error) {
+	return append([]git.Worktree(nil), g.worktrees...), nil
+}
+
+func mainOwnerFromLinkedGit(base Git, mainBranch, linkedBranch string) worktreeViewGit {
+	return worktreeViewGit{
+		Git:     base,
+		current: linkedBranch,
+		worktrees: []git.Worktree{
+			{Path: "/repo", Branch: mainBranch},
+			{Path: "/wt/" + linkedBranch, Branch: linkedBranch},
+		},
+	}
+}
+
 func TestWorktreePathCanonical(t *testing.T) {
 	got, err := WorktreePath("app", "api")
 	if err != nil {

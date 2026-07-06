@@ -413,6 +413,23 @@ func TestDeletePlanCurrentBranchRejectsParentCheckedOutInLinkedWorktree(t *testi
 	}
 }
 
+func TestDeletePlanRejectsMainWorktreeOwnerFromLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b")
+	env.Git = mainOwnerFromLinkedGit(f, "a", "b")
+
+	before := capturePreviewState(t, f, s)
+	_, err := DeletePlan(env, s, "a", true)
+	if err == nil {
+		t.Fatal("DeletePlan for a branch checked out in the main worktree returned nil error")
+	}
+	if !strings.Contains(err.Error(), "main worktree") {
+		t.Fatalf("DeletePlan error = %v, want main worktree context", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+}
+
 func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()
