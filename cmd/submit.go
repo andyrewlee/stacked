@@ -97,21 +97,17 @@ func runSubmit(args []string) error {
 			}
 		}
 	} else {
-		for _, name := range stackBranches {
-			if err := git.PushRemote(remote, name, true); err != nil {
-				// Earlier branches were already pushed to the remote. In --json mode
-				// the per-branch lines are suppressed, so emit a partial result (the
-				// branches pushed so far plus the one that failed) before returning,
-				// so a machine consumer can see the partial state — the non-zero exit
-				// and error envelope on stderr still signal the failure.
-				if asJSON {
-					_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
-				}
-				return fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(stackBranches), err)
+		if err := git.PushBranches(remote, stackBranches, true); err != nil {
+			pushed, err = pushSubmitBranchesIndividually(remote, stackBranches, asJSON)
+			if err != nil {
+				return err
 			}
-			pushed = append(pushed, name)
+		} else {
+			pushed = append(pushed, stackBranches...)
 			if !asJSON {
-				out("pushed %s\n", sanitizeForTerminal(name))
+				for _, name := range pushed {
+					out("pushed %s\n", sanitizeForTerminal(name))
+				}
 			}
 		}
 	}
@@ -137,6 +133,28 @@ func runSubmit(args []string) error {
 			out("\nopen pull requests on your host: %s\n", sanitizeForTerminal(repoURL))
 		}
 	})
+}
+
+func pushSubmitBranchesIndividually(remote string, branches []string, asJSON bool) ([]string, error) {
+	pushed := []string{}
+	for _, name := range branches {
+		if err := git.PushRemote(remote, name, true); err != nil {
+			// Earlier branches were already pushed to the remote. In --json mode
+			// the per-branch lines are suppressed, so emit a partial result (the
+			// branches pushed so far plus the one that failed) before returning,
+			// so a machine consumer can see the partial state — the non-zero exit
+			// and error envelope on stderr still signal the failure.
+			if asJSON {
+				_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
+			}
+			return pushed, fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(branches), err)
+		}
+		pushed = append(pushed, name)
+		if !asJSON {
+			out("pushed %s\n", sanitizeForTerminal(name))
+		}
+	}
+	return pushed, nil
 }
 
 // remoteToHTTPS converts a git remote URL (https, ssh, or scp-like) into its
