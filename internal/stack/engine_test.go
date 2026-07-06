@@ -1240,3 +1240,35 @@ func TestPruneMergedDoesNotMutateStateWhenDeleteFails(t *testing.T) {
 		t.Fatal("failed prune deleted branch a")
 	}
 }
+
+func TestPruneMergedBatchesMergedSet(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+
+	bTip, _ := f.RevParse("b")
+	if err := f.ForceBranch("main", bTip); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := PruneMerged(env, s)
+	if err != nil {
+		t.Fatalf("PruneMerged: %v", err)
+	}
+	if len(deleted) != 2 || deleted[0] != "a" || deleted[1] != "b" {
+		t.Fatalf("PruneMerged deleted = %v, want [a b]", deleted)
+	}
+	if f.isAncestorCalls != 0 {
+		t.Fatalf("PruneMerged made %d IsAncestor calls, want 0", f.isAncestorCalls)
+	}
+	if f.mergedIntoCalls != 1 {
+		t.Fatalf("PruneMerged made %d MergedInto calls, want 1", f.mergedIntoCalls)
+	}
+	if s.IsTracked("a") || s.IsTracked("b") {
+		t.Fatal("merged branches a/b should have been pruned")
+	}
+	if !s.IsTracked("c") {
+		t.Fatal("unmerged branch c should remain tracked")
+	}
+}
