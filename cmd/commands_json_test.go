@@ -460,9 +460,12 @@ func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
 		requireJSONObjectKeys(t, fmt.Sprintf("worktree ls --json entry %d", i), string(raw), "path", "branch", "head")
 	}
 	type worktreeListJSON struct {
-		Path   string `json:"path"`
-		Branch string `json:"branch"`
-		Head   string `json:"head"`
+		Path     string `json:"path"`
+		Branch   string `json:"branch"`
+		Head     string `json:"head"`
+		Bare     bool   `json:"bare"`
+		Detached bool   `json:"detached"`
+		Locked   bool   `json:"locked"`
 	}
 	var listed []worktreeListJSON
 	decodeStrictJSON(t, "worktree ls --json", listOut, &listed)

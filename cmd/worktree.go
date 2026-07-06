@@ -71,6 +71,12 @@ func repoIdentifier() (string, error) {
 // canonical ~/.stacked/worktrees/<repo-key>/<encoded-branch> path, then copies
 // any .worktreeinclude matches into it.
 func worktreeAdd(branch string, asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	s, err := loadState()
 	if err != nil {
 		return err
@@ -126,6 +132,12 @@ func worktreeAdd(branch string, asJSON bool) error {
 
 // worktreeRemove removes the worktree owning branch.
 func worktreeRemove(branch string, asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	wts, err := worktrees()
 	if err != nil {
 		return err
@@ -154,14 +166,39 @@ func worktreeRemove(branch string, asJSON bool) error {
 	})
 }
 
+// worktreeListEntry is the JSON contract of one `st worktree ls` row. It
+// mirrors git.Worktree field-for-field on purpose and is the public shape
+// documented in docs/AGENT.md; adding a field to git.Worktree must not leak here
+// without a deliberate contract change.
+type worktreeListEntry struct {
+	Path     string `json:"path"`
+	Branch   string `json:"branch,omitempty"`
+	Head     string `json:"head,omitempty"`
+	Bare     bool   `json:"bare,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
+	Locked   bool   `json:"locked,omitempty"`
+}
+
 // worktreeList renders every worktree linked to the repository.
 func worktreeList(asJSON bool) error {
 	wts, err := worktrees()
 	if err != nil {
 		return err
 	}
+	wts = append([]git.Worktree(nil), wts...)
 	sort.Slice(wts, func(i, j int) bool { return wts[i].Path < wts[j].Path })
-	return emit(asJSON, wts, func() {
+	entries := make([]worktreeListEntry, 0, len(wts))
+	for _, wt := range wts {
+		entries = append(entries, worktreeListEntry{
+			Path:     wt.Path,
+			Branch:   wt.Branch,
+			Head:     wt.Head,
+			Bare:     wt.Bare,
+			Detached: wt.Detached,
+			Locked:   wt.Locked,
+		})
+	}
+	return emit(asJSON, entries, func() {
 		for _, wt := range wts {
 			label := wt.Branch
 			switch {
