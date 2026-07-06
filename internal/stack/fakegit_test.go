@@ -313,6 +313,18 @@ func (f *fakeGit) CreateBranch(name string) error {
 	return nil
 }
 
+func (f *fakeGit) CreateBranchAt(name, ref string) error {
+	if _, ok := f.branches[name]; ok {
+		return fmt.Errorf("branch %q exists", name)
+	}
+	id := f.resolve(ref)
+	if id == "" {
+		return fmt.Errorf("unknown revision %q", ref)
+	}
+	f.branches[name] = id
+	return nil
+}
+
 func (f *fakeGit) DeleteBranch(name string, force bool) error {
 	if name == f.head {
 		return fmt.Errorf("cannot delete the current branch %q", name)

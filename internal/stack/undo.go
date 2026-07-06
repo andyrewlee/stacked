@@ -16,12 +16,13 @@ const maxUndoEntries = 20
 // state-file contents and the tip SHAs of the trunk and every tracked branch at
 // that moment.
 type UndoEntry struct {
-	Label           string            `json:"label"`
-	State           json.RawMessage   `json:"state"`
-	Refs            map[string]string `json:"refs"`
-	LocalBranches   []string          `json:"localBranches,omitempty"`
-	CreatedBranches []string          `json:"createdBranches,omitempty"`
-	CurrentBranch   string            `json:"currentBranch,omitempty"`
+	Label            string            `json:"label"`
+	State            json.RawMessage   `json:"state"`
+	Refs             map[string]string `json:"refs"`
+	LocalBranches    []string          `json:"localBranches,omitempty"`
+	CreatedBranches  []string          `json:"createdBranches,omitempty"`
+	CreatedWorktrees map[string]string `json:"createdWorktrees,omitempty"`
+	CurrentBranch    string            `json:"currentBranch,omitempty"`
 }
 
 func undoPath() (string, error) {
@@ -176,6 +177,20 @@ func SetLastUndoCreatedBranches(names []string) error {
 		return nil
 	}
 	entries[len(entries)-1].CreatedBranches = names
+	return writeUndo(entries)
+}
+
+// SetLastUndoCreatedWorktrees records linked worktrees materialized by the
+// in-progress operation, keyed by branch name.
+func SetLastUndoCreatedWorktrees(paths map[string]string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	entries[len(entries)-1].CreatedWorktrees = paths
 	return writeUndo(entries)
 }
 

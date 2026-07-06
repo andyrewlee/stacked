@@ -61,6 +61,65 @@ func TestEngineCreateTracksParent(t *testing.T) {
 	}
 }
 
+func TestCreateInWorktreePrepTracksWithoutSwitching(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	parentTip, err := f.RevParse("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := CreateInWorktreePrep(env, s, "b")
+	if err != nil {
+		t.Fatalf("CreateInWorktreePrep: %v", err)
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a", f.head)
+	}
+	if got, _ := f.RevParse("b"); got != parentTip {
+		t.Fatalf("b tip = %s, want parent tip %s", got, parentTip)
+	}
+	b, ok := s.Get("b")
+	if !ok {
+		t.Fatal("b was not tracked")
+	}
+	if b.Parent != "a" || b.ParentSHA != parentTip {
+		t.Fatalf("tracked b = %+v, want parent a at %s", b, parentTip)
+	}
+	if res.Summary != "Created b on top of a" || res.Branch != "b" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestCreateInWorktreePrepRefusesExistingBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	if err := f.CreateBranchAt("a", "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateInWorktreePrep(env, s, "a")
+	want := `branch "a" already exists`
+	if err == nil || err.Error() != want {
+		t.Fatalf("CreateInWorktreePrep error = %v, want %q", err, want)
+	}
+}
+
+func TestCreateInWorktreePrepRefusesUntrackedCurrentBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	if err := f.CreateBranch("loose"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateInWorktreePrep(env, s, "a")
+	want := `current branch "loose" is not the trunk or a tracked branch`
+	if err == nil || err.Error() != want {
+		t.Fatalf("CreateInWorktreePrep error = %v, want %q", err, want)
+	}
+}
+
 func TestEngineSquashCollapses(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

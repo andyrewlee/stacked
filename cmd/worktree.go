@@ -85,49 +85,63 @@ func worktreeAdd(branch string, asJSON bool) error {
 		return fmt.Errorf("%q is not a tracked branch", branch)
 	}
 
-	wts, err := worktrees()
+	created, err := materializeWorktree(branch)
 	if err != nil {
 		return err
+	}
+	return emitWorktree(asJSON, branch, created.Path, created.Copied, created.Summary)
+}
+
+type materializedWorktree struct {
+	Path    string
+	Copied  []string
+	Summary string
+}
+
+func materializeWorktree(branch string) (materializedWorktree, error) {
+	wts, err := worktrees()
+	if err != nil {
+		return materializedWorktree{}, err
 	}
 	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
 		// Already materialized as its own linked worktree: report the existing path
 		// idempotently rather than failing, so the command is safe to re-run.
-		return emitWorktree(asJSON, branch, wt.Path, nil, "worktree already exists")
+		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, nil
 	}
 	// If branch is the one checked out in the MAIN worktree, git cannot give it a
 	// second checkout, so there is no separate worktree to create. Say so plainly
 	// instead of pointing the user at the main tree as if it were a dedicated
 	// worktree (or leaking git's "already used by worktree" error).
 	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
-		return fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
+		return materializedWorktree{}, fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
 	}
 
 	repo, err := repoIdentifier()
 	if err != nil {
-		return err
+		return materializedWorktree{}, err
 	}
 	path, err := stack.WorktreePath(repo, branch)
 	if err != nil {
-		return err
+		return materializedWorktree{}, err
 	}
 	if err := git.WorktreeAdd(path, branch); err != nil {
-		return fmt.Errorf("creating worktree for %q: %w", branch, err)
+		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, err)
 	}
 
 	root, err := git.RepoRoot()
 	if err != nil {
-		return err
+		return materializedWorktree{}, err
 	}
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
 		if removeErr := git.WorktreeRemove(path, true); removeErr != nil {
-			return stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
+			return materializedWorktree{}, stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
 		}
-		return copyErr
+		return materializedWorktree{}, copyErr
 	}
 
-	return emitWorktree(asJSON, branch, path, copied, "created worktree")
+	return materializedWorktree{Path: path, Copied: copied, Summary: "created worktree"}, nil
 }
 
 // worktreeRemove removes the worktree owning branch.

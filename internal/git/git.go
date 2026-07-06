@@ -525,6 +525,18 @@ func CreateBranch(name string) error {
 	return err
 }
 
+// CreateBranchAt creates a new local branch at ref without checking it out.
+func CreateBranchAt(name, ref string) error {
+	if err := validRefArg("branch", name); err != nil {
+		return err
+	}
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
+	_, err := Run("branch", name, ref)
+	return err
+}
+
 // DeleteBranch deletes the named local branch. When force is true the branch is
 // removed even if it is not fully merged.
 func DeleteBranch(name string, force bool) error {

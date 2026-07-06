@@ -3,6 +3,7 @@ package stack
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -46,6 +47,11 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		sort.Strings(extra)
 		for _, name := range extra {
+			if path := entry.CreatedWorktrees[name]; path != "" {
+				if err := removeCreatedWorktree(env, name, path); err != nil {
+					return nil, fmt.Errorf("removing worktree for branch %q created by undone command: %w", name, err)
+				}
+			}
 			target := prev.Trunk
 			if s != nil {
 				if b, ok := s.Get(name); ok && g.BranchExists(b.Parent) {
@@ -69,12 +75,13 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 					}
 				}
 				if err := g.Checkout(target); err != nil {
-					if !checkoutBlockedByLocalChanges(err) {
+					if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
 						return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
 					}
-					// Local changes block the checkout: park HEAD on a detached
-					// commit so the branch can still be deleted without touching
-					// the working tree.
+					// Local changes or a target branch checked out in another
+					// worktree block the checkout: park HEAD on a detached commit so
+					// the branch can still be deleted without touching the working
+					// tree.
 					head, revErr := g.RevParse("HEAD")
 					if revErr != nil {
 						return nil, fmt.Errorf("resolving HEAD before deleting %q: %w", name, revErr)
@@ -115,8 +122,10 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	if !skipCheckoutRestore && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
 		if err := g.Checkout(entry.CurrentBranch); err != nil {
 			// Local changes blocking the final checkout are tolerated: the refs are
-			// already restored and HEAD simply stays where it is.
-			if !checkoutBlockedByLocalChanges(err) {
+			// already restored and HEAD simply stays where it is. A branch that is
+			// already checked out in another worktree is likewise restored; this
+			// process just cannot check it out in place.
+			if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
 				return nil, fmt.Errorf("checking out restored branch %q: %w", entry.CurrentBranch, err)
 			}
 		}
@@ -129,9 +138,50 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	}, nil
 }
 
+func removeCreatedWorktree(env Env, branch, path string) error {
+	wts, err := env.Git.Worktrees()
+	if err != nil {
+		return err
+	}
+	owner, ok := LinkedOwnerOf(wts, branch)
+	if !ok {
+		return nil
+	}
+	if !sameWorktreePath(owner.Path, path) {
+		return fmt.Errorf("branch is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", owner.Path, path)
+	}
+	clean, err := env.Git.IsCleanIn(owner.Path)
+	if err != nil {
+		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	if !clean {
+		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
+	}
+	if err := env.Git.WorktreeRemove(owner.Path, false); err != nil {
+		return fmt.Errorf("removing worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	return nil
+}
+
+func sameWorktreePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
 func checkoutBlockedByLocalChanges(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
+}
+
+func checkoutBlockedByOtherWorktree(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already checked out") ||
+		strings.Contains(msg, "used by worktree") ||
+		strings.Contains(msg, "checked out at")
 }
 
 // branchCreatedByEntry reports whether name was created by the command the

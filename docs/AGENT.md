@@ -65,6 +65,14 @@ message.
   feat-a: its worktree is dirty (…)"`) rather than clobbered. `continue` resumes an interrupted restack,
   emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
   `notes` entry naming the branch whose conflict was just completed.
+- **`create --worktree --json`** — creates and tracks the branch without moving
+  the current worktree, materializes the new branch's linked worktree, copies
+  `.worktreeinclude` entries, and returns
+  `{ "branch", "parent", "worktree", "copied": [], "switched": bool, "summary" }`
+  (`copied` is `omitempty`). `switched` is true only when the `st shell install`
+  shim is active and the command wrote `$ST_CD_FILE`; without the shim, text mode
+  prints a `cd` hint instead. `--worktree` cannot be combined with `-m`/`-a`;
+  commit inside the created worktree afterward.
 - **`log --json`** — a recursive tree rooted at the trunk:
   ```json
   { "name": "main", "current": false, "needsRestack": false,

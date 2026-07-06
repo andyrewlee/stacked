@@ -25,9 +25,10 @@ func withDefaults(fs *flag.FlagSet, name string) *flag.FlagSet {
 }
 
 type createOpts struct {
-	asJSON  bool
-	message string
-	all     bool
+	asJSON   bool
+	message  string
+	all      bool
+	worktree bool
 }
 
 func newCreateFlags(o *createOpts) *flag.FlagSet {
@@ -36,6 +37,7 @@ func newCreateFlags(o *createOpts) *flag.FlagSet {
 	fs.StringVar(&o.message, "message", "", "commit message for the new branch")
 	fs.BoolVar(&o.all, "a", false, "stage all changes before committing")
 	fs.BoolVar(&o.all, "all", false, "stage all changes before committing")
+	fs.BoolVar(&o.worktree, "worktree", false, "create the branch in its own worktree instead of switching to it")
 	return withDefaults(fs, "create")
 }
 

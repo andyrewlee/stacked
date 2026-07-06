@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"stacked/internal/git"
 	"stacked/internal/stack"
@@ -59,6 +60,10 @@ func runUndo(args []string) error {
 		s = nil
 		env.Save = func() error { return stack.RestoreState(entry.State) }
 	}
+	cdAfterSuccess, err := prepareUndoCurrentCreatedWorktree(entry, s)
+	if err != nil {
+		return err
+	}
 
 	res, err := stack.Undo(env, s, entry)
 	if err != nil {
@@ -66,6 +71,9 @@ func runUndo(args []string) error {
 	}
 	if err := stack.DropUndo(); err != nil {
 		return fmt.Errorf("dropping undo entry: %w", err)
+	}
+	if cdAfterSuccess != "" {
+		writeCDDirective(cdAfterSuccess)
 	}
 
 	restored := res.Restacked
@@ -84,4 +92,51 @@ func runUndo(args []string) error {
 		}
 		out("note: your working tree was not modified; run `git status` to review.\n")
 	})
+}
+
+func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) (string, error) {
+	cur, err := currentBranch()
+	if err != nil {
+		return "", nil
+	}
+	if !undoEntryCreatedWorktree(entry, cur) {
+		return "", nil
+	}
+	wts, err := worktrees()
+	if err != nil {
+		return "", err
+	}
+	owner, ok := stack.LinkedOwnerOf(wts, cur)
+	if !ok {
+		return "", nil
+	}
+	main, ok := stack.MainWorktree(wts)
+	if !ok || main.Path == "" {
+		return "", fmt.Errorf("cannot undo creation of current worktree branch %q: main worktree not found", cur)
+	}
+	dest := main.Path
+	if entry.CurrentBranch != "" {
+		if wt, ok := stack.LinkedOwnerOf(wts, entry.CurrentBranch); ok {
+			dest = wt.Path
+		}
+	}
+	if !shimActive() {
+		return "", fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
+	}
+	if err := os.Chdir(main.Path); err != nil {
+		return "", fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
+	}
+	if inProgress, err := git.RebaseInProgress(); err != nil {
+		return "", err
+	} else if inProgress {
+		return "", fmt.Errorf("cannot undo while a rebase is in progress in the main worktree %q; run st abort or resolve conflicts and run st continue there", main.Path)
+	}
+	return dest, nil
+}
+
+func undoEntryCreatedWorktree(entry *stack.UndoEntry, name string) bool {
+	if entry == nil || name == "" {
+		return false
+	}
+	return entry.CreatedWorktrees[name] != ""
 }

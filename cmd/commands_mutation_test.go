@@ -358,6 +358,74 @@ func TestUndoKeepsUnrelatedBranchCreatedAfterSnapshot(t *testing.T) {
 	}
 }
 
+func TestUndoCreateWorktreeRemovesLinkedWorktree(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	type createWorktreeJSON struct {
+		Branch   string   `json:"branch"`
+		Parent   string   `json:"parent"`
+		Worktree string   `json:"worktree"`
+		Copied   []string `json:"copied,omitempty"`
+		Switched bool     `json:"switched"`
+		Summary  string   `json:"summary"`
+	}
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
+			t.Fatalf("create feat-a --worktree: %v", err)
+		}
+	})
+	var created createWorktreeJSON
+	decodeStrictJSON(t, "create --worktree for undo", out, &created)
+	if cur := curBranch(t); cur != "main" {
+		t.Fatalf("current branch = %q, want main", cur)
+	}
+
+	resetWorktreeCache()
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo create --worktree: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo left created branch feat-a behind")
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo left feat-a tracked")
+	}
+	if _, err := os.Stat(created.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("undo left created worktree at %q: %v", created.Worktree, err)
+	}
+	list := mustRun(t, "git", "worktree", "list", "--porcelain")
+	if strings.Contains(list, "refs/heads/feat-a") {
+		t.Fatalf("undo left feat-a registered as a worktree:\n%s", list)
+	}
+}
+
+func TestUndoFromUnrelatedLinkedWorktreeDoesNotTreatItAsCreated(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustRun(t, "git", "branch", "loose", "main")
+	linked := filepath.Join(t.TempDir(), "loose")
+	mustRun(t, "git", "worktree", "add", "-q", linked, "loose")
+	t.Chdir(linked)
+	resetWorktreeCache()
+
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo from unrelated linked worktree: %v", err)
+	}
+	if git.BranchExists("feat-a") {
+		t.Fatal("undo left created branch feat-a behind")
+	}
+	if !git.BranchExists("loose") {
+		t.Fatal("undo deleted unrelated linked branch loose")
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("undo left feat-a tracked")
+	}
+}
+
 func TestUndoDeleteCurrentRestoresCheckout(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
