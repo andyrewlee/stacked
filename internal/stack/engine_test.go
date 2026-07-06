@@ -417,6 +417,26 @@ func TestCrossWorktreeConflictAbortFailureSurfaces(t *testing.T) {
 	}
 }
 
+func TestCrossWorktreeEarlyRebaseFailureDoesNotReportAbort(t *testing.T) {
+	f, s, env := setupCascade(t)
+	rebaseErr := errors.New("pre-rebase hook rejected")
+	f.rebaseErr["feat-a"] = rebaseErr
+
+	_, err := s.RestackBranch(env, "feat-a")
+	if err == nil {
+		t.Fatal("cross-worktree early rebase failure returned nil error")
+	}
+	if !errors.Is(err, rebaseErr) {
+		t.Fatalf("RestackBranch error = %v, want original rebase failure matchable", err)
+	}
+	if strings.Contains(err.Error(), "still in progress") {
+		t.Fatalf("early rebase failure reported a paused rebase: %v", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); inProgress {
+		t.Fatal("early rebase failure should not leave a rebase in progress")
+	}
+}
+
 func TestEngineOntoReparents(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
