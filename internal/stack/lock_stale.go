@@ -64,7 +64,7 @@ func lockCreateConflict(path string, err error) bool {
 		return false
 	}
 	_, statErr := os.Stat(path)
-	return statErr == nil
+	return statErr == nil || retryableLockFileAccess(statErr)
 }
 
 // lockOwnerPID parses the holder pid recorded on a lock file's first line,
