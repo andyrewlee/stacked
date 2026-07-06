@@ -60,7 +60,8 @@ func runUndo(args []string) error {
 		s = nil
 		env.Save = func() error { return stack.RestoreState(entry.State) }
 	}
-	if err := prepareUndoCurrentCreatedWorktree(entry, s); err != nil {
+	cdAfterSuccess, err := prepareUndoCurrentCreatedWorktree(entry, s)
+	if err != nil {
 		return err
 	}
 
@@ -70,6 +71,9 @@ func runUndo(args []string) error {
 	}
 	if err := stack.DropUndo(); err != nil {
 		return fmt.Errorf("dropping undo entry: %w", err)
+	}
+	if cdAfterSuccess != "" {
+		writeCDDirective(cdAfterSuccess)
 	}
 
 	restored := res.Restacked
@@ -90,25 +94,25 @@ func runUndo(args []string) error {
 	})
 }
 
-func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) error {
+func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) (string, error) {
 	cur, err := currentBranch()
 	if err != nil {
-		return nil
+		return "", nil
 	}
 	if !undoEntryCreatedBranch(entry, s, cur) {
-		return nil
+		return "", nil
 	}
 	wts, err := worktrees()
 	if err != nil {
-		return err
+		return "", err
 	}
 	owner, ok := stack.LinkedOwnerOf(wts, cur)
 	if !ok {
-		return nil
+		return "", nil
 	}
 	main, ok := stack.MainWorktree(wts)
 	if !ok || main.Path == "" {
-		return fmt.Errorf("cannot undo creation of current worktree branch %q: main worktree not found", cur)
+		return "", fmt.Errorf("cannot undo creation of current worktree branch %q: main worktree not found", cur)
 	}
 	dest := main.Path
 	if entry.CurrentBranch != "" {
@@ -117,18 +121,17 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) e
 		}
 	}
 	if !shimActive() {
-		return fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
+		return "", fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
 	}
 	if err := os.Chdir(main.Path); err != nil {
-		return fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
+		return "", fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
 	}
 	if inProgress, err := git.RebaseInProgress(); err != nil {
-		return err
+		return "", err
 	} else if inProgress {
-		return fmt.Errorf("cannot undo while a rebase is in progress in the main worktree %q; run st abort or resolve conflicts and run st continue there", main.Path)
+		return "", fmt.Errorf("cannot undo while a rebase is in progress in the main worktree %q; run st abort or resolve conflicts and run st continue there", main.Path)
 	}
-	writeCDDirective(dest)
-	return nil
+	return dest, nil
 }
 
 func undoEntryCreatedBranch(entry *stack.UndoEntry, s *stack.State, name string) bool {

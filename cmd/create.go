@@ -50,32 +50,46 @@ func runCreate(args []string) error {
 }
 
 func runCreateWorktree(name string, asJSON bool) error {
-	var prep *stack.OpResult
-	if err := mutateState("create", asJSON, func(env stack.Env, s *stack.State) error {
-		res, err := stack.CreateInWorktreePrep(env, s, name)
-		prep = res
-		return err
-	}); err != nil {
-		return err
-	}
-
-	release, err := acquireLock()
+	s, release, err := lockAndLoad()
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	s, err := loadState()
+	env := stackEnv(s, asJSON)
+	if err := s.RecordUndo(env.Git, "create"); err != nil {
+		return err
+	}
+	undoEntry, _, _ := stack.PeekUndo()
+
+	prep, err := stack.CreateInWorktreePrep(env, s, name)
 	if err != nil {
+		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
+			return stack.AlsoFailed(err, "clean up undo entry", cleanupErr)
+		}
 		return err
 	}
 	b, ok := s.Get(name)
 	if !ok {
-		return fmt.Errorf("branch %q was created but is not tracked", name)
+		err := fmt.Errorf("branch %q was created but is not tracked", name)
+		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
+			return stack.AlsoFailed(err, "clean up undo entry", cleanupErr)
+		}
+		return err
 	}
 	created, err := materializeWorktree(name)
 	if err != nil {
-		return fmt.Errorf("branch %q created and tracked, but its worktree failed: %w (retry with: st worktree %s)", name, err, name)
+		err = fmt.Errorf("branch %q created and tracked, but its worktree failed: %w (retry with: st worktree %s)", name, err, name)
+		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
+			return stack.AlsoFailed(err, "clean up undo entry", cleanupErr)
+		}
+		return err
+	}
+	if err := s.Save(); err != nil {
+		return fmt.Errorf("saving stack state: %w", err)
+	}
+	if err := stack.FinalizeUndo(env.Git, s, undoEntry); err != nil {
+		return fmt.Errorf("finalizing undo entry: %w", err)
 	}
 	writeCDDirective(created.Path)
 

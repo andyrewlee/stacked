@@ -258,6 +258,42 @@ func TestUndoCreateWorktreeFromCreatedWorktreeWithShim(t *testing.T) {
 	r.stOK("validate")
 }
 
+func TestFailedUndoFromDirtyCreatedWorktreeDoesNotWriteShimDirective(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	out := r.stOK("create", "feat-a", "--worktree", "--json").stdout
+	var created struct {
+		Worktree string `json:"worktree"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode create --worktree json: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(created.Worktree, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatalf("dirty created worktree: %v", err)
+	}
+
+	directive := filepath.Join(t.TempDir(), "cd")
+	cmd := exec.Command(stBin, "undo")
+	cmd.Dir = created.Worktree
+	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
+	if undoOut, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("st undo from dirty created worktree succeeded; want failure\n%s", undoOut)
+	}
+	if b, err := os.ReadFile(directive); err == nil && len(b) > 0 {
+		t.Fatalf("failed undo wrote cd directive %q", b)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read cd directive after failed undo: %v", err)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("failed undo deleted feat-a")
+	}
+	if _, err := os.Stat(created.Worktree); err != nil {
+		t.Fatalf("failed undo removed created worktree %q: %v", created.Worktree, err)
+	}
+}
+
 func TestUndoCreateWorktreeChildOfLinkedParentWithShim(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
