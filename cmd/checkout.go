@@ -56,13 +56,15 @@ func runCheckout(args []string) error {
 			Worktree string `json:"worktree,omitempty"`
 		}{name, !teleportedNoShim, dest}
 		return emit(asJSON, payload, func() {
+			safeName := sanitizeForTerminal(name)
+			safeDest := sanitizeForTerminal(dest)
 			switch {
 			case teleportedNoShim:
-				out("%s\n", teleportHint(name, dest))
+				out("%s\n", teleportHintForTerminal(name, dest))
 			case dest != "":
-				out("switched to %s (worktree: %s)\n", name, dest)
+				out("switched to %s (worktree: %s)\n", safeName, safeDest)
 			default:
-				out("switched to %s\n", name)
+				out("switched to %s\n", safeName)
 			}
 		})
 	}
@@ -96,7 +98,7 @@ func listBranches(s *stack.State, asJSON bool) error {
 			if name == cur {
 				marker = "*"
 			}
-			out("%s %s\n", marker, name)
+			out("%s %s\n", marker, sanitizeForTerminal(name))
 		}
 	})
 }

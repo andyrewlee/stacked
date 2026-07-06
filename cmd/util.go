@@ -288,15 +288,15 @@ func renderResult(res *stack.OpResult, asJSON bool) error {
 	if res.DryRun {
 		restacked, deleted = "would restack", "would delete"
 	}
-	out("%s\n", res.Summary)
+	out("%s\n", sanitizeForTerminal(res.Summary))
 	if len(res.Restacked) > 0 {
-		out("%s: %s\n", restacked, joinNames(res.Restacked))
+		out("%s: %s\n", restacked, joinTerminalNames(res.Restacked))
 	}
 	if len(res.Deleted) > 0 {
-		out("%s: %s\n", deleted, joinNames(res.Deleted))
+		out("%s: %s\n", deleted, joinTerminalNames(res.Deleted))
 	}
 	for _, n := range res.Notes {
-		out("%s\n", n)
+		out("%s\n", sanitizeForTerminal(n))
 	}
 	return nil
 }
@@ -317,13 +317,25 @@ func joinNames(names []string) string {
 	return strings.Join(names, ", ")
 }
 
+func joinTerminalNames(names []string) string {
+	safe := make([]string, 0, len(names))
+	for _, name := range names {
+		safe = append(safe, sanitizeForTerminal(name))
+	}
+	return joinNames(safe)
+}
+
 // navEmit renders the result of a navigation command (the branch HEAD ended on
 // plus a human summary) as JSON or text.
 func navEmit(asJSON bool, branch, summary string) error {
+	return navEmitText(asJSON, branch, summary, sanitizeForTerminal(summary))
+}
+
+func navEmitText(asJSON bool, branch, summary, textSummary string) error {
 	return emit(asJSON, struct {
 		Branch  string `json:"branch"`
 		Summary string `json:"summary"`
-	}{branch, summary}, func() { out("%s\n", summary) })
+	}{branch, summary}, func() { out("%s\n", textSummary) })
 }
 
 // parseArgs parses args with fs after moving flag arguments ahead of positional

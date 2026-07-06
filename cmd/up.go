@@ -57,16 +57,7 @@ func runUp(args []string) error {
 			if cur == start {
 				return navEmit(asJSON, cur, "already at the top of the stack")
 			}
-			summary := fmt.Sprintf("switched to %s (top of stack)", cur)
-			switch {
-			case dest != "" && !shimActive():
-				// Teleport without the shim: the parent shell did not move, so give
-				// the cd command instead of claiming a switch.
-				summary = teleportHint(cur, dest)
-			case dest != "":
-				summary = fmt.Sprintf("switched to %s (top of stack, worktree: %s)", cur, dest)
-			}
-			return navEmit(asJSON, cur, summary)
+			return navEmitText(asJSON, cur, topSummary(cur, dest), topSummaryForTerminal(cur, dest))
 		case 1:
 			cur = children[0].Name
 		default:
@@ -82,9 +73,9 @@ func runUp(args []string) error {
 				Summary  string   `json:"summary"`
 				Children []string `json:"children"`
 			}{cur, "branch point: pick a child with st checkout", names}, func() {
-				out("multiple children of %s; pick one and run \"st checkout <name>\":\n", cur)
+				out("%s\n", branchPointSummaryForTerminal(cur))
 				for _, name := range names {
-					out("  %s\n", name)
+					out("  %s\n", sanitizeForTerminal(name))
 				}
 			})
 		}
@@ -93,5 +84,5 @@ func runUp(args []string) error {
 	if err := checkout(cur); err != nil {
 		return err
 	}
-	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
+	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), terminalSummary("switched to", cur, dest))
 }

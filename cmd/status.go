@@ -126,7 +126,7 @@ func runStatus(args []string) error {
 		return nil
 	}
 
-	out("branch:   %s\n", cur)
+	out("branch:   %s\n", sanitizeForTerminal(cur))
 	switch role {
 	case "trunk":
 		out("status:   trunk\n")
@@ -138,7 +138,7 @@ func runStatus(args []string) error {
 
 	switch {
 	case parent != "":
-		out("parent:   %s\n", parent)
+		out("parent:   %s\n", sanitizeForTerminal(parent))
 	case cur == s.Trunk:
 		out("parent:   (none)\n")
 	default:
@@ -148,7 +148,11 @@ func runStatus(args []string) error {
 	if len(children) == 0 {
 		out("children: (none)\n")
 	} else {
-		out("children: %s\n", strings.Join(children, ", "))
+		safeChildren := make([]string, 0, len(children))
+		for _, child := range children {
+			safeChildren = append(safeChildren, sanitizeForTerminal(child))
+		}
+		out("children: %s\n", strings.Join(safeChildren, ", "))
 	}
 
 	switch {
@@ -166,10 +170,10 @@ func runStatus(args []string) error {
 		out("worktree: dirty\n")
 	}
 	if worktreePath != "" {
-		out("worktree path: %s\n", worktreePath)
+		out("worktree path: %s\n", sanitizeForTerminal(worktreePath))
 	}
 	if rebaseInProgress {
-		out("rebase:   in progress on %s (run: st continue / st abort)\n", rebaseBranch)
+		out("rebase:   in progress on %s (run: st continue / st abort)\n", sanitizeForTerminal(rebaseBranch))
 	}
 	return nil
 }

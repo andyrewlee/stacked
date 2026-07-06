@@ -78,9 +78,9 @@ func runUndo(args []string) error {
 		Restored []string `json:"restored"`
 	}{true, entry.Label, restored}
 	return emit(asJSON, payload, func() {
-		out("undid: %s\n", entry.Label)
+		out("undid: %s\n", sanitizeForTerminal(entry.Label))
 		if len(restored) > 0 {
-			out("restored branches: %s\n", joinNames(restored))
+			out("restored branches: %s\n", joinTerminalNames(restored))
 		}
 		out("note: your working tree was not modified; run `git status` to review.\n")
 	})

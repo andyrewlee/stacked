@@ -93,7 +93,7 @@ func runSubmit(args []string) error {
 		for _, name := range stackBranches {
 			pushed = append(pushed, name)
 			if !asJSON {
-				out("would push %s\n", name)
+				out("would push %s\n", sanitizeForTerminal(name))
 			}
 		}
 	} else {
@@ -111,7 +111,7 @@ func runSubmit(args []string) error {
 			}
 			pushed = append(pushed, name)
 			if !asJSON {
-				out("pushed %s\n", name)
+				out("pushed %s\n", sanitizeForTerminal(name))
 			}
 		}
 	}
@@ -126,15 +126,15 @@ func runSubmit(args []string) error {
 	payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: pushed, RepoURL: repoURL}
 	return emit(asJSON, payload, func() {
 		if dryRun {
-			out("\ndry run: %d branch(es) would be pushed to %s:\n", len(pushed), remote)
+			out("\ndry run: %d branch(es) would be pushed to %s:\n", len(pushed), sanitizeForTerminal(remote))
 		} else {
-			out("\nsubmitted %d branch(es) to %s:\n", len(pushed), remote)
+			out("\nsubmitted %d branch(es) to %s:\n", len(pushed), sanitizeForTerminal(remote))
 		}
 		for _, name := range pushed {
-			out("  %s\n", name)
+			out("  %s\n", sanitizeForTerminal(name))
 		}
 		if repoURL != "" {
-			out("\nopen pull requests on your host: %s\n", repoURL)
+			out("\nopen pull requests on your host: %s\n", sanitizeForTerminal(repoURL))
 		}
 	})
 }

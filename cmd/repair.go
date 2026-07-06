@@ -49,7 +49,7 @@ func runRepair(args []string) error {
 		}
 		out("repaired:\n")
 		for _, f := range fixes {
-			out("  - %s\n", f)
+			out("  - %s\n", sanitizeForTerminal(f))
 		}
 		out("run `st restack` to rebase any re-parented branches onto their new parents.\n")
 	})
