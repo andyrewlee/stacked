@@ -304,12 +304,14 @@ func TestSubmitDryRunAndURL(t *testing.T) {
 	wantExit(t, res, 1)
 	wantStderrContains(t, res, "does not exist")
 
-	// Configure an ssh remote and dry-run.
-	r.git("remote", "add", "origin", "git@example.com:acme/widgets.git")
+	// Configure a GitHub-shaped ssh remote and dry-run.
+	r.git("remote", "add", "origin", "git@github.com:acme/widgets.git")
 	res = r.stOK("submit", "--dry-run")
 	wantStdoutContains(t, res, "would push feat-a")
 	wantStdoutContains(t, res, "would push feat-b")
-	wantStdoutContains(t, res, "https://example.com/acme/widgets")
+	wantStdoutContains(t, res, "https://github.com/acme/widgets")
+	wantStdoutContains(t, res, "feat-a -> main  https://github.com/acme/widgets/compare/main...feat-a")
+	wantStdoutContains(t, res, "feat-b -> feat-a  https://github.com/acme/widgets/compare/feat-a...feat-b")
 
 	// At trunk there is nothing to submit.
 	r.stOK("checkout", "main")

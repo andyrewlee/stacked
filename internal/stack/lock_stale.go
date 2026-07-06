@@ -14,7 +14,7 @@ import (
 
 const (
 	malformedLockReclaimAfter   = 10 * time.Minute
-	lockFileAccessRetryAttempts = 10
+	lockFileAccessRetryAttempts = 100
 )
 
 // newLockToken returns an opaque per-acquisition token used to avoid removing
