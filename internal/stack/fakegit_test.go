@@ -30,18 +30,19 @@ type fakeGit struct {
 	// conflict modeling: a branch in conflictNext stops mid-rebase the next time
 	// it is rebased, mirroring a real merge conflict that the caller resolves with
 	// RebaseContinue.
-	conflictNext  map[string]bool
-	rebaseActive  bool
-	rebaseRestall bool // when set, RebaseContinue fails and leaves the rebase paused
-	rebaseBranch  string
-	rebaseNewBase string
-	rebaseOldBase string
-	staged        bool
-	clean         bool
-	checkoutErr   map[string]error
-	deleteErr     map[string]error
-	rebaseErr     map[string]error
-	commitErr     error
+	conflictNext   map[string]bool
+	rebaseActive   bool
+	rebaseRestall  bool // when set, RebaseContinue fails and leaves the rebase paused
+	rebaseBranch   string
+	rebaseNewBase  string
+	rebaseOldBase  string
+	rebaseAbortErr error
+	staged         bool
+	clean          bool
+	checkoutErr    map[string]error
+	deleteErr      map[string]error
+	rebaseErr      map[string]error
+	commitErr      error
 	// detachedAt is the commit a CheckoutDetach left HEAD on ("" when HEAD is
 	// on a branch).
 	detachedAt string
@@ -514,6 +515,9 @@ func (f *fakeGit) RebaseHeadName() (string, error) { return f.rebaseBranch, nil 
 // the branch (it only paused), so clearing the rebase state restores the
 // pre-rebase tip, mirroring "git rebase --abort".
 func (f *fakeGit) RebaseAbort() error {
+	if f.rebaseAbortErr != nil {
+		return f.rebaseAbortErr
+	}
 	if !f.rebaseActive {
 		return fmt.Errorf("no rebase in progress")
 	}
