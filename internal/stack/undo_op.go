@@ -121,8 +121,10 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	if !skipCheckoutRestore && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
 		if err := g.Checkout(entry.CurrentBranch); err != nil {
 			// Local changes blocking the final checkout are tolerated: the refs are
-			// already restored and HEAD simply stays where it is.
-			if !checkoutBlockedByLocalChanges(err) {
+			// already restored and HEAD simply stays where it is. A branch that is
+			// already checked out in another worktree is likewise restored; this
+			// process just cannot check it out in place.
+			if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
 				return nil, fmt.Errorf("checking out restored branch %q: %w", entry.CurrentBranch, err)
 			}
 		}

@@ -258,6 +258,64 @@ func TestUndoCreateWorktreeFromCreatedWorktreeWithShim(t *testing.T) {
 	r.stOK("validate")
 }
 
+func TestUndoCreateWorktreeChildOfLinkedParentWithShim(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	parentOut := r.stOK("worktree", "feat-a", "--json").stdout
+	var parent struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(parentOut), &parent); err != nil {
+		t.Fatalf("decode parent worktree json: %v\n%s", err, parentOut)
+	}
+
+	createDirective := filepath.Join(t.TempDir(), "create-cd")
+	createCmd := exec.Command(stBin, "create", "feat-b", "--worktree", "--json")
+	createCmd.Dir = parent.Path
+	createCmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+createDirective)
+	childOut, err := createCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st create feat-b --worktree from parent worktree: %v\n%s", err, childOut)
+	}
+	var child struct {
+		Worktree string `json:"worktree"`
+	}
+	if err := json.Unmarshal(childOut, &child); err != nil {
+		t.Fatalf("decode child worktree json: %v\n%s", err, childOut)
+	}
+
+	undoDirective := filepath.Join(t.TempDir(), "undo-cd")
+	undoCmd := exec.Command(stBin, "undo")
+	undoCmd.Dir = child.Worktree
+	undoCmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+undoDirective)
+	if undoOut, err := undoCmd.CombinedOutput(); err != nil {
+		t.Fatalf("st undo from child worktree: %v\n%s", err, undoOut)
+	}
+	got, err := os.ReadFile(undoDirective)
+	if err != nil {
+		t.Fatalf("read undo cd directive: %v", err)
+	}
+	gotResolved, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got)))
+	wantResolved, _ := filepath.EvalSymlinks(parent.Path)
+	if gotResolved != wantResolved {
+		t.Fatalf("undo cd directive = %q, want parent worktree %q", got, parent.Path)
+	}
+	if r.branchExists("feat-b") {
+		t.Fatal("undo left feat-b branch behind")
+	}
+	if _, err := os.Stat(child.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("undo left child worktree at %q: %v", child.Worktree, err)
+	}
+	if _, err := os.Stat(parent.Path); err != nil {
+		t.Fatalf("undo removed parent worktree %q: %v", parent.Path, err)
+	}
+	r.stOK("validate")
+}
+
 func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)

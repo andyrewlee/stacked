@@ -128,6 +128,34 @@ func TestUndoCurrentCreatedBranchDetachesWhenParentCheckedOutElsewhere(t *testin
 	}
 }
 
+func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/b", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.checkoutErr["a"] = errors.New("fatal: 'a' is already checked out at '/wt/a'")
+
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("undo left the created branch behind")
+	}
+	if _, ok := f.linkedWorktrees["b"]; ok {
+		t.Fatal("undo left the created branch worktree behind")
+	}
+}
+
 func TestUndoModifyRestoresEveryRef(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -315,7 +343,7 @@ func TestUndoPropagatesFinalCheckoutErrorOnDirtyTree(t *testing.T) {
 	}
 
 	entry := mustSnapshot(t, s, f, "modify")
-	boom := errors.New("branch is already checked out in another worktree")
+	boom := errors.New("checkout failed: permission denied")
 	f.clean = false
 	f.checkoutErr["a"] = boom
 

@@ -110,13 +110,19 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry) error {
 	if !ok || main.Path == "" {
 		return fmt.Errorf("cannot undo creation of current worktree branch %q: main worktree not found", cur)
 	}
+	dest := main.Path
+	if entry.CurrentBranch != "" {
+		if wt, ok := stack.LinkedOwnerOf(wts, entry.CurrentBranch); ok {
+			dest = wt.Path
+		}
+	}
 	if !shimActive() {
 		return fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
 	}
 	if err := os.Chdir(main.Path); err != nil {
 		return fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
 	}
-	writeCDDirective(main.Path)
+	writeCDDirective(dest)
 	return nil
 }
 
