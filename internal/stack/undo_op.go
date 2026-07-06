@@ -46,6 +46,11 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		sort.Strings(extra)
 		for _, name := range extra {
+			if s != nil {
+				if err := s.releaseOwnedWorktree(env, name); err != nil {
+					return nil, fmt.Errorf("releasing worktree for branch %q created by undone command: %w", name, err)
+				}
+			}
 			target := prev.Trunk
 			if s != nil {
 				if b, ok := s.Get(name); ok && g.BranchExists(b.Parent) {
@@ -69,12 +74,13 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 					}
 				}
 				if err := g.Checkout(target); err != nil {
-					if !checkoutBlockedByLocalChanges(err) {
+					if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
 						return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
 					}
-					// Local changes block the checkout: park HEAD on a detached
-					// commit so the branch can still be deleted without touching
-					// the working tree.
+					// Local changes or a target branch checked out in another
+					// worktree block the checkout: park HEAD on a detached commit so
+					// the branch can still be deleted without touching the working
+					// tree.
 					head, revErr := g.RevParse("HEAD")
 					if revErr != nil {
 						return nil, fmt.Errorf("resolving HEAD before deleting %q: %w", name, revErr)
@@ -132,6 +138,13 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 func checkoutBlockedByLocalChanges(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
+}
+
+func checkoutBlockedByOtherWorktree(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already checked out") ||
+		strings.Contains(msg, "used by worktree") ||
+		strings.Contains(msg, "checked out at")
 }
 
 // branchCreatedByEntry reports whether name was created by the command the
