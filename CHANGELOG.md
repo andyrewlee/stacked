@@ -36,7 +36,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`st worktree` (alias `wt`)** materializes, lists, and removes a branch's own
   git worktree under `~/.stacked/worktrees/` using a collision-resistant repo key
   and encoded branch segment, copying `.worktreeinclude` matches (literal
-  paths, gitignored-only, copy-on-write reflink) into it — so multiple agents
+  paths and shell-glob patterns incl. `**`, gitignored-only, copy-on-write
+  reflink) into it — so multiple agents
   can work different branches of one stack in parallel.
 - **`st shell install [bash|zsh|fish]`** prints a shell shim so `st checkout`/`up`/
   `down`/`top`/`bottom` can teleport (`cd`) into a branch's worktree; without the

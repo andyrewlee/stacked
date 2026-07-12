@@ -202,9 +202,11 @@ materializes a git worktree for an existing tracked branch under
 a collision-resistant repo key and encoded branch segment (outside the repo, so
 runners/linters never walk into it). If `.worktreeinclude` exists, entries are
 copied into the worktree via copy-on-write reflink when available. The file is a
-newline-separated list of repo-root-relative literal paths; blank lines and `#`
-comments are ignored, tracked or non-ignored paths are skipped, and wildcard/glob
-expansion is not currently supported. `st worktree ls` lists every worktree;
+newline-separated list of repo-root-relative paths or shell-glob patterns —
+`*` and `?` within a path segment, and a segment of exactly `**` matching any
+number of directories (this is shell globbing, not gitignore syntax: no
+negation). Blank lines and `#` comments are ignored, and tracked or
+non-ignored matches are skipped. `st worktree ls` lists every worktree;
 `st worktree rm <branch>` removes a branch's worktree. `st worktree --all`
 materializes a worktree for every tracked branch that lacks one, in one call —
 the branch checked out in the main worktree is skipped, and a rerun is a

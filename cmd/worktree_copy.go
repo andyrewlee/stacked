@@ -3,18 +3,21 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
 // worktreeIncludeFile is the manifest, in the repo root, listing paths to copy
-// into a freshly-created worktree. Each non-comment line is treated as a literal
-// repo-root-relative path, and only listed paths that are gitignored are copied,
-// so tracked files (already materialized by `git worktree add`) are never
-// duplicated.
+// into a freshly-created worktree. Each non-comment line is a repo-root-relative
+// path or shell-glob pattern (`*`/`?` per segment; a segment of exactly `**`
+// matches zero or more directories — NOT gitignore syntax, no negation), and
+// only matches that are gitignored are copied, so tracked files (already
+// materialized by `git worktree add`) are never duplicated.
 const worktreeIncludeFile = ".worktreeinclude"
 
 // copyWorktreeIncludes copies, from srcRoot into dstRoot, every literal path
@@ -32,6 +35,16 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		return nil, err
 	}
 	entries := parseIncludePatterns(string(data))
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	// Expansion is untrusted input to the SAME pipeline literals use: every
+	// expanded match goes through validation and the containment guards below,
+	// so globbing cannot widen the path-escape surface.
+	entries, err = expandIncludePatterns(srcRoot, entries)
+	if err != nil {
+		return nil, err
+	}
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -116,6 +129,122 @@ func parseIncludePatterns(content string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// expandIncludePatterns expands every parsed manifest line into concrete
+// repo-relative paths, deduplicated in first-seen order (per-line results are
+// sorted for determinism). Lines without glob metacharacters pass through
+// unchanged whether or not they exist — the copy loop's Lstat skip handles
+// absence, exactly as before.
+func expandIncludePatterns(srcRoot string, entries []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		matches, err := expandIncludePattern(srcRoot, entry)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			if !seen[m] {
+				seen[m] = true
+				out = append(out, m)
+			}
+		}
+	}
+	return out, nil
+}
+
+// expandIncludePattern expands one manifest line. A non-matching glob expands
+// to nothing (silent skip, like a listed-but-absent literal); a syntactically
+// invalid pattern is a hard error naming the line. Expansion NEVER validates —
+// every result goes through the same validation pipeline as a literal line.
+func expandIncludePattern(srcRoot, pattern string) ([]string, error) {
+	if !strings.ContainsAny(pattern, "*?[") {
+		return []string{pattern}, nil
+	}
+	segs := strings.Split(filepath.ToSlash(pattern), "/")
+	hasDoubleStar := false
+	for _, seg := range segs {
+		if seg == "**" {
+			hasDoubleStar = true
+			continue
+		}
+		// Surface ErrBadPattern up front so a bad pattern errors even when
+		// nothing would match (filepath.Match fully parses since Go 1.15).
+		if _, err := filepath.Match(seg, ""); err != nil {
+			return nil, fmt.Errorf(".worktreeinclude pattern %q: %w", pattern, err)
+		}
+	}
+	if !hasDoubleStar {
+		abs, err := filepath.Glob(filepath.Join(srcRoot, pattern))
+		if err != nil {
+			return nil, fmt.Errorf(".worktreeinclude pattern %q: %w", pattern, err)
+		}
+		rels := make([]string, 0, len(abs))
+		for _, m := range abs {
+			rel, relErr := filepath.Rel(srcRoot, m)
+			if relErr != nil {
+				continue
+			}
+			rels = append(rels, rel)
+		}
+		sort.Strings(rels)
+		return rels, nil
+	}
+	// '**' walk. fs.WalkDir does not descend symlinked directories (matches
+	// that ARE symlinks still pass through; the copier recreates them
+	// verbatim), and .git is never walked.
+	var rels []string
+	walkErr := fs.WalkDir(os.DirFS(srcRoot), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable subtree: skip, like an absent literal
+		}
+		if p == "." {
+			return nil
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return fs.SkipDir
+		}
+		ok, mErr := matchGlobSegments(segs, strings.Split(p, "/"))
+		if mErr != nil {
+			return mErr
+		}
+		if ok {
+			rels = append(rels, filepath.FromSlash(p))
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, fmt.Errorf(".worktreeinclude pattern %q: %w", pattern, walkErr)
+	}
+	sort.Strings(rels)
+	return rels, nil
+}
+
+// matchGlobSegments matches slash-split path segments against pattern
+// segments, where a pattern segment of exactly "**" consumes zero or more
+// path segments and every other segment matches per filepath.Match.
+func matchGlobSegments(pat, name []string) (bool, error) {
+	if len(pat) == 0 {
+		return len(name) == 0, nil
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(name); i++ {
+			ok, err := matchGlobSegments(pat[1:], name[i:])
+			if err != nil || ok {
+				return ok, err
+			}
+		}
+		return false, nil
+	}
+	if len(name) == 0 {
+		return false, nil
+	}
+	ok, err := filepath.Match(pat[0], name[0])
+	if err != nil || !ok {
+		return ok, err
+	}
+	return matchGlobSegments(pat[1:], name[1:])
 }
 
 // gitIgnoredSet returns which of rels (relative to root) are gitignored, in
