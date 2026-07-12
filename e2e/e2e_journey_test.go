@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -432,6 +433,9 @@ func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
 
 func TestWorktreeIncludeCopyFailureRollsBackWorktree(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on unsafe destination symlink behavior that does not fail on windows")
+	}
 	r := newRepo(t)
 	r.initStack()
 

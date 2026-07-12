@@ -168,6 +168,9 @@ func TestNavigationEdges(t *testing.T) {
 
 func TestLogEscapesControlBytesInSubject(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows replaces raw C1 bytes before the CLI can render the expected \\x9b escape")
+	}
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "evil.txt", "evil\n", "evil\x1b[2Ksubject")
