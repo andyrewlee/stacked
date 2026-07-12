@@ -21,6 +21,12 @@ var guideSteps = []string{
 	"st sync                      # fast-forward trunk, prune merged branches, restack",
 	"st submit                    # push the stack (login-free; prints the repo URL)",
 	"st undo                      # revert the last stack-mutating command",
+	"# parallel work (one worktree per branch):",
+	"st shell install             # once per shell: eval its output so st can cd between worktrees",
+	"st create feat-c --worktree  # new stacked branch straight into its own worktree",
+	"st worktree feat-a           # give an existing branch its own worktree",
+	"st worktree ls               # see which branch lives in which worktree",
+	"st log --json                # orchestrators: worktree/dirty/needsRestack per branch",
 }
 
 // runGuide prints the recommended workflow for driving st (handy for agents).
