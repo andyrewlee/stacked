@@ -145,15 +145,21 @@ func (f *fakeGit) TipsFor(names []string) (map[string]string, error) {
 
 type tipReadSpyGit struct {
 	Git
-	revParseCalls int
-	tipsCalls     int
-	tipsForCalls  int
-	tipsForNames  [][]string
+	revParseCalls      int
+	tipsCalls          int
+	tipsForCalls       int
+	currentBranchCalls int
+	tipsForNames       [][]string
 }
 
 func (g *tipReadSpyGit) RevParse(ref string) (string, error) {
 	g.revParseCalls++
 	return g.Git.RevParse(ref)
+}
+
+func (g *tipReadSpyGit) CurrentBranch() (string, error) {
+	g.currentBranchCalls++
+	return g.Git.CurrentBranch()
 }
 
 func (g *tipReadSpyGit) Tips() (map[string]string, error) {

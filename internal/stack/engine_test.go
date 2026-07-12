@@ -376,8 +376,12 @@ func TestRestackUpstackRefreshesMovedParentTips(t *testing.T) {
 	if counting.tipsCalls != 1 {
 		t.Fatalf("Tips calls = %d, want 1", counting.tipsCalls)
 	}
-	if counting.revParseCalls != 2 {
-		t.Fatalf("RevParse calls = %d, want 2 refreshes", counting.revParseCalls)
+	// One refresh, not two: b's tip is refreshed because c consumes it, but c
+	// is a leaf — nothing reads tips["c"], so its post-rebase refresh is
+	// skipped (the c.ParentSHA assertion below still proves c rebased onto the
+	// REFRESHED b tip).
+	if counting.revParseCalls != 1 {
+		t.Fatalf("RevParse calls = %d, want 1 refresh (b only; leaf c skipped)", counting.revParseCalls)
 	}
 	b, _ := s.Get("b")
 	c, _ := s.Get("c")

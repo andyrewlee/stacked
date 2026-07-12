@@ -94,45 +94,64 @@ func (s *State) RestackBranch(env Env, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
-	return s.restackBranchWith(env, name, b, parentTip)
+	did, _, err := s.restackBranchWith(env, name, b, parentTip, currentBranchOr(env.Git))
+	return did, err
 }
 
-func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip string) (bool, error) {
+// currentBranchOr returns the checked-out branch, or "" when HEAD is detached
+// or unreadable — the value threaded as the cascade's expected HEAD. "" means
+// "do not attempt to restore" (mirrors the old startErr != nil guard).
+func currentBranchOr(g Git) string {
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return ""
+	}
+	return cur
+}
+
+// restackBranchWith rebases name onto parentTip. expectedHEAD is the branch
+// the caller knows HEAD is on ("" = detached/unknown: never restore); the
+// returned string is HEAD's position AFTER the call — the just-rebased name
+// on in-place success, expectedHEAD everywhere else (no-op, cross-worktree,
+// paused conflict, restored failure) — so cascades can thread it instead of
+// spawning a rev-parse per branch.
+func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, expectedHEAD string) (did bool, newHEAD string, err error) {
 	if parentTip == b.ParentSHA {
-		return false, nil
+		return false, expectedHEAD, nil
 	}
 
 	// Owner-driven cross-worktree restack: if name is checked out in ANOTHER
 	// worktree, git forbids rebasing it here, so the rebase must run in that
 	// worktree. This path activates only in a multi-worktree repo where name is
 	// owned elsewhere; single-tree behavior (and the model invariant test, whose
-	// fake reports a single worktree) is unchanged.
+	// fake reports a single worktree) is unchanged. It never moves the caller's
+	// HEAD, so expectedHEAD passes through.
 	if owner, elsewhere, err := s.ownerElsewhere(env.Git, name); err != nil {
-		return false, err
+		return false, expectedHEAD, err
 	} else if elsewhere {
-		return s.restackInWorktree(env, name, b, parentTip, owner)
+		did, err := s.restackInWorktree(env, name, b, parentTip, owner)
+		return did, expectedHEAD, err
 	}
 
-	start, startErr := env.Git.CurrentBranch()
 	if rebaseErr := env.Git.RebaseOnto(parentTip, b.ParentSHA, name); rebaseErr != nil {
 		paused, outErr := rebaseFailure(env.Git, rebaseErr, "rebasing", name, b.Parent)
 		if paused {
-			return false, &ConflictError{Action: "rebasing", Branch: name, Onto: b.Parent}
+			return false, expectedHEAD, &ConflictError{Action: "rebasing", Branch: name, Onto: b.Parent}
 		}
 		// A non-conflict failure left HEAD wherever the rebase aborted to; put the
 		// caller back on the branch they started on before surfacing outErr.
-		if startErr == nil {
-			if restoreErr := restoreHEAD(env, start, s.Trunk); restoreErr != nil {
-				return false, AlsoFailed(outErr, fmt.Sprintf("restore %q", start), restoreErr)
+		if expectedHEAD != "" {
+			if restoreErr := restoreHEAD(env, expectedHEAD, s.Trunk); restoreErr != nil {
+				return false, expectedHEAD, AlsoFailed(outErr, fmt.Sprintf("restore %q", expectedHEAD), restoreErr)
 			}
 		}
-		return false, outErr
+		return false, expectedHEAD, outErr
 	}
 	b.ParentSHA = parentTip
 	if err := env.save(); err != nil {
-		return false, fmt.Errorf("save state after restacking %q: %w", name, err)
+		return false, name, fmt.Errorf("save state after restacking %q: %w", name, err)
 	}
-	return true, nil
+	return true, name, nil
 }
 
 // DriftAgainst computes which tracked branches need a restack purely from a
@@ -213,8 +232,10 @@ func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
 	var rebased []string
+	expectedHEAD := currentBranchOr(env.Git)
 	for _, child := range s.Descendants(name) {
-		did, err := s.restackAgainstTips(env, child, tips)
+		did, newHEAD, err := s.restackAgainstTips(env, child, tips, expectedHEAD)
+		expectedHEAD = newHEAD
 		if err != nil {
 			return rebased, err
 		}
@@ -235,10 +256,12 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
 	var rebased []string
+	expectedHEAD := currentBranchOr(env.Git)
 	for _, start := range starts {
 		order := append([]string{start}, s.Descendants(start)...)
 		for _, name := range order {
-			did, err := s.restackAgainstTips(env, name, tips)
+			did, newHEAD, err := s.restackAgainstTips(env, name, tips, expectedHEAD)
+			expectedHEAD = newHEAD
 			if err != nil {
 				return rebased, err
 			}
@@ -254,26 +277,32 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 // parent tip comes from the map (RevParse fallback for parents outside it),
 // and a rebased branch refreshes its own map entry so later dependents see
 // the new tip.
-func (s *State) restackAgainstTips(env Env, name string, tips map[string]string) (bool, error) {
+func (s *State) restackAgainstTips(env Env, name string, tips map[string]string, expectedHEAD string) (did bool, newHEAD string, err error) {
 	b, err := s.tracked(name)
 	if err != nil {
-		return false, err
+		return false, expectedHEAD, err
 	}
 	parentTip, ok := tips[b.Parent]
 	if !ok {
 		parentTip, err = env.Git.RevParse(branchTipRef(b.Parent))
 		if err != nil {
-			return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
+			return false, expectedHEAD, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 		}
 	}
-	did, err := s.restackBranchWith(env, name, b, parentTip)
+	did, newHEAD, err = s.restackBranchWith(env, name, b, parentTip, expectedHEAD)
 	if err != nil || !did {
-		return did, err
+		return did, newHEAD, err
 	}
-	newTip, err := env.Git.RevParse(branchTipRef(name))
-	if err != nil {
-		return false, fmt.Errorf("resolve %q after restack: %w", name, err)
+	// Refresh the live tip only when someone will read it: tips[name] is
+	// consumed solely by a LATER branch whose parent is name, so a leaf's
+	// refresh would be a pure wasted spawn. The topology is fixed for the
+	// duration of a cascade (re-parenting happens before the walk).
+	if len(s.Children(name)) > 0 {
+		newTip, err := env.Git.RevParse(branchTipRef(name))
+		if err != nil {
+			return false, newHEAD, fmt.Errorf("resolve %q after restack: %w", name, err)
+		}
+		tips[name] = newTip
 	}
-	tips[name] = newTip
-	return true, nil
+	return true, newHEAD, nil
 }
