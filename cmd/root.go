@@ -413,7 +413,7 @@ func renderError(err error, asJSON bool) {
 		_ = enc.Encode(map[string]any{"error": obj})
 		return
 	}
-	fmt.Fprintf(os.Stderr, "st: %s\n", err)
+	fmt.Fprintf(os.Stderr, "st: %s\n", sanitizeErrorForTerminal(err.Error()))
 }
 
 // renderInternalError reports a recovered panic. In --json mode it writes the
