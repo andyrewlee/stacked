@@ -220,30 +220,6 @@ func MergedInto(ref string) (map[string]bool, error) {
 	return merged, nil
 }
 
-// TipSubjects returns the subject line of every local branch's tip commit,
-// keyed by branch name, in a single git invocation — so a caller rendering a
-// whole forest (log) does one spawn instead of one `git log` per branch. A NUL
-// byte separates the refname from the subject so subjects containing spaces are
-// parsed unambiguously.
-func TipSubjects() (map[string]string, error) {
-	out, err := Run("for-each-ref", "--format=%(refname)%00%(contents:subject)", "refs/heads")
-	if err != nil {
-		return nil, err
-	}
-	subjects := map[string]string{}
-	if out == "" {
-		return subjects, nil
-	}
-	for _, line := range strings.Split(out, "\n") {
-		ref, subject, ok := strings.Cut(line, "\x00")
-		if !ok {
-			continue
-		}
-		subjects[strings.TrimPrefix(ref, "refs/heads/")] = subject
-	}
-	return subjects, nil
-}
-
 // TipSubjectsFor returns the subject line of each named local branch's tip
 // commit, keyed by branch name, in a single exact-ref cat-file invocation.
 // Missing branches and non-commit objects are omitted.
