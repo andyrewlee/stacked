@@ -1490,3 +1490,172 @@ func TestWorktreeAllPartialFailureJSON(t *testing.T) {
 		t.Fatalf("failed = %+v, want feat-b with an error", got.Failed)
 	}
 }
+
+// TestWorktreeRemoveAllJSON strict-decodes the bulk-teardown aggregate: every
+// linked worktree removed in sorted order, the main-worktree branch skipped
+// with a reason, no failure.
+func TestWorktreeRemoveAllJSON(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
+	resetWorktreeCache()
+	if err := runWorktree([]string{"--all"}); err != nil {
+		t.Fatalf("worktree --all: %v", err)
+	}
+
+	type rmAllResult struct {
+		Removed []struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+		} `json:"removed"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
+			t.Fatalf("worktree rm --all: %v", err)
+		}
+	})
+	var got rmAllResult
+	decodeStrictJSON(t, "worktree rm --all", out, &got)
+	if len(got.Removed) != 2 || got.Removed[0].Branch != "feat-a" || got.Removed[1].Branch != "feat-b" {
+		t.Fatalf("removed = %+v, want [feat-a feat-b] sorted", got.Removed)
+	}
+	for _, e := range got.Removed {
+		if _, err := os.Stat(e.Path); !os.IsNotExist(err) {
+			t.Fatalf("worktree %q still exists after rm --all: %v", e.Path, err)
+		}
+	}
+	if len(got.Skipped) != 1 || got.Skipped[0].Branch != "feat-c" || got.Skipped[0].Reason != "checked out in the main worktree" {
+		t.Fatalf("skipped = %+v, want feat-c with main-worktree reason", got.Skipped)
+	}
+	if got.Failed != nil {
+		t.Fatalf("failed = %+v, want nil", got.Failed)
+	}
+}
+
+// TestWorktreeRemoveAllSkipsDirty pins the key contract: a dirty worktree is
+// a SKIP (never a failure, never removed) and the command still succeeds.
+func TestWorktreeRemoveAllSkipsDirty(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+	if err := runWorktree([]string{"--all"}); err != nil {
+		t.Fatalf("worktree --all: %v", err)
+	}
+	// Find feat-a's worktree path and dirty it.
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aPath := ""
+	for _, wt := range wts {
+		if wt.Branch == "feat-a" {
+			aPath = wt.Path
+		}
+	}
+	if aPath == "" {
+		t.Fatalf("feat-a worktree not found in %+v", wts)
+	}
+	if err := os.WriteFile(filepath.Join(aPath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	type rmAllResult struct {
+		Removed []struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+		} `json:"removed"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
+			t.Fatalf("worktree rm --all with a dirty worktree should not error: %v", err)
+		}
+	})
+	var got rmAllResult
+	decodeStrictJSON(t, "worktree rm --all dirty", out, &got)
+	if len(got.Removed) != 1 || got.Removed[0].Branch != "feat-b" {
+		t.Fatalf("removed = %+v, want only feat-b", got.Removed)
+	}
+	foundDirtySkip := false
+	for _, sk := range got.Skipped {
+		if sk.Branch == "feat-a" && sk.Reason == "worktree has uncommitted changes" {
+			foundDirtySkip = true
+		}
+	}
+	if !foundDirtySkip {
+		t.Fatalf("skipped = %+v, want feat-a with dirty reason", got.Skipped)
+	}
+	if got.Failed != nil {
+		t.Fatalf("failed = %+v, want nil (dirty is a skip, not a failure)", got.Failed)
+	}
+	if _, err := os.Stat(filepath.Join(aPath, "dirty.txt")); err != nil {
+		t.Fatalf("dirty worktree was removed: %v", err)
+	}
+}
+
+// TestWorktreeRemoveAllIdempotent: a rerun with nothing left removes nothing
+// and exits cleanly.
+func TestWorktreeRemoveAllIdempotent(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+	if err := runWorktree([]string{"--all"}); err != nil {
+		t.Fatalf("worktree --all: %v", err)
+	}
+	if err := runWorktree([]string{"rm", "--all"}); err != nil {
+		t.Fatalf("first rm --all: %v", err)
+	}
+
+	type rmAllResult struct {
+		Removed []struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+		} `json:"removed"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
+			t.Fatalf("second rm --all: %v", err)
+		}
+	})
+	var got rmAllResult
+	decodeStrictJSON(t, "worktree rm --all rerun", out, &got)
+	if len(got.Removed) != 0 {
+		t.Fatalf("rerun removed = %+v, want empty", got.Removed)
+	}
+	if got.Failed != nil {
+		t.Fatalf("rerun failed = %+v, want nil", got.Failed)
+	}
+}
