@@ -52,6 +52,11 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A selected directory already delivers everything beneath it. A nested
+	// selection copied AGAIN would duplicate: `cp -R src dst` copies INTO an
+	// existing destination directory (nesting a spurious extra level), unlike
+	// plainCopy which merges — so drop descendants of selected directories.
+	entries = dropNestedEntries(srcRoot, entries)
 
 	realRoot, err := filepath.EvalSymlinks(srcRoot)
 	if err != nil {
@@ -127,6 +132,35 @@ func parseIncludePatterns(content string) []string {
 			continue
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+// dropNestedEntries removes every entry that lives inside another selected
+// entry that is a directory on disk: copying the ancestor already delivers
+// the descendant. Comparison is on path-segment boundaries ("nm" never
+// suppresses a sibling like "nmx"); only real directories suppress (a
+// symlink-to-dir does not, keeping the conservative pre-existing behavior
+// for links). Survivor order is preserved.
+func dropNestedEntries(srcRoot string, entries []string) []string {
+	dirs := make([]string, 0, len(entries))
+	for _, rel := range entries {
+		if info, err := os.Lstat(filepath.Join(srcRoot, rel)); err == nil && info.IsDir() {
+			dirs = append(dirs, rel)
+		}
+	}
+	out := make([]string, 0, len(entries))
+	for _, rel := range entries {
+		nested := false
+		for _, dir := range dirs {
+			if rel != dir && strings.HasPrefix(rel, dir+string(filepath.Separator)) {
+				nested = true
+				break
+			}
+		}
+		if !nested {
+			out = append(out, rel)
+		}
 	}
 	return out
 }
