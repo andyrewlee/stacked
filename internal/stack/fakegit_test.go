@@ -52,6 +52,10 @@ type fakeGit struct {
 	// linkedWorktrees models extra (non-main) worktrees by branch -> path. The
 	// main worktree (f.head) is synthesized in Worktrees().
 	linkedWorktrees map[string]string
+	// stagedHunks/blame are the canned inputs for the absorb attribution:
+	// DiffCachedHunks returns stagedHunks; BlamePorcelain returns blame[file].
+	stagedHunks []git.Hunk
+	blame       map[string]map[int]string
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
@@ -189,6 +193,15 @@ func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 		}
 	}
 	return merged, nil
+}
+
+// DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
+func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, error) { return f.stagedHunks, nil }
+
+// BlamePorcelain returns the canned per-file blame a test set on blame. The
+// rev is ignored: engine tests only ever blame HEAD.
+func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]string, error) {
+	return f.blame[file], nil
 }
 
 // addWorktree registers a fake linked worktree for branch at path, a test seam

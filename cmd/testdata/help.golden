@@ -4,6 +4,7 @@ usage: st <command> [args]
 
 commands:
   abort              Abort an in-progress restack/rebase, restoring the prior state
+  absorb             Attribute staged hunks to the stack commits that own their lines
   bottom (b)         Jump to the bottom branch of the current stack (just above trunk)
   checkout (co)      Check out a tracked branch (lists branches if no name)
   completion         Print a shell completion script (bash|zsh|fish)

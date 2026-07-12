@@ -43,6 +43,19 @@ func newCreateFlags(o *createOpts) *flag.FlagSet {
 
 func createFlagSet() *flag.FlagSet { return newCreateFlags(&createOpts{}) }
 
+type absorbOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newAbsorbFlags(o *absorbOpts) *flag.FlagSet {
+	fs := newFlagSet("absorb", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "show the hunk-to-commit mapping and refusals without changing anything")
+	return withDefaults(fs, "absorb")
+}
+
+func absorbFlagSet() *flag.FlagSet { return newAbsorbFlags(&absorbOpts{}) }
+
 type worktreeOpts struct {
 	asJSON bool
 	all    bool

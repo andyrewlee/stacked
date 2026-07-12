@@ -345,6 +345,134 @@ func commitSubject(body []byte) (string, bool) {
 // reported by `git worktree list --porcelain`. The main worktree is included.
 // Branch is the short branch name checked out there (empty when detached or
 // bare); Head is the checked-out commit SHA.
+// Hunk is one staged change region from `git diff --cached -U0`. Old* describe
+// the pre-image (HEAD) side; New* the index side. OldN==0 marks a pure addition
+// (no pre-image lines).
+type Hunk struct {
+	File     string `json:"file"`
+	OldStart int    `json:"oldStart"`
+	OldN     int    `json:"oldN"`
+	NewStart int    `json:"newStart"`
+	NewN     int    `json:"newN"`
+}
+
+// DiffCachedHunks returns the staged change regions from `git diff --cached
+// -U0`, in diff order. The current file is tracked from +++ b/<path> lines; a
+// deletion (+++ /dev/null) keeps the --- a/<path> name, since a deleted file's
+// pre-image lines are still attributable.
+func DiffCachedHunks() ([]Hunk, error) {
+	out, err := run("diff", "--cached", "-U0")
+	if err != nil {
+		return nil, err
+	}
+	var hunks []Hunk
+	file := ""
+	pendingOld := ""
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "--- a/"):
+			pendingOld = strings.TrimPrefix(line, "--- a/")
+		case strings.HasPrefix(line, "+++ b/"):
+			file = strings.TrimPrefix(line, "+++ b/")
+		case strings.HasPrefix(line, "+++ /dev/null"):
+			file = pendingOld // deletion: the pre-image name is the touched file
+		case strings.HasPrefix(line, "@@ "):
+			h, ok := parseHunkHeader(line)
+			if !ok || file == "" {
+				continue
+			}
+			h.File = file
+			hunks = append(hunks, h)
+		}
+	}
+	return hunks, nil
+}
+
+// parseHunkHeader parses "@@ -<oldStart>[,<oldN>] +<newStart>[,<newN>] @@ ...";
+// an absent ,<n> means n==1.
+func parseHunkHeader(line string) (Hunk, bool) {
+	rest := strings.TrimPrefix(line, "@@ ")
+	end := strings.Index(rest, " @@")
+	if end < 0 {
+		return Hunk{}, false
+	}
+	fields := strings.Fields(rest[:end])
+	if len(fields) != 2 || !strings.HasPrefix(fields[0], "-") || !strings.HasPrefix(fields[1], "+") {
+		return Hunk{}, false
+	}
+	oldStart, oldN, ok1 := parseHunkRange(strings.TrimPrefix(fields[0], "-"))
+	newStart, newN, ok2 := parseHunkRange(strings.TrimPrefix(fields[1], "+"))
+	if !ok1 || !ok2 {
+		return Hunk{}, false
+	}
+	return Hunk{OldStart: oldStart, OldN: oldN, NewStart: newStart, NewN: newN}, true
+}
+
+// parseHunkRange parses "<start>[,<n>]"; an absent ,<n> means n==1.
+func parseHunkRange(spec string) (start, n int, ok bool) {
+	n = 1
+	numPart, countPart, hasCount := strings.Cut(spec, ",")
+	start, err := strconv.Atoi(numPart)
+	if err != nil {
+		return 0, 0, false
+	}
+	if hasCount {
+		n, err = strconv.Atoi(countPart)
+		if err != nil {
+			return 0, 0, false
+		}
+	}
+	return start, n, true
+}
+
+// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
+// last touched it, via one `git blame --porcelain` spawn. In porcelain output
+// EVERY line gets a header `<40-hex> <origLine> <finalLine>[ <groupSize>]`
+// (content lines start with a TAB and metadata lines with a keyword, so the
+// hex prefix is unambiguous); only the SHA and finalLine are consumed.
+func BlamePorcelain(file, rev string) (map[int]string, error) {
+	if err := validRefArg("ref", rev); err != nil {
+		return nil, err
+	}
+	out, err := run("blame", "--porcelain", rev, "--", file)
+	if err != nil {
+		return nil, err
+	}
+	lines := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 42 || line[40] != ' ' {
+			continue
+		}
+		sha := line[:40]
+		if !isHex40(sha) {
+			continue
+		}
+		fields := strings.Fields(line[41:])
+		if len(fields) < 2 {
+			continue
+		}
+		final, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		lines[final] = sha
+	}
+	return lines, nil
+}
+
+func isHex40(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 type Worktree struct {
 	Path     string `json:"path"`
 	Branch   string `json:"branch,omitempty"`
