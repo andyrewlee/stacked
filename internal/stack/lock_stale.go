@@ -13,7 +13,12 @@ import (
 )
 
 const (
-	malformedLockReclaimAfter   = 10 * time.Minute
+	malformedLockReclaimAfter = 10 * time.Minute
+	// lockFileAccessRetryAttempts bounds the 1ms-sleep retry loops around lock
+	// file reads/removes and the create-conflict stat probe: ~100ms worst case,
+	// sized for transient windows holds by AV scanners and indexers (bumped
+	// from 10 after ci-windows flakes; a persistent failure past the budget is
+	// treated as real, not contention).
 	lockFileAccessRetryAttempts = 100
 )
 
@@ -34,26 +39,40 @@ func lockFileContent(pid int, now time.Time, token string) string {
 }
 
 func removeLockFileIfContent(path, want string) bool {
+	ok, _ := removeLockFileIfContentErr(path, want)
+	return ok
+}
+
+// removeLockFileIfContentErr removes path while it still holds exactly want.
+// When the removal fails for a reason other than a content mismatch, the
+// final read/remove error is returned so callers can distinguish a permission
+// failure from ordinary contention.
+func removeLockFileIfContentErr(path, want string) (bool, error) {
+	var lastErr error
 	for attempt := 0; attempt < lockFileAccessRetryAttempts; attempt++ {
 		content, err := os.ReadFile(path)
 		if err != nil {
 			if retryableLockFileAccess(err) {
+				lastErr = err
 				time.Sleep(time.Millisecond)
 				continue
 			}
-			return false
+			return false, err
 		}
 		if string(content) != want {
-			return false
+			return false, nil
 		}
-		if err := os.Remove(path); err == nil {
-			return true
-		} else if !retryableLockFileAccess(err) {
-			return false
+		err = os.Remove(path)
+		if err == nil {
+			return true, nil
 		}
+		if !retryableLockFileAccess(err) {
+			return false, err
+		}
+		lastErr = err
 		time.Sleep(time.Millisecond)
 	}
-	return false
+	return false, lastErr
 }
 
 func lockCreateConflict(path string, err error) bool {
@@ -91,7 +110,12 @@ func malformedLockIsAbandoned(path, content string, now time.Time) bool {
 	return now.Sub(info.ModTime()) > malformedLockReclaimAfter
 }
 
-func acquireReclaimGuard(dir string) (func(), bool) {
+// acquireReclaimGuard takes the lock.reclaim guard file that serializes stale
+// lock reclamation. On failure the returned func is nil; the error, when
+// non-nil, is the underlying cause (used by acquireExclLock to tell a real
+// permission problem from ordinary contention — a nil error means plain
+// contention).
+func acquireReclaimGuard(dir string) (func(), error) {
 	path := filepath.Join(dir, "lock.reclaim")
 	token := newLockToken()
 	contents := lockFileContent(os.Getpid(), time.Now(), token)
@@ -101,29 +125,31 @@ func acquireReclaimGuard(dir string) (func(), bool) {
 			if _, err := f.WriteString(contents); err != nil {
 				_ = f.Close()
 				_ = os.Remove(path)
-				return nil, false
+				return nil, err
 			}
 			if err := f.Close(); err != nil {
 				_ = os.Remove(path)
-				return nil, false
+				return nil, err
 			}
 			return func() {
 				_ = removeLockFileIfContent(path, contents)
-			}, true
+			}, nil
 		}
 		if !lockCreateConflict(path, err) || attempt > 0 {
-			return nil, false
+			return nil, err
 		}
 		existing, readErr := os.ReadFile(path)
 		if readErr != nil {
 			continue
 		}
-		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
-			!removeLockFileIfContent(path, string(existing)) {
-			return nil, false
+		if !lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now()) {
+			return nil, nil
+		}
+		if removed, rmErr := removeLockFileIfContentErr(path, string(existing)); !removed {
+			return nil, rmErr
 		}
 	}
-	return nil, false
+	return nil, nil
 }
 
 // acquireExclLock takes an exclusive O_CREATE|O_EXCL lock file in dir — the
@@ -168,8 +194,15 @@ func acquireExclLock(dir string) (func(), error) {
 		if attempt > 0 {
 			return nil, busy
 		}
-		gr, ok := acquireReclaimGuard(dir)
-		if !ok {
+		gr, gerr := acquireReclaimGuard(dir)
+		if gr == nil {
+			// A guard failure is normally contention (another reclaimer, or a
+			// live holder). But when the recorded owner is provably gone and the
+			// failure classifies as access-denied, "wait for the other command"
+			// is a lie — the lock is stale and this process cannot act on it.
+			if gerr != nil && lockAccessDeniedErr(gerr) && lockOwnerGoneAt(path) {
+				return nil, fmt.Errorf("cannot reclaim stale lock %s (owner is gone): %w — check directory permissions", path, gerr)
+			}
 			return nil, busy
 		}
 		guardRelease = gr
@@ -177,10 +210,30 @@ func acquireExclLock(dir string) (func(), error) {
 		if readErr != nil {
 			continue
 		}
-		if (!lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now())) ||
-			!removeLockFileIfContent(path, string(existing)) {
+		if !lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now()) {
+			return nil, busy
+		}
+		if removed, rmErr := removeLockFileIfContentErr(path, string(existing)); !removed {
+			// The owner is gone but the stale file cannot be removed: surface a
+			// permission failure instead of pointing the user at a process that
+			// does not exist. Anything else stays the busy sentinel (e.g. the
+			// content changed because a racing reclaimer won).
+			if rmErr != nil && lockAccessDeniedErr(rmErr) {
+				return nil, fmt.Errorf("cannot reclaim stale lock %s (owner is gone): %w — check directory permissions", path, rmErr)
+			}
 			return nil, busy
 		}
 	}
 	return nil, busy
+}
+
+// lockOwnerGoneAt reports whether the lock file at path records an owner that
+// is provably gone, or is malformed and abandoned; read failures fail closed
+// (treated as a possibly-live owner).
+func lockOwnerGoneAt(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return lockOwnerIsGone(string(content)) || malformedLockIsAbandoned(path, string(content), time.Now())
 }

@@ -74,7 +74,7 @@ func TestAcquireReclaimGuardDoesNotRecoverOldLockWithLiveOwner(t *testing.T) {
 	if err := os.WriteFile(path, []byte(oldLiveOwner), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if release, ok := acquireReclaimGuard(dir); ok {
+	if release, err := acquireReclaimGuard(dir); err == nil && release != nil {
 		release()
 		t.Fatal("reclaim guard should not recover an old lock while its owner pid is live")
 	}
@@ -89,11 +89,11 @@ func TestAcquireReclaimGuardDoesNotRecoverOldLockWithLiveOwner(t *testing.T) {
 
 func TestAcquireReclaimGuard(t *testing.T) {
 	dir := t.TempDir()
-	release, ok := acquireReclaimGuard(dir)
-	if !ok {
-		t.Fatal("first reclaim guard acquisition failed")
+	release, err := acquireReclaimGuard(dir)
+	if err != nil || release == nil {
+		t.Fatalf("first reclaim guard acquisition failed: %v", err)
 	}
-	if _, ok := acquireReclaimGuard(dir); ok {
+	if second, err := acquireReclaimGuard(dir); err == nil && second != nil {
 		t.Fatal("second reclaim guard acquisition should fail")
 	}
 	release()
@@ -113,9 +113,9 @@ func TestAcquireReclaimGuardRecoversMalformedOldFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	release, ok := acquireReclaimGuard(dir)
-	if !ok {
-		t.Fatal("reclaim guard should recover old malformed file")
+	release, err := acquireReclaimGuard(dir)
+	if err != nil || release == nil {
+		t.Fatalf("reclaim guard should recover old malformed file: %v", err)
 	}
 	release()
 }
@@ -128,9 +128,9 @@ func TestAcquireReclaimGuardRecoversDeadOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	release, ok := acquireReclaimGuard(dir)
-	if !ok {
-		t.Fatal("reclaim guard should recover dead owner")
+	release, err := acquireReclaimGuard(dir)
+	if err != nil || release == nil {
+		t.Fatalf("reclaim guard should recover dead owner: %v", err)
 	}
 	release()
 }
