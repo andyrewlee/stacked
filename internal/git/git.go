@@ -94,6 +94,18 @@ func validRefArg(kind, name string) error {
 	return nil
 }
 
+// hasControlOrSpace reports whether s carries any byte that could break a
+// record framing (space, C0 control incl. NL/NUL, or DEL). Legitimate git
+// refnames and hex SHAs never contain these.
+func hasControlOrSpace(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] <= 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckBranchName reports whether name is a usable git branch name, deferring to
 // git's own check-ref-format so the rules match exactly (no spaces, no "..",
 // no trailing ".lock", etc.). It returns a friendly one-line error instead of
@@ -1045,27 +1057,45 @@ func UpdateRef(ref, sha string) error {
 }
 
 // UpdateRefs sets every ref in updates to its SHA in a single
-// `git update-ref --stdin` invocation. git applies the batch as one
+// `git update-ref -z --stdin` invocation. git applies the batch as one
 // transaction: on any failure no ref is updated. An `update` directive
 // creates a missing ref, which is what resurrects pruned branches on undo.
 // Empty input is a no-op.
+//
+// The batch is NUL-framed (-z) and both refs and values are rejected if they
+// carry whitespace/control bytes: the inputs come from the undo journal,
+// which the threat model treats as potentially hostile, and a newline in a
+// space/LF-framed record would inject a second directive into the
+// transaction (the argv-framed single-ref UpdateRef never had that problem).
 func UpdateRefs(updates map[string]string) error {
 	if len(updates) == 0 {
 		return nil
 	}
 	refs := make([]string, 0, len(updates))
-	for ref := range updates {
+	for ref, val := range updates {
 		if err := validRefArg("ref", ref); err != nil {
 			return err
+		}
+		if hasControlOrSpace(ref) {
+			return fmt.Errorf("ref %q contains whitespace or control bytes", ref)
+		}
+		if hasControlOrSpace(val) {
+			return fmt.Errorf("update value for %q contains whitespace or control bytes", ref)
 		}
 		refs = append(refs, ref)
 	}
 	sort.Strings(refs) // deterministic batch for tests and debuggability
 	var b strings.Builder
 	for _, ref := range refs {
-		fmt.Fprintf(&b, "update %s %s\n", ref, updates[ref])
+		// -z record grammar: update SP <ref> NUL <newvalue> NUL <oldvalue> NUL.
+		// The old-oid field must be PRESENT mid-batch (omitting it makes git
+		// consume the next record as the old value) but EMPTY, which means "no
+		// verification" — same semantics as the old newline form, verified
+		// against real git: empty old-oid updates existing refs and creates
+		// missing ones.
+		fmt.Fprintf(&b, "update %s\x00%s\x00\x00", ref, updates[ref])
 	}
-	cmd := exec.Command("git", "update-ref", "--stdin")
+	cmd := exec.Command("git", "update-ref", "-z", "--stdin")
 	cmd.Env = gitEnv()
 	cmd.Stdin = strings.NewReader(b.String())
 	var stdout, stderr bytes.Buffer
