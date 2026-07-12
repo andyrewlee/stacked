@@ -694,3 +694,64 @@ func assertSameError(t *testing.T, want string, preview func() error, actual fun
 		t.Fatalf("dirty sentinel mismatch: preview=%v actual=%v", previewErr, actualErr)
 	}
 }
+
+// TestRestackPlanMatchesActual closes the one preview/execute pair without a
+// MatchesActual parity test: plain Restack vs RestackPlan are genuinely
+// different code paths (RestackBranch+RestackUpstack vs the plan
+// accumulator), so drift between `st restack -n` and `st restack` needs a
+// test to fail. Covers both Restack scopes, with a dirty-linked-worktree
+// descendant so Notes parity is asserted too.
+func TestRestackPlanMatchesActual(t *testing.T) {
+	// main -> a -> b -> c, with c owned by a DIRTY linked worktree, and main
+	// advanced so the whole upstack is out of date. A restack rebases a and b
+	// and SKIPS c (dirty worktree), producing a non-empty Notes.
+	setup := func(t *testing.T, checkout string) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		f.addWorktree("/wt/c", "c")
+		f.markWorktreeDirty("c")
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("main moves")
+		if err := f.Checkout(checkout); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	for _, tc := range []struct{ name, checkout string }{
+		{"from-trunk", "main"},
+		{"from-branch", "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, env := setup(t, tc.checkout)
+			before := capturePreviewState(t, f, s)
+			preview, err := RestackPlan(env, s)
+			if err != nil {
+				t.Fatalf("RestackPlan: %v", err)
+			}
+			assertPreviewDidNotMutate(t, f, s, before)
+			if !preview.DryRun {
+				t.Fatal("RestackPlan should be marked DryRun")
+			}
+			if len(preview.Notes) == 0 {
+				t.Fatal("expected a skip note; setup did not produce one")
+			}
+			wantNote := skippedWorktreeNote("c")
+			if len(preview.Notes) != 1 || preview.Notes[0] != wantNote {
+				t.Fatalf("preview notes = %v, want [%s]", preview.Notes, wantNote)
+			}
+
+			_, s2, env2 := setup(t, tc.checkout)
+			actual, err := Restack(env2, s2)
+			if err != nil {
+				t.Fatalf("Restack: %v", err)
+			}
+			assertPlanResultFields(t, preview, actual)
+		})
+	}
+}
