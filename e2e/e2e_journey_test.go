@@ -1686,6 +1686,62 @@ func TestSyncFromLinkedWorktree(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestRestackAllFromLinkedWorktree proves `st restack --all` reaches a
+// SIBLING stack from inside a linked worktree — the whole-forest restack an
+// orchestrator needs, without a trunk checkout and without sync's fetch/prune.
+func TestRestackAllFromLinkedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	r.create("feat-x", "x.txt", "x\n", "x")
+	r.create("feat-y", "y.txt", "y\n", "y")
+	r.stOK("checkout", "main")
+
+	// Advance main directly so every stack needs a restack.
+	r.writeFile("m.txt", "m\n")
+	r.git("add", "m.txt")
+	r.git("commit", "-q", "-m", "advance main")
+
+	out := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &wt); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(stBin, "restack", "--all")
+	cmd.Dir = wt.Path
+	cmd.Env = cleanEnv(r.home)
+	allOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st restack --all from linked worktree: %v\n%s", err, allOut)
+	}
+
+	var root logNode
+	if err := json.Unmarshal([]byte(r.stOK("log", "--json").stdout), &root); err != nil {
+		t.Fatalf("decode log json: %v", err)
+	}
+	for _, name := range []string{"feat-a", "feat-x", "feat-y"} {
+		node := findNode(&root, name)
+		if node == nil {
+			t.Fatalf("%s missing from log", name)
+		}
+		if node.NeedsRestack {
+			t.Fatalf("%s still needs restack after restack --all:\n%s", name, allOut)
+		}
+	}
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("main worktree branch = %q, want main", cur)
+	}
+	if got := r.gitIn(wt.Path, "rev-parse", "--abbrev-ref", "HEAD"); got != "feat-a" {
+		t.Fatalf("feat-a worktree branch = %q, want feat-a", got)
+	}
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()

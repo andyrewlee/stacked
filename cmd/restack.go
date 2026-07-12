@@ -7,7 +7,7 @@ func init() {
 		Name:       "restack",
 		Aliases:    []string{"r"},
 		Summary:    "Rebase the current branch and everything above it onto their parents",
-		Usage:      "st restack [--dry-run] [--json]",
+		Usage:      "st restack [--all] [--dry-run] [--json]",
 		Run:        runRestack,
 		NewFlagSet: restackFlagSet,
 	})
@@ -22,18 +22,25 @@ func runRestack(args []string) error {
 	if err := rejectArgs("restack", fs.Args()); err != nil {
 		return err
 	}
-	asJSON, dryRun := o.asJSON, o.dryRun
+	asJSON, dryRun, all := o.asJSON, o.dryRun, o.all
 
 	if dryRun {
 		s, err := loadState()
 		if err != nil {
 			return err
 		}
-		res, err := stack.RestackPlan(stackEnv(s, asJSON), s)
+		plan := stack.RestackPlan
+		if all {
+			plan = stack.RestackAllPlan
+		}
+		res, err := plan(stackEnv(s, asJSON), s)
 		if err != nil {
 			return err
 		}
 		return renderResult(res, asJSON)
+	}
+	if all {
+		return mutate("restack", asJSON, stack.RestackAllOp)
 	}
 	return mutate("restack", asJSON, stack.Restack)
 }
