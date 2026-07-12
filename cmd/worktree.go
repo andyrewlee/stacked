@@ -54,17 +54,22 @@ func runWorktree(args []string) error {
 }
 
 // repoIdentifier returns the stable repository key used as the <repo-key>
-// segment of a generated worktree path.
-func repoIdentifier() (string, error) {
-	root, err := git.RepoRoot()
+// segment of a generated worktree path, plus the repo root it resolved on the
+// way (so callers need not spawn `rev-parse --show-toplevel` again).
+func repoIdentifier() (key, root string, err error) {
+	root, err = git.RepoRoot()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	commonDir, err := git.GitCommonDir()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return stack.StableRepoKey(stack.StableRepoBase(root, commonDir), commonDir)
+	key, err = stack.StableRepoKey(stack.StableRepoBase(root, commonDir), commonDir)
+	if err != nil {
+		return "", "", err
+	}
+	return key, root, nil
 }
 
 // worktreeAdd materializes a worktree for an existing tracked branch at the
@@ -116,7 +121,7 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 		return materializedWorktree{}, fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
 	}
 
-	repo, err := repoIdentifier()
+	repo, root, err := repoIdentifier()
 	if err != nil {
 		return materializedWorktree{}, err
 	}
@@ -132,10 +137,6 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, addErr)
 	}
 
-	root, err := git.RepoRoot()
-	if err != nil {
-		return materializedWorktree{}, err
-	}
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
