@@ -138,7 +138,12 @@ One stack, N agents, one worktree per branch:
 1. **Spawn.** `st create <name> --worktree --json` returns `worktree` (the
    directory to start the agent in) and `switched` (whether the calling shell
    teleported). For an existing branch: `st worktree <branch> --json` returns
-   `path`.
+   `path`. To seed every tracked branch at once: `st worktree --all --json`
+   returns `{"created":[{"branch","path","copied":[],"summary"}],
+   "skipped":[{"branch","reason"}],"failed":{"branch","error"}}` — the branch
+   checked out in the main worktree is skipped, adds stop at the first failure
+   (`failed`, non-zero exit; rerunning is safe — materialization is
+   idempotent).
 2. **Observe.** `st log --json` carries, per node, `worktree` (the branch is
    claimed by that worktree), `dirty` (uncommitted work there), and
    `needsRestack`. A node with no `worktree` field is unclaimed.

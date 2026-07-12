@@ -139,7 +139,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st undo` | | Undo the last stack-mutating command. |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
-| `st worktree <branch> \| ls \| rm <branch>` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
+| `st worktree <branch> \| --all \| ls \| rm <branch>` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
 | `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |
@@ -193,7 +193,7 @@ own worktree (see `st worktree`), checkout *teleports* there instead of switchin
 in place — with the shell shim installed your shell `cd`s into the worktree; without
 it the path is printed.
 
-#### `st worktree <branch> | ls | rm <branch>` (`wt`)
+#### `st worktree <branch> | --all | ls | rm <branch>` (`wt`)
 Make a branch a "place you can be" on its own — useful for running multiple agents
 on different branches of one stack in parallel. To create a *new* branch straight
 into its own worktree, use `st create <name> --worktree`; `st worktree <branch>`
@@ -205,7 +205,10 @@ copied into the worktree via copy-on-write reflink when available. The file is a
 newline-separated list of repo-root-relative literal paths; blank lines and `#`
 comments are ignored, tracked or non-ignored paths are skipped, and wildcard/glob
 expansion is not currently supported. `st worktree ls` lists every worktree;
-`st worktree rm <branch>` removes a branch's worktree. The stack metadata is
+`st worktree rm <branch>` removes a branch's worktree. `st worktree --all`
+materializes a worktree for every tracked branch that lacks one, in one call —
+the branch checked out in the main worktree is skipped, and a rerun is a
+no-op. The stack metadata is
 shared across all worktrees, so every `st` command sees the same stack.
 
 #### `st shell install [bash|zsh|fish]`

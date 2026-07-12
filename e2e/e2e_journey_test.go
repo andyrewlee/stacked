@@ -1742,6 +1742,33 @@ func TestRestackAllFromLinkedWorktree(t *testing.T) {
 	}
 }
 
+// TestWorktreeAllJourney seeds a whole stack's worktrees in one call and
+// proves the rerun is a no-op success.
+func TestWorktreeAllJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "main")
+
+	r.stOK("worktree", "--all")
+	lsOut := r.stOK("worktree", "ls").stdout
+	for _, name := range []string{"feat-a", "feat-b", "feat-c"} {
+		if !strings.Contains(lsOut, name) {
+			t.Fatalf("worktree ls missing %s after --all:\n%s", name, lsOut)
+		}
+	}
+
+	// Rerun: still exit 0, same worktrees.
+	rerun := r.stOK("worktree", "--all")
+	if !strings.Contains(rerun.stdout, "worktree already exists") {
+		t.Fatalf("rerun output missing already-exists rows:\n%s", rerun.stdout)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()

@@ -10,11 +10,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "worktree",
-		Aliases: []string{"wt"},
-		Summary: "Materialize, list, or remove a branch's own worktree",
-		Usage:   "st worktree <branch> | ls | rm <branch> [--json]",
-		Run:     runWorktree,
+		Name:       "worktree",
+		Aliases:    []string{"wt"},
+		Summary:    "Materialize, list, or remove a branch's own worktree",
+		Usage:      "st worktree <branch> | --all | ls | rm <branch> [--json]",
+		Run:        runWorktree,
+		NewFlagSet: worktreeFlagSet,
 	})
 }
 
@@ -24,14 +25,21 @@ func init() {
 //	st worktree ls         list every worktree
 //	st worktree rm <name>  remove a branch's worktree
 func runWorktree(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("worktree", &asJSON)
+	var o worktreeOpts
+	fs := newWorktreeFlags(&o)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	asJSON := o.asJSON
 	rest := fs.Args()
+	if o.all {
+		if len(rest) != 0 {
+			return fmt.Errorf("worktree --all takes no arguments")
+		}
+		return worktreeAddAll(asJSON)
+	}
 	if len(rest) == 0 {
-		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>)")
+		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>, --all)")
 	}
 
 	switch rest[0] {
@@ -251,6 +259,93 @@ func emitWorktree(asJSON bool, branch, path string, copied []string, summary str
 				safeCopied = append(safeCopied, sanitizeForTerminal(name))
 			}
 			out("copied: %s\n", joinNames(safeCopied))
+		}
+	})
+}
+
+// worktreeAllResult is the aggregate JSON contract of `st worktree --all`:
+// what was materialized (or already existed), what was skipped and why, and —
+// only on the error exit — the branch whose materialization failed. Adds stop
+// at the first failure (they are not undoable); rerunning after a fix is safe
+// because materialization is idempotent.
+type worktreeAllResult struct {
+	Created []worktreeAllEntry  `json:"created"`
+	Skipped []worktreeAllSkip   `json:"skipped,omitempty"`
+	Failed  *worktreeAllFailure `json:"failed,omitempty"`
+}
+
+type worktreeAllEntry struct {
+	Branch  string   `json:"branch"`
+	Path    string   `json:"path"`
+	Copied  []string `json:"copied,omitempty"`
+	Summary string   `json:"summary"`
+}
+
+type worktreeAllSkip struct {
+	Branch string `json:"branch"`
+	Reason string `json:"reason"`
+}
+
+type worktreeAllFailure struct {
+	Branch string `json:"branch"`
+	Error  string `json:"error"`
+}
+
+// worktreeAddAll materializes a worktree for every tracked branch that lacks
+// one, in deterministic (sorted) order under a single lock. The branch checked
+// out in the main worktree is skipped (git cannot give it a second checkout);
+// branches that already own a worktree report their existing path.
+func worktreeAddAll(asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	mainBranch := ""
+	if main, ok := stack.MainWorktree(wts); ok {
+		mainBranch = main.Branch
+	}
+
+	result := worktreeAllResult{Created: []worktreeAllEntry{}}
+	for _, name := range names {
+		if name == mainBranch {
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
+			continue
+		}
+		created, err := materializeWorktree(name)
+		if err != nil {
+			// Emit the partial result (what succeeded plus the failing branch)
+			// before returning, mirroring submit's partial-failure contract; the
+			// non-zero exit and error envelope still signal the failure.
+			if asJSON {
+				result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+				_ = emit(true, result, func() {})
+			}
+			return fmt.Errorf("materializing worktree for %q (%d of %d done): %w", name, len(result.Created), len(names), err)
+		}
+		result.Created = append(result.Created, worktreeAllEntry{Branch: name, Path: created.Path, Copied: created.Copied, Summary: created.Summary})
+	}
+	return emit(asJSON, result, func() {
+		for _, e := range result.Created {
+			out("%s: %s -> %s\n", sanitizeForTerminal(e.Summary), sanitizeForTerminal(e.Branch), sanitizeForTerminal(e.Path))
+		}
+		for _, sk := range result.Skipped {
+			out("skipped %s (%s)\n", sanitizeForTerminal(sk.Branch), sanitizeForTerminal(sk.Reason))
 		}
 	})
 }
