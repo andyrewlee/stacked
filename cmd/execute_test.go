@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // withArgs runs fn with os.Args set to {"st"} + args, restoring os.Args after.

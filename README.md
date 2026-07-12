@@ -74,7 +74,10 @@ versions use a fallback. The full gate (`make ci`) additionally needs
 `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
 
 ```sh
-# install onto your PATH
+# install the latest release onto your PATH (no clone needed)
+go install github.com/andyrewlee/stacked/cmd/st@latest
+
+# ...or install from a clone
 go install ./cmd/st
 
 # ...or build locally (Makefile stamps the version from git)

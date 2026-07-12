@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {

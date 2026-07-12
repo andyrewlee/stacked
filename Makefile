@@ -1,6 +1,6 @@
 BINARY := st
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X stacked/cmd.version=$(VERSION)
+LDFLAGS := -X github.com/andyrewlee/stacked/cmd.version=$(VERSION)
 
 # Coverage gate threshold (percent). Overridable: `make cover COVERAGE_MIN=80`.
 COVERAGE_MIN ?= 75

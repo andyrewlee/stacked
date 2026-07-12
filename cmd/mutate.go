@@ -6,7 +6,7 @@ package cmd
 import (
 	"fmt"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // acquireLock takes the repository stack lock; the caller must defer the

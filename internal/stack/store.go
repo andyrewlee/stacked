@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 var stackedDirCache sync.Map // cwd -> dir

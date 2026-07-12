@@ -3,12 +3,12 @@
 # Matched on path + function (never line numbers). This list is a ratchet:
 # entries should only be removed. Allowlisting NEW feature code is the smell
 # the floor exists to catch.
-stacked/cmd/sanitize.go	terminalSummary	# interactive-terminal branch; tests run with piped stdio
-stacked/cmd/shell.go	topSummary	# interactive-terminal-only render twin
-stacked/cmd/sanitize.go	topSummaryForTerminal	# interactive-terminal-only render twin
-stacked/cmd/gitenv.go	WorktreeRemove	# cachedQuietShell twin of the tested cachedShell override (JSON mode)
-stacked/cmd/worktree_copy.go	ensureSafeDestinationDir	# defensive symlink/permission branches; happy+attack paths covered
-stacked/internal/git/shell.go	Worktrees	# production always uses the cmd-layer cached override
-stacked/internal/git/shell.go	RebaseContinue	# QuietShell JSON-mode twin of the tested Shell method
-stacked/internal/stack/lock_access_other.go	retryableLockFileAccess	# !windows stub, only meaningful on windows
-stacked/internal/stack/lock_stale.go	removeLockFileIfContentErr	# windows-only retry loop branches; unix paths covered
+github.com/andyrewlee/stacked/cmd/sanitize.go	terminalSummary	# interactive-terminal branch; tests run with piped stdio
+github.com/andyrewlee/stacked/cmd/shell.go	topSummary	# interactive-terminal-only render twin
+github.com/andyrewlee/stacked/cmd/sanitize.go	topSummaryForTerminal	# interactive-terminal-only render twin
+github.com/andyrewlee/stacked/cmd/gitenv.go	WorktreeRemove	# cachedQuietShell twin of the tested cachedShell override (JSON mode)
+github.com/andyrewlee/stacked/cmd/worktree_copy.go	ensureSafeDestinationDir	# defensive symlink/permission branches; happy+attack paths covered
+github.com/andyrewlee/stacked/internal/git/shell.go	Worktrees	# production always uses the cmd-layer cached override
+github.com/andyrewlee/stacked/internal/git/shell.go	RebaseContinue	# QuietShell JSON-mode twin of the tested Shell method
+github.com/andyrewlee/stacked/internal/stack/lock_access_other.go	retryableLockFileAccess	# !windows stub, only meaningful on windows
+github.com/andyrewlee/stacked/internal/stack/lock_stale.go	removeLockFileIfContentErr	# windows-only retry loop branches; unix paths covered

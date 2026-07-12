@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 func TestParseIncludePatterns(t *testing.T) {

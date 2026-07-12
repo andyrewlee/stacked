@@ -3,7 +3,7 @@ package cmd
 import (
 	"errors"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {

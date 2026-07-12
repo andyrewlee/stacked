@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"stacked/internal/git"
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {

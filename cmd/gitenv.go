@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 
-	"stacked/internal/git"
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // loadState loads the persisted stack state. If stacked has not been initialized

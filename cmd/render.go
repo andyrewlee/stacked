@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // emit renders a command result as indented JSON when asJSON, otherwise runs
