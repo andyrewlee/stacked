@@ -10,19 +10,9 @@ import (
 	"github.com/andyrewlee/stacked/internal/git"
 )
 
-func TestParseIncludePatterns(t *testing.T) {
-	in := "# a comment\n\nnode_modules\n  target  \n# trailing\n./build\n../outside.txt\n/abs/path\nsub/../../escape\n"
-	got := parseIncludePatterns(in)
-	want := []string{"node_modules", "target", "./build", "../outside.txt", "/abs/path", "sub/../../escape"}
-	if len(got) != len(want) {
-		t.Fatalf("parseIncludePatterns = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("entry[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
+// TestParseIncludePatterns and the direct ValidateWorktreeIncludePath test
+// moved with the pure helpers to internal/stack/worktree_include_test.go
+// (plan 068 slice 1). The fs-bound containment suite below stays here.
 
 func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
 	orig := cachedWorktrees
@@ -555,26 +545,6 @@ func TestCopyWorktreeIncludesRejectsDestinationParentSymlink(t *testing.T) {
 	}
 	if _, statErr := os.Stat(outsideSubdir); !os.IsNotExist(statErr) {
 		t.Fatalf("outside subdir was created before destination parent rejection: %v", statErr)
-	}
-}
-
-func TestCopyWorktreeIncludesRejectsUnsafePaths(t *testing.T) {
-	absolute := filepath.Join(t.TempDir(), "outside.txt")
-	unsafe := []string{
-		absolute,
-		".",
-		"..",
-		"../outside.txt",
-		"dir/../../outside.txt",
-	}
-	for _, rel := range unsafe {
-		if _, err := validateWorktreeIncludePath(rel); err == nil {
-			t.Errorf("validateWorktreeIncludePath(%q) error = nil, want unsafe path error", rel)
-		}
-	}
-
-	if got, err := validateWorktreeIncludePath("./safe/../ignored.txt"); err != nil || got != "ignored.txt" {
-		t.Fatalf("validateWorktreeIncludePath safe path = %q, %v; want ignored.txt, nil", got, err)
 	}
 }
 

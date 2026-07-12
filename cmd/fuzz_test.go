@@ -1,9 +1,7 @@
 package cmd
 
 import (
-	"errors"
 	"flag"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -194,37 +192,5 @@ func FuzzRemoteToHTTPS(f *testing.F) {
 			t.Fatalf("remoteToHTTPS(%q) returned non-empty webURL %q that does not start with http", raw, webURL)
 		}
 		_ = host // informational second return; exercised for coverage
-	})
-}
-
-// FuzzMatchGlobSegments hardens the recursive `**` matcher added in #127:
-// never panic, the only legitimate error is filepath.ErrBadPattern, and the
-// matcher is deterministic. The `**` backtracking is worst-case exponential
-// in the number of ** segments — this fuzz proves safety, not speed, so the
-// inputs are bounded.
-func FuzzMatchGlobSegments(f *testing.F) {
-	f.Add("packages/**/node_modules", "packages/one/node_modules")
-	f.Add("a/**/f.txt", "a/b/f.txt")
-	f.Add("a/**/f.txt", "a/f.txt") // ** matches zero dirs
-	f.Add("**/**/x", "a/b/x")      // adjacent **
-	f.Add("dist/*", "dist/a.js")
-	f.Add("*", "")
-	f.Add("[", "x") // bad pattern -> ErrBadPattern, not a panic
-	f.Add("", "")
-
-	f.Fuzz(func(t *testing.T, patStr, nameStr string) {
-		pat := strings.Split(patStr, "/")
-		name := strings.Split(nameStr, "/")
-		if len(pat) > 16 || len(name) > 64 {
-			return
-		}
-		ok, err := matchGlobSegments(pat, name)
-		if err != nil && !errors.Is(err, filepath.ErrBadPattern) {
-			t.Fatalf("matchGlobSegments(%q,%q) returned unexpected error type: %v", patStr, nameStr, err)
-		}
-		ok2, err2 := matchGlobSegments(pat, name)
-		if ok != ok2 || (err == nil) != (err2 == nil) {
-			t.Fatalf("matchGlobSegments not deterministic for (%q,%q)", patStr, nameStr)
-		}
 	})
 }

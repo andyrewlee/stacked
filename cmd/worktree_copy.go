@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // worktreeIncludeFile is the manifest, in the repo root, listing paths to copy
@@ -34,7 +36,7 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		}
 		return nil, err
 	}
-	entries := parseIncludePatterns(string(data))
+	entries := stack.ParseIncludePatterns(string(data))
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -48,7 +50,7 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	entries, err = validateWorktreeIncludePaths(entries)
+	entries, err = stack.ValidateWorktreeIncludePaths(entries)
 	if err != nil {
 		return nil, err
 	}
@@ -95,45 +97,6 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		copied = append(copied, rel)
 	}
 	return copied, nil
-}
-
-func validateWorktreeIncludePaths(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for _, rel := range entries {
-		cleaned, err := validateWorktreeIncludePath(rel)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, cleaned)
-	}
-	return out, nil
-}
-
-func validateWorktreeIncludePath(rel string) (string, error) {
-	cleaned := filepath.Clean(rel)
-	if filepath.IsAbs(cleaned) {
-		return "", fmt.Errorf("unsafe .worktreeinclude path %q: absolute paths are not allowed", rel)
-	}
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("unsafe .worktreeinclude path %q: path must stay within the repository", rel)
-	}
-	return cleaned, nil
-}
-
-// parseIncludePatterns extracts the path entries from a .worktreeinclude file,
-// skipping blank lines and # comments. Validation later cleans or rejects each
-// entry so unsafe paths cannot be silently discarded after earlier entries have
-// been copied.
-func parseIncludePatterns(content string) []string {
-	var out []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
 }
 
 // dropNestedEntries removes every entry that lives inside another selected
@@ -239,7 +202,7 @@ func expandIncludePattern(srcRoot, pattern string) ([]string, error) {
 		if d.IsDir() && d.Name() == ".git" {
 			return fs.SkipDir
 		}
-		ok, mErr := matchGlobSegments(segs, strings.Split(p, "/"))
+		ok, mErr := stack.MatchGlobSegments(segs, strings.Split(p, "/"))
 		if mErr != nil {
 			return mErr
 		}
@@ -253,32 +216,6 @@ func expandIncludePattern(srcRoot, pattern string) ([]string, error) {
 	}
 	sort.Strings(rels)
 	return rels, nil
-}
-
-// matchGlobSegments matches slash-split path segments against pattern
-// segments, where a pattern segment of exactly "**" consumes zero or more
-// path segments and every other segment matches per filepath.Match.
-func matchGlobSegments(pat, name []string) (bool, error) {
-	if len(pat) == 0 {
-		return len(name) == 0, nil
-	}
-	if pat[0] == "**" {
-		for i := 0; i <= len(name); i++ {
-			ok, err := matchGlobSegments(pat[1:], name[i:])
-			if err != nil || ok {
-				return ok, err
-			}
-		}
-		return false, nil
-	}
-	if len(name) == 0 {
-		return false, nil
-	}
-	ok, err := filepath.Match(pat[0], name[0])
-	if err != nil || !ok {
-		return ok, err
-	}
-	return matchGlobSegments(pat[1:], name[1:])
 }
 
 // gitIgnoredSet returns which of rels (relative to root) are gitignored, in
@@ -371,7 +308,7 @@ func ensureSafeDestinationDir(realRoot, dir string) error {
 		if err != nil {
 			return err
 		}
-		if !pathWithin(realRoot, realDir) {
+		if !stack.PathWithin(realRoot, realDir) {
 			return fmt.Errorf("unsafe destination parent %q resolves outside worktree", dir)
 		}
 		stat, err := os.Stat(dir)
@@ -387,10 +324,6 @@ func ensureSafeDestinationDir(realRoot, dir string) error {
 		return fmt.Errorf("destination parent %q is not a directory", dir)
 	}
 	return nil
-}
-
-func pathWithin(root, path string) bool {
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
 }
 
 func rejectDestinationSymlink(dst string) error {
