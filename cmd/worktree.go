@@ -124,8 +124,12 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 	if err != nil {
 		return materializedWorktree{}, err
 	}
-	if err := git.WorktreeAdd(path, branch); err != nil {
-		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, err)
+	addErr := git.WorktreeAdd(path, branch)
+	// Invalidate the per-process worktree cache even on error: a failed add can
+	// still have changed registration state, and a spare re-list is cheap.
+	resetWorktreeCache()
+	if addErr != nil {
+		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, addErr)
 	}
 
 	root, err := git.RepoRoot()
@@ -135,7 +139,9 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
-		if removeErr := git.WorktreeRemove(path, true); removeErr != nil {
+		removeErr := git.WorktreeRemove(path, true)
+		resetWorktreeCache()
+		if removeErr != nil {
 			return materializedWorktree{}, stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
 		}
 		return materializedWorktree{}, copyErr
@@ -168,8 +174,10 @@ func worktreeRemove(branch string, asJSON bool) error {
 		}
 		return fmt.Errorf("%q has no worktree", branch)
 	}
-	if err := git.WorktreeRemove(wt.Path, false); err != nil {
-		return fmt.Errorf("removing worktree for %q: %w", branch, err)
+	removeErr := git.WorktreeRemove(wt.Path, false)
+	resetWorktreeCache()
+	if removeErr != nil {
+		return fmt.Errorf("removing worktree for %q: %w", branch, removeErr)
 	}
 	payload := struct {
 		Branch  string `json:"branch"`
