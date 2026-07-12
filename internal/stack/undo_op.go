@@ -47,10 +47,14 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		sort.Strings(extra)
 		for _, name := range extra {
-			if path := entry.CreatedWorktrees[name]; path != "" {
-				if err := removeCreatedWorktree(env, name, path); err != nil {
-					return nil, fmt.Errorf("removing worktree for branch %q created by undone command: %w", name, err)
-				}
+			// Always look for a live linked worktree owning the branch, even when
+			// the journal never recorded one (e.g. the branch was created plainly
+			// and its worktree materialized later with `st worktree`): the branch
+			// is being deleted either way, and git refuses to delete a branch
+			// checked out in a linked worktree.
+			recorded := entry.CreatedWorktrees[name] // may be ""
+			if err := removeCreatedWorktree(env, name, recorded); err != nil {
+				return nil, fmt.Errorf("removing worktree for branch %q created by undone command: %w", name, err)
 			}
 			target := prev.Trunk
 			if s != nil {
@@ -147,7 +151,11 @@ func removeCreatedWorktree(env Env, branch, path string) error {
 	if !ok {
 		return nil
 	}
-	if !sameWorktreePath(owner.Path, path) {
+	// An empty path means the journal recorded no worktree for the branch —
+	// there is nothing to cross-check, and a clean worktree for a branch being
+	// deleted has no independent value. A MISMATCHED recorded path, by
+	// contrast, signals journal/topology disagreement and must refuse.
+	if path != "" && !sameWorktreePath(owner.Path, path) {
 		return fmt.Errorf("branch is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", owner.Path, path)
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
