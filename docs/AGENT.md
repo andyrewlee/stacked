@@ -113,6 +113,10 @@ message.
 ## Idempotency & safety
 
 - `restack`, `sync`, `validate`, `log`, `status` are safe to re-run.
+- `st restack --all` restacks every tracked branch (the whole forest) from any
+  branch or worktree — the current branch need not be tracked; branches living
+  in dirty linked worktrees are skipped into `notes`. `--all --dry-run`
+  previews the same set.
 - `st restack --dry-run`, `st sync --dry-run`, `st onto --dry-run`,
   `st fold --dry-run`, `st squash --dry-run`, and `st delete --dry-run` preview
   the branches that *would* be rebased, moved, folded, squashed, or deleted.
@@ -140,8 +144,9 @@ One stack, N agents, one worktree per branch:
    `needsRestack`. A node with no `worktree` field is unclaimed.
 3. **Coordinate.** `st restack` / `st sync` rebase branches living in other
    worktrees *inside those worktrees* automatically and SKIP dirty ones, naming
-   them in the result's `notes` — so an orchestrator runs restack/sync from any
-   one worktree and re-checks `notes` for skipped branches. `st sync` works from
+   them in the result's `notes` — so an orchestrator's loop is `st log --json`
+   (who needs restack) then `st restack --all` (whole forest from any worktree,
+   dirty agents skipped), re-checking `notes` for skipped branches. `st sync` works from
    a linked worktree too (a dirty trunk worktree blocks it with an error naming
    the path).
 4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree;

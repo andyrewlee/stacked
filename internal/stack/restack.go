@@ -182,6 +182,28 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	return &OpResult{Summary: summary, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
 }
 
+// RestackAllPlan previews the branches `restack --all` would rebase — the
+// whole forest, rooted at the trunk, regardless of the current branch (which
+// may even be untracked: the walk does not involve it).
+func RestackAllPlan(env Env, s *State) (*OpResult, error) {
+	if err := requireClean(env.Git); err != nil {
+		return nil, err
+	}
+	tips, err := env.Git.TipsFor(stateTipNames(s))
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	preview, err := restackPlanAgainstWithWorktrees(env, s, s.Trunk, tips)
+	if err != nil {
+		return nil, err
+	}
+	summary := "nothing to restack"
+	if len(preview.restacked) > 0 {
+		summary = fmt.Sprintf("would restack %d branch(es)", len(preview.restacked))
+	}
+	return &OpResult{Summary: summary, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
+}
+
 // RestackUpstack restacks the descendants of name in topological order
 // (parents before children). The branch name itself is not restacked. It
 // returns the names of the branches that were actually rebased.

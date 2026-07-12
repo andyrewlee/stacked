@@ -154,11 +154,13 @@ func syncFlagSet() *flag.FlagSet { return newSyncFlags(&syncOpts{}) }
 type restackOpts struct {
 	asJSON bool
 	dryRun bool
+	all    bool
 }
 
 func newRestackFlags(o *restackOpts) *flag.FlagSet {
 	fs := newFlagSet("restack", &o.asJSON)
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be restacked without changing anything")
+	fs.BoolVar(&o.all, "all", false, "restack every tracked branch, not just the current one and its upstack")
 	return fs
 }
 

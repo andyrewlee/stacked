@@ -3,6 +3,7 @@ package stack
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -1346,5 +1347,90 @@ func TestPruneMergedErrorsWhenTrackedBranchTipMissing(t *testing.T) {
 	}
 	if !s.IsTracked("a") {
 		t.Fatal("failed prune untracked missing branch a")
+	}
+}
+
+// TestRestackAllOpReachesSiblingStacks pins --all's reason to exist: from a
+// leaf of one stack it restacks a SIBLING stack plain Restack would not touch,
+// and the dry-run plan lists exactly the branch set the op rebases.
+func TestRestackAllOpReachesSiblingStacks(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "main", "feat-x")
+	mkBranch(t, env, s, f, "feat-x", "feat-y")
+
+	// Advance main so every stack needs a restack.
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	// Run from feat-a's leaf: plain restack would never reach feat-x/feat-y.
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := RestackAllPlan(env, s)
+	if err != nil {
+		t.Fatalf("RestackAllPlan: %v", err)
+	}
+	res, err := RestackAllOp(env, s)
+	if err != nil {
+		t.Fatalf("RestackAllOp: %v", err)
+	}
+	if !reflect.DeepEqual(plan.Restacked, res.Restacked) {
+		t.Fatalf("plan/op disagree: plan %v, op %v", plan.Restacked, res.Restacked)
+	}
+	want := map[string]bool{"feat-a": true, "feat-x": true, "feat-y": true}
+	if len(res.Restacked) != len(want) {
+		t.Fatalf("restacked = %v, want all of %v", res.Restacked, want)
+	}
+	for _, name := range res.Restacked {
+		if !want[name] {
+			t.Fatalf("restacked unexpected branch %q (%v)", name, res.Restacked)
+		}
+	}
+	mainTip, _ := f.RevParse("main")
+	if !mustFakeIsAncestor(t, f, mainTip, "feat-x") {
+		t.Fatal("feat-x was not restacked onto the advanced main")
+	}
+	if f.head != "feat-a" {
+		t.Fatalf("HEAD = %q after restack --all, want feat-a restored", f.head)
+	}
+}
+
+// TestRestackAllOpSkipsDirtyOwnedWorktree pins the orchestrator contract: a
+// branch living in a dirty linked worktree is skipped with a note, not
+// clobbered and not an error.
+func TestRestackAllOpSkipsDirtyOwnedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "main", "feat-x")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	f.addWorktree("/wt/x", "feat-x")
+	f.markWorktreeDirty("feat-x")
+
+	res, err := RestackAllOp(env, s)
+	if err != nil {
+		t.Fatalf("RestackAllOp: %v", err)
+	}
+	for _, name := range res.Restacked {
+		if name == "feat-x" {
+			t.Fatal("dirty-owned feat-x was restacked")
+		}
+	}
+	found := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, "feat-x") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want a skip note naming feat-x", res.Notes)
 	}
 }

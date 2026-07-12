@@ -337,6 +337,34 @@ func Restack(env Env, s *State) (*OpResult, error) {
 	return &OpResult{Summary: "restacked", Restacked: rebased, Notes: notes}, nil
 }
 
+// RestackAllOp restacks every tracked branch (parents before children),
+// regardless of the current branch — the whole forest is the trunk's upstack,
+// so unlike Restack it never rebases the current branch specially (the walk
+// covers it) and the current branch may even be untracked. Requires a clean
+// tree; restores HEAD afterwards.
+func RestackAllOp(env Env, s *State) (*OpResult, error) {
+	g := env.Git
+	if err := requireClean(g); err != nil {
+		return nil, err
+	}
+	start, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	rebased, err := RestackAll(env, s)
+	if err != nil {
+		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
+	}
+	if err := restoreHEAD(env, start, s.Trunk); err != nil {
+		return nil, err
+	}
+	notes := skippedWorktreeNotes(s)
+	if len(rebased) == 0 && len(notes) == 0 {
+		return &OpResult{Summary: "everything up to date"}, nil
+	}
+	return &OpResult{Summary: "restacked", Restacked: rebased, Notes: notes}, nil
+}
+
 // skippedWorktreeNotes drains the branches a restack skipped because their owning
 // worktree was dirty, turning each into a human-readable note. Empty when the
 // cascade skipped nothing (the common, single-tree case).
