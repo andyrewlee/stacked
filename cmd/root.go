@@ -16,9 +16,15 @@ import (
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
+// defaultVersion is the compiled-in fallback when neither ldflags nor module
+// metadata provide a real version. Keep it in sync with the release tag being
+// prepared (plan 071 cuts v0.1.0).
+const defaultVersion = "0.1.0"
+
 // version is the stacked release version reported by the version command. It is
-// overridable at build time via -ldflags "-X stacked/cmd.version=<v>".
-var version = "0.1.0"
+// overridable at build time via
+// -ldflags "-X github.com/andyrewlee/stacked/cmd.version=<v>".
+var version = defaultVersion
 
 // Command describes a single stacked subcommand.
 type Command struct {
@@ -496,8 +502,10 @@ func printHelp(asJSON bool) {
 func printVersion(asJSON bool) {
 	var rev, when, goVersion string
 	var dirty bool
+	reported := version
 	if info, ok := debug.ReadBuildInfo(); ok {
 		goVersion = info.GoVersion
+		reported = resolveVersion(version, info.Main.Version)
 		for _, s := range info.Settings {
 			switch s.Key {
 			case "vcs.revision":
@@ -522,12 +530,12 @@ func printVersion(asJSON bool) {
 			Commit  string `json:"commit,omitempty"`
 			Built   string `json:"built,omitempty"`
 			Go      string `json:"go,omitempty"`
-		}{version, rev, when, goVersion}, "", "  ")
+		}{reported, rev, when, goVersion}, "", "  ")
 		fmt.Printf("%s\n", data)
 		return
 	}
 
-	fmt.Printf("st %s\n", version)
+	fmt.Printf("st %s\n", reported)
 	if rev != "" {
 		fmt.Printf("commit: %s\n", rev)
 	}
@@ -537,4 +545,20 @@ func printVersion(asJSON bool) {
 	if goVersion != "" {
 		fmt.Printf("go:     %s\n", goVersion)
 	}
+}
+
+// resolveVersion picks the version to report: an ldflags-stamped version wins;
+// otherwise a module-mode build's real Main.Version (what `go install
+// module@vX` records) beats the compiled-in default, which a `go install`
+// binary would otherwise misreport regardless of what was installed. Source
+// builds report "(devel)" as Main.Version — not a real version, keep the
+// default.
+func resolveVersion(ldflagsVersion, mainVersion string) string {
+	if ldflagsVersion != defaultVersion {
+		return ldflagsVersion
+	}
+	if mainVersion != "" && mainVersion != "(devel)" {
+		return mainVersion
+	}
+	return ldflagsVersion
 }

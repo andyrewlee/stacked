@@ -19,7 +19,15 @@ func TestVersion(t *testing.T) {
 	for _, arg := range []string{"version", "-v", "--version"} {
 		res := r.st(arg)
 		wantExit(t, res, 0)
-		wantStdoutContains(t, res, "st 0.1.0")
+		// The harness builds st without ldflags, so the version line carries
+		// whatever the toolchain stamped: a VCS pseudo-version in a git
+		// checkout (v0.0.0-<date>-<sha>), or the compiled-in default outside
+		// one. Pin the shape (a non-empty version token), not a hardcoded
+		// number the resolver deliberately no longer misreports.
+		first := strings.SplitN(res.stdout, "\n", 2)[0]
+		if !strings.HasPrefix(first, "st ") || strings.TrimSpace(strings.TrimPrefix(first, "st ")) == "" {
+			t.Fatalf("version line = %q, want \"st <version>\"", first)
+		}
 		// debug.ReadBuildInfo embeds the Go version line in all build modes.
 		wantStdoutContains(t, res, "go:")
 	}
