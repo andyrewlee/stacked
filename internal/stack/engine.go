@@ -767,9 +767,15 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	notes := []string{"trunk: " + ffResult}
 	if !g.BranchExists(orig) && trunkOwnerDir != "" {
 		// orig was pruned and restoreHEAD's trunk fallback cannot be checked out
-		// here (it lives in another worktree): stay detached rather than fail or
-		// hijack that worktree's branch.
-		notes = append(notes, "HEAD left detached; trunk is checked out in "+trunkOwnerDir)
+		// here (it lives in another worktree): stay where the cascade left HEAD
+		// rather than fail or hijack that worktree's branch. That is NOT always
+		// detached — an in-place rebase of a surviving branch re-attaches HEAD to
+		// that branch — so report where HEAD actually landed.
+		if cur, curErr := g.CurrentBranch(); curErr == nil && cur != "" {
+			notes = append(notes, "HEAD is on "+cur+"; trunk is checked out in "+trunkOwnerDir)
+		} else {
+			notes = append(notes, "HEAD left detached; trunk is checked out in "+trunkOwnerDir)
+		}
 	} else if err := restoreHEAD(env, orig, s.Trunk); err != nil {
 		return nil, err
 	}

@@ -537,3 +537,48 @@ func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
 		t.Fatalf("FastForward got (ownerDir=%q, here=%v), want (\"\", false)", remote2.gotOwnerDir, remote2.gotCheckedOutHere)
 	}
 }
+
+// TestSyncNoteReportsReattachedBranchWhenSurvivorRebases pins the note's
+// accuracy: when orig is pruned and a SURVIVING branch then rebases in place,
+// git re-attaches HEAD to that branch — the note must name it instead of
+// claiming "detached" (the no-survivor case keeps the detached note).
+func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "main", "feat-b") // survivor: sibling of feat-a
+	f.addWorktree("/wt/trunk", "main")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	// feat-a merged into main AND main advanced past it, so feat-a prunes and
+	// the surviving feat-b needs (and gets) an in-place rebase.
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if f.BranchExists("feat-a") {
+		t.Fatal("merged feat-a should have been pruned")
+	}
+	if f.head != "feat-b" {
+		t.Fatalf("HEAD = %q, want re-attached to the rebased survivor feat-b", f.head)
+	}
+	wantNote := "HEAD is on feat-b; trunk is checked out in /wt/trunk"
+	found := false
+	for _, note := range res.Notes {
+		if note == wantNote {
+			found = true
+		}
+		if strings.Contains(note, "left detached") {
+			t.Fatalf("note claims detached while HEAD is on %q: %v", f.head, res.Notes)
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want %q", res.Notes, wantNote)
+	}
+}
