@@ -342,6 +342,36 @@ func maybeReconcileWithWorktrees(t *testing.T, rng *rand.Rand, f *fakeGit, s *St
 		return // nothing parked: fall back to the single-tree reconcile
 	}
 
+	// Occasionally arm ONE clean owned branch to conflict inside its worktree:
+	// the cascade must roll it back and surface a NON-ErrConflict error while
+	// every other invariant still holds, and a follow-up clean reconcile must
+	// converge. This is the conflict × worktree combination the model never
+	// exercised before.
+	if rng.Intn(4) == 0 {
+		victim := ""
+		for _, name := range sortedBranchNames(s) {
+			if owned[name] && !dirty[name] {
+				victim = name
+				break
+			}
+		}
+		if victim != "" {
+			f.conflictOn(victim)
+			_, err := Restack(env, s)
+			delete(f.conflictNext, victim)
+			// The conflict fires only if the cascade actually tried to rebase
+			// the victim (it may have been up to date); either way the state
+			// must be coherent and a clean reconcile must converge below.
+			if err != nil && errors.Is(err, ErrConflict) {
+				t.Fatalf("step %d: cross-worktree conflict on %q surfaced as ErrConflict; want rollback error", step, victim)
+			}
+			if inProgress, _ := f.RebaseInProgress(); inProgress {
+				t.Fatalf("step %d: cross-worktree conflict on %q left a rebase in progress", step, victim)
+			}
+			checkInvariants(t, f, s, step)
+		}
+	}
+
 	if _, err := Restack(env, s); err != nil {
 		t.Fatalf("step %d: cross-worktree restack-all: %v", step, err)
 	}

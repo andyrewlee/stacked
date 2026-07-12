@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -309,4 +310,71 @@ func TestRestackInPlaceWhenBranchIsCurrent(t *testing.T) {
 	if !did {
 		t.Fatal("feat-a should rebase in place")
 	}
+}
+
+// TestRestackCascadeConflictInLaterWorktree proves the previously-untested
+// coherence property: a multi-branch cascade where an EARLIER branch rebases
+// and persists successfully and a LATER branch conflicts inside its linked
+// worktree must (a) surface a non-ErrConflict rollback error (the cross-
+// worktree rebase is aborted, not resumable via st continue), (b) keep the
+// earlier branch's persisted progress, (c) leave the conflicted branch rolled
+// back and still needing a restack, and (d) restore HEAD — and afterwards a
+// clean restack reconciles the forest invariant-clean.
+func TestRestackCascadeConflictInLaterWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	// b lives in its own (clean) worktree and is armed to conflict when rebased.
+	f.addWorktree("/wt/b", "b")
+	f.conflictOn("b")
+	mustCheckout(t, f, "main")
+
+	// Advance main so the whole stack is out of date (a first, then b, then c).
+	f.commit("main moves")
+	mainTip, _ := f.RevParse("main")
+
+	_, err := Restack(env, s)
+	if err == nil {
+		t.Fatal("a cross-worktree conflict mid-cascade must surface an error")
+	}
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-worktree rollback must NOT be an ErrConflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "worktree") {
+		t.Fatalf("error should point at the worktree: %v", err)
+	}
+
+	// Partial progress is coherent: a rebased and persisted onto the new main...
+	aBranch, _ := s.Get("a")
+	if aBranch.ParentSHA != mainTip {
+		t.Fatalf("a.ParentSHA=%s, want new main tip %s (earlier branch must stay persisted)", aBranch.ParentSHA, mainTip)
+	}
+	if needs, _ := s.NeedsRestack(f, "a"); needs {
+		t.Fatal("a should be reconciled after the cascade advanced it")
+	}
+	// ...b was rolled back (still needs a restack, not clobbered)...
+	if needs, _ := s.NeedsRestack(f, "b"); !needs {
+		t.Fatal("conflicted b should still need a restack (rolled back, not advanced)")
+	}
+	// ...the owner worktree's rebase was aborted, not left paused...
+	if inProgress, _ := f.RebaseInProgress(); inProgress {
+		t.Fatal("the owner worktree's rebase should have been aborted, not left paused")
+	}
+	// ...and HEAD is restored to where the caller started (main).
+	if cur, _ := f.CurrentBranch(); cur != "main" {
+		t.Fatalf("HEAD=%q after the rolled-back cascade, want main restored", cur)
+	}
+
+	// Recovery: clear the conflict, tear the worktree down (single-tree), and a
+	// clean restack reconciles the whole forest invariant-clean.
+	delete(f.conflictNext, "b")
+	f.linkedWorktrees = map[string]string{}
+	f.dirtyWT = nil
+	f.head = "main"
+	if _, err := Restack(env, s); err != nil {
+		t.Fatalf("clean restack after clearing the conflict: %v", err)
+	}
+	checkInvariants(t, f, s, 0)
 }
