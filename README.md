@@ -129,6 +129,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st track [--parent <branch>]` | | Start tracking the current git branch. |
 | `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
 | `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
+| `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
 | `st restack [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
 | `st abort` | | Abort an in-progress restack/rebase. |
@@ -391,6 +392,9 @@ st submit                     # or: st submit --dry-run
   does not modify your working tree.
 - `stacked` deliberately opens no pull requests. After `st submit`, open the PRs
   it prints (or create them on your host yourself).
-- **Not implemented:** `absorb` (auto-distributing staged hunks into the right
-  ancestor commits) is intentionally left out — it is a sizable blame/fixup
-  subsystem and is noted as a future addition rather than shipped half-done.
+- **Partially implemented:** `st absorb --dry-run` maps staged hunks to the
+  stack commits that own their lines; bare `st absorb` applies only a
+  single-target plan with zero refusals (amends the owning branch tip, then
+  restacks its descendants; one `st undo` reverts both). Multi-target plans,
+  hunks spanning several commits, pure additions, lines owned by trunk, and
+  targets that are not a branch tip are refused with the reason.

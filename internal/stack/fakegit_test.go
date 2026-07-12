@@ -56,6 +56,13 @@ type fakeGit struct {
 	// DiffCachedHunks returns stagedHunks; BlamePorcelain returns blame[file].
 	stagedHunks []git.Hunk
 	blame       map[string]map[int]string
+	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
+	// makes AmendTipWithPatch fail like a patch that does not apply to the
+	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
+	// calls ("" = the current worktree) so tests can pin the absorb sequence.
+	stagedPatch   []byte
+	applyErr      error
+	resetHardDirs []string
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
@@ -202,6 +209,39 @@ func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, error) { return f.stagedHunks, 
 // rev is ignored: engine tests only ever blame HEAD.
 func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]string, error) {
 	return f.blame[file], nil
+}
+
+func (f *fakeGit) DiffCachedPatch() ([]byte, error) { return f.stagedPatch, nil }
+
+// AmendTipWithPatch models the temp-index amend: the branch's tip is replaced
+// by a new commit with the same parent and subject (patch content is not
+// modeled — real application is proven by the git-level and e2e tests).
+func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
+	if f.applyErr != nil {
+		return "", f.applyErr
+	}
+	tip, ok := f.branches[branch]
+	if !ok {
+		return "", fmt.Errorf("no such branch %q", branch)
+	}
+	old := f.commits[tip]
+	id := f.newID()
+	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject}
+	f.branches[branch] = id
+	return id, nil
+}
+
+// ResetHardIn records the call; for the current worktree ("") it clears the
+// staged state, mirroring `git reset --hard` dropping the staged copy.
+func (f *fakeGit) ResetHardIn(dir, _ string) error {
+	f.resetHardDirs = append(f.resetHardDirs, dir)
+	if dir == "" {
+		f.staged = false
+		f.clean = true
+		f.stagedHunks = nil
+		f.stagedPatch = nil
+	}
+	return nil
 }
 
 // addWorktree registers a fake linked worktree for branch at path, a test seam

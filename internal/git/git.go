@@ -28,8 +28,18 @@ func gitEnv() []string {
 // failure it returns an error whose message includes the git stderr so callers
 // get an actionable diagnostic.
 func run(args ...string) (string, error) {
+	return runWith(nil, nil, args...)
+}
+
+// runWith is run with extra environment entries and an optional stdin payload,
+// for plumbing calls (temp-index apply, commit-tree) that are driven by env
+// vars and byte streams rather than flags.
+func runWith(extraEnv []string, stdin []byte, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
-	cmd.Env = gitEnv()
+	cmd.Env = append(gitEnv(), extraEnv...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -423,6 +433,115 @@ func parseHunkRange(spec string) (start, n int, ok bool) {
 		}
 	}
 	return start, n, true
+}
+
+// DiffCachedPatch returns the full staged patch with ZERO context lines
+// (`git diff --cached -U0`) — the exact bytes absorb later lands on a target
+// tip with AmendTipWithPatch. Zero context is load-bearing: blame attribution
+// guarantees only the changed pre-image lines exist in the target's tree;
+// surrounding context is typically owned by descendant commits and would make
+// the apply fail there.
+func DiffCachedPatch() ([]byte, error) {
+	out, err := run("diff", "--cached", "-U0")
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
+// AmendTipWithPatch rewrites branch's tip commit to also contain patch,
+// without touching any worktree or the real index: the patch is applied to
+// the tip's tree in a throwaway temporary index, a new tree and commit are
+// built with plumbing (write-tree/commit-tree, preserving the tip's author,
+// date, message, and parents), and the branch ref is moved with a
+// compare-and-swap on the old tip. On any failure — including "patch does not
+// apply to that tree" — the repository is untouched. Returns the new tip SHA.
+func AmendTipWithPatch(branch string, patch []byte) (string, error) {
+	if err := validRefArg("branch", branch); err != nil {
+		return "", err
+	}
+	ref := localBranchNameRef(branch)
+	tip, err := RevParse(ref)
+	if err != nil {
+		return "", err
+	}
+	// rev-list --parents preserves merge tips (commit-tree -p per parent),
+	// though stack tips are single-parent in practice.
+	parentsOut, err := run("rev-list", "--parents", "-n1", tip)
+	if err != nil {
+		return "", err
+	}
+	parents := strings.Fields(parentsOut)[1:]
+	if len(parents) == 0 {
+		return "", fmt.Errorf("branch %q's tip is a root commit; cannot amend it via absorb", branch)
+	}
+	metaOut, err := run("log", "-1", "--format=%an%x00%ae%x00%aD%x00%B", tip)
+	if err != nil {
+		return "", err
+	}
+	meta := strings.SplitN(metaOut, "\x00", 4)
+	if len(meta) != 4 {
+		return "", fmt.Errorf("unexpected commit metadata for %s", tip)
+	}
+
+	tmp, err := os.CreateTemp("", "st-absorb-index-")
+	if err != nil {
+		return "", fmt.Errorf("creating temporary index: %w", err)
+	}
+	indexFile := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(indexFile)
+	indexEnv := []string{"GIT_INDEX_FILE=" + indexFile}
+	if _, err := runWith(indexEnv, nil, "read-tree", tip); err != nil {
+		return "", err
+	}
+	// --unidiff-zero matches DiffCachedPatch's -U0 capture; the hunk's own
+	// pre-image lines (which attribution proved live in this tree) anchor it.
+	if _, err := runWith(indexEnv, patch, "apply", "--cached", "--unidiff-zero", "-"); err != nil {
+		return "", fmt.Errorf("staged patch does not apply cleanly to the tip of %q: %w", branch, err)
+	}
+	treeOut, err := runWith(indexEnv, nil, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	commitEnv := []string{
+		"GIT_AUTHOR_NAME=" + meta[0],
+		"GIT_AUTHOR_EMAIL=" + meta[1],
+		"GIT_AUTHOR_DATE=" + meta[2],
+	}
+	commitArgs := []string{"commit-tree", strings.TrimSpace(treeOut)}
+	for _, p := range parents {
+		commitArgs = append(commitArgs, "-p", p)
+	}
+	newTipOut, err := runWith(commitEnv, []byte(meta[3]), commitArgs...)
+	if err != nil {
+		return "", err
+	}
+	newTip := strings.TrimSpace(newTipOut)
+	// Compare-and-swap on the old tip: a concurrent move of the branch fails
+	// the whole amend instead of being clobbered.
+	if _, err := run("update-ref", ref, newTip, tip); err != nil {
+		return "", err
+	}
+	return newTip, nil
+}
+
+// ResetHardIn runs `git reset --hard <ref>` inside the worktree at dir (""
+// means the current worktree). Callers must ensure nothing unsaved can be
+// lost: absorb only calls it after the staged content is committed in the
+// target branch (to drop the now-redundant staged copy), or on a
+// verified-clean worktree to sync it to its amended HEAD.
+func ResetHardIn(dir, ref string) error {
+	if err := validRefArg("ref", ref); err != nil {
+		return err
+	}
+	var args []string
+	if dir != "" {
+		args = append(args, "-C", dir)
+	}
+	args = append(args, "reset", "--hard", ref)
+	_, err := run(args...)
+	return err
 }
 
 // BlamePorcelain maps each final line of file at rev to the 40-hex SHA that

@@ -173,6 +173,113 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	return res, nil
 }
 
+// Absorb applies the attribution plan when it names exactly one target branch
+// with zero refusals (the v1 apply slice). The staged patch is committed into
+// the target's tip via AmendTipWithPatch — a temp-index amend that touches no
+// worktree, so the user's edit is safely in a commit before any destructive
+// step — then ONE upstack cascade restacks the descendants and HEAD returns to
+// the starting branch. Anything wider (multiple targets, any refusal, a dirty
+// owner worktree) returns the plan as data, unapplied — never an error.
+func Absorb(env Env, s *State) (*AbsorbResult, error) {
+	g := env.Git
+	plan, err := AbsorbPlan(env, s)
+	if err != nil {
+		return nil, err
+	}
+	if len(plan.Absorbed) == 0 && len(plan.Refused) == 0 {
+		return plan, nil // nothing staged
+	}
+	target, ok := singleTarget(plan)
+	if !ok {
+		plan.Summary = "not applied: absorb v1 handles a single target with no refusals; " + plan.Summary
+		return plan, nil
+	}
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve where the target lives. A dirty owner worktree is skipped loudly
+	// (its uncommitted work is never clobbered by the post-amend sync).
+	ownerDir := ""
+	if target != cur {
+		owner, elsewhere, err := s.ownerElsewhere(g, target)
+		if err != nil {
+			return nil, err
+		}
+		if elsewhere {
+			clean, err := g.IsCleanIn(owner.Path)
+			if err != nil {
+				return nil, fmt.Errorf("checking worktree %s: %w", owner.Path, err)
+			}
+			if !clean {
+				plan.Summary = "not applied: the target's worktree is dirty; " + plan.Summary
+				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q is checked out in %s with uncommitted changes; commit or stash there first", target, owner.Path))
+				return plan, nil
+			}
+			ownerDir = owner.Path
+		}
+	}
+
+	patch, err := g.DiffCachedPatch()
+	if err != nil {
+		return nil, fmt.Errorf("capturing the staged patch: %w", err)
+	}
+	newTip, err := g.AmendTipWithPatch(target, patch)
+	if err != nil {
+		// Nothing was mutated: the temp-index apply is the pre-flight check.
+		return nil, fmt.Errorf("absorb: %w", err)
+	}
+	// From here the staged content is committed at target's tip; the resets
+	// below only drop copies of it.
+	for i := range plan.Absorbed {
+		plan.Absorbed[i].Commit = newTip
+	}
+	if ownerDir != "" {
+		if err := g.ResetHardIn(ownerDir, "HEAD"); err != nil {
+			return nil, fmt.Errorf("syncing worktree %s to the amended %q: %w", ownerDir, target, err)
+		}
+	}
+	if target != cur {
+		// Drop the staged copy from this worktree so the cascade can rebase;
+		// the edit now lives in target's tip and the restack re-delivers it.
+		if err := g.ResetHardIn("", "HEAD"); err != nil {
+			return nil, fmt.Errorf("dropping the absorbed staged copy: %w", err)
+		}
+	}
+
+	plan.DryRun = false
+	rebased, err := s.RestackUpstack(env, target)
+	if err != nil {
+		return nil, restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
+	}
+	plan.Restacked = rebased
+	plan.Notes = append(plan.Notes, skippedWorktreeNotes(s)...)
+	if err := env.save(); err != nil {
+		return nil, err
+	}
+	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
+		return nil, err
+	}
+	plan.Summary = fmt.Sprintf("absorbed %d hunk(s) into %s; restacked %d branch(es)", len(plan.Absorbed), target, len(rebased))
+	return plan, nil
+}
+
+// singleTarget reports the one branch every absorbed hunk targets, false when
+// the plan has any refusal or more than one distinct target branch.
+func singleTarget(plan *AbsorbResult) (string, bool) {
+	if len(plan.Refused) > 0 || len(plan.Absorbed) == 0 {
+		return "", false
+	}
+	target := plan.Absorbed[0].Branch
+	for _, a := range plan.Absorbed[1:] {
+		if a.Branch != target {
+			return "", false
+		}
+	}
+	return target, true
+}
+
 // hunkLines renders a hunk's pre-image range for humans: "2" or "3-4"; a pure
 // addition anchors at the insertion point.
 func hunkLines(h git.Hunk) string {
