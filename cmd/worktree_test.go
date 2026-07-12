@@ -53,6 +53,70 @@ func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
 	}
 }
 
+// TestWorktreeMutationsInvalidateCache pins the cache invariant: worktrees()
+// may be warmed at any point before a topology mutation and a later call must
+// still reflect reality. Without the resetWorktreeCache() calls at the
+// mutation sites, both post-mutation reads below see the stale warmed list.
+func TestWorktreeMutationsInvalidateCache(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	// The checkout above warmed the cache mid-command (owner lookup) while
+	// HEAD was still feat-a; drop it so this test starts from an accurate
+	// warmed list, as a fresh production process would.
+	resetWorktreeCache()
+
+	// findReported returns the list entry matching path, comparing resolved
+	// paths: on macOS the temp HOME sits behind the /var -> /private/var
+	// symlink and git reports the resolved form.
+	findReported := func(wts []git.Worktree, path string) (string, bool) {
+		want, _ := filepath.EvalSymlinks(path)
+		for _, wt := range wts {
+			got, _ := filepath.EvalSymlinks(wt.Path)
+			if wt.Path == path || (want != "" && got == want) {
+				return wt.Path, true
+			}
+		}
+		return "", false
+	}
+
+	// Warm the cache before mutating topology.
+	before, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees (warm): %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("warmed list = %+v, want just the main worktree", before)
+	}
+	created, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	after, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees (after add): %v", err)
+	}
+	reported, ok := findReported(after, created.Path)
+	if !ok {
+		t.Fatalf("worktrees() stale after add: %q missing from %+v", created.Path, after)
+	}
+
+	if err := worktreeRemove("feat-a", false); err != nil {
+		t.Fatalf("worktreeRemove: %v", err)
+	}
+	afterRm, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees (after rm): %v", err)
+	}
+	for _, wt := range afterRm {
+		if wt.Path == reported {
+			t.Fatalf("worktrees() stale after remove: %q still in %+v", reported, afterRm)
+		}
+	}
+}
+
 func TestPlainCopyRecursive(t *testing.T) {
 	src := t.TempDir()
 	dst := filepath.Join(t.TempDir(), "out")

@@ -19,7 +19,7 @@ import (
 // git deterministic and non-interactive regardless of the host: the cmd suite
 // must not depend on real user config.
 func TestMain(m *testing.M) {
-	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil && os.Getenv("ST_TEST_DEBUG") == "" {
 		os.Stdout = devnull
 	}
 	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)

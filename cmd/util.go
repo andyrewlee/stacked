@@ -50,16 +50,33 @@ func loadStateAndCurrent() (*stack.State, string, error) {
 var gitShell stack.Git = cachedShell{}
 
 // cachedShell is git.Shell with a cached Worktrees(); every other method is
-// inherited unchanged.
+// inherited unchanged, except the worktree MUTATIONS, which must invalidate
+// that cache so any later worktrees() read reflects the new topology.
 type cachedShell struct{ git.Shell }
 
 func (cachedShell) Worktrees() ([]git.Worktree, error) { return worktrees() }
 
+// WorktreeRemove routes the engine-driven worktree removal through the cache
+// invalidation. The cache is reset even when the removal fails: a failed git
+// worktree command can still have changed registration state, and a spare
+// re-list is cheap.
+func (c cachedShell) WorktreeRemove(dir string, force bool) error {
+	err := c.Shell.WorktreeRemove(dir, force)
+	resetWorktreeCache()
+	return err
+}
+
 // cachedQuietShell is git.QuietShell (quiet rebase output for JSON mode) with the
-// same cached Worktrees() override.
+// same cached Worktrees() and invalidating WorktreeRemove overrides.
 type cachedQuietShell struct{ git.QuietShell }
 
 func (cachedQuietShell) Worktrees() ([]git.Worktree, error) { return worktrees() }
+
+func (c cachedQuietShell) WorktreeRemove(dir string, force bool) error {
+	err := c.QuietShell.WorktreeRemove(dir, force)
+	resetWorktreeCache()
+	return err
+}
 
 // stackEnv builds the engine environment for s, persisting via s.Save. In JSON
 // mode the quiet git port is used so rebase output cannot corrupt the payload.

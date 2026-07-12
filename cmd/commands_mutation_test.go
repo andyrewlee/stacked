@@ -382,7 +382,9 @@ func TestUndoCreateWorktreeRemovesLinkedWorktree(t *testing.T) {
 		t.Fatalf("current branch = %q, want main", cur)
 	}
 
-	resetWorktreeCache()
+	// No cache reset here on purpose: create --worktree warmed the cache and
+	// then mutated topology; undo must see the created worktree through the
+	// invalidated cache (the pre-invalidation workaround was a manual reset).
 	if err := runUndo(nil); err != nil {
 		t.Fatalf("undo create --worktree: %v", err)
 	}
