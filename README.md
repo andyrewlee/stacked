@@ -115,7 +115,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | Command | Aliases | Summary |
 | --- | --- | --- |
 | `st init [--trunk <name>]` | | Initialize stack tracking in this repo. |
-| `st create <name> [-m|--message <msg>] [-a|--all]` | `c` | Create a new branch stacked on the current branch. |
+| `st create <name> [-m|--message <msg>] [-a|--all] [--worktree]` | `c` | Create a new branch stacked on the current branch. |
 | `st log [--json]` | `ls` | Show the stack as a tree (trunk at the bottom); `--json` for scripting. |
 | `st status [--json]` | `stat` | Show the current branch, its parent/children, and restack state. |
 | `st checkout [name]` | `co` | Check out a tracked branch, or list branches when no name is given. |
@@ -135,7 +135,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
 | `st sync [--no-delete] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--dry-run` previews). |
-| `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL (no PRs). |
+| `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs). |
 | `st undo` | | Undo the last stack-mutating command. |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
@@ -156,12 +156,19 @@ st init                 # auto-detect trunk
 st init --trunk main
 ```
 
-#### `st create <name> [-m <msg>] [-a|--all]`
+#### `st create <name> [-m <msg>] [-a|--all] [--worktree]`
 Creates `<name>` off the current branch, switches to it, and tracks it. `-a`
 stages all changes first; `-m` commits the staged changes onto the new branch.
 
+With `--worktree`, the branch is created and tracked and its own linked
+worktree is materialized in one command — the main worktree's HEAD does not
+move (with `st shell install` your shell teleports into the new worktree; without
+it the path is printed). `--worktree` cannot be combined with `-m`/`-a`: commit
+inside the new worktree instead.
+
 ```sh
 st create feat-a -m "add A"
+st create feat-b --worktree   # branch + its own worktree, main HEAD unmoved
 ```
 
 #### `st log` (`ls`)
@@ -188,8 +195,10 @@ it the path is printed.
 
 #### `st worktree <branch> | ls | rm <branch>` (`wt`)
 Make a branch a "place you can be" on its own — useful for running multiple agents
-on different branches of one stack in parallel. `st worktree <branch>` materializes
-a git worktree for an existing tracked branch under `~/.stacked/worktrees/` using
+on different branches of one stack in parallel. To create a *new* branch straight
+into its own worktree, use `st create <name> --worktree`; `st worktree <branch>`
+materializes a git worktree for an existing tracked branch under
+`~/.stacked/worktrees/` using
 a collision-resistant repo key and encoded branch segment (outside the repo, so
 runners/linters never walk into it). If `.worktreeinclude` exists, entries are
 copied into the worktree via copy-on-write reflink when available. The file is a
@@ -248,15 +257,20 @@ deleted/restacked branches without changing anything.
 #### `st sync [--no-delete] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
 the trunk (re-parenting their children), restacks every remaining stack onto the
-updated trunk, and restores your original branch. `--no-delete` keeps merged
-branches; `--dry-run` previews the prune/restack plan without fetching or changing
-anything.
+updated trunk, and restores your original branch. Sync also works from inside a
+branch's linked worktree: the trunk fast-forward runs in the trunk's own worktree
+(a dirty trunk worktree blocks sync with an error naming its path). `--no-delete`
+keeps merged branches; `--dry-run` previews the prune/restack plan without
+fetching or changing anything.
 
 #### `st submit [--remote <name>] [--dry-run]` (`ss`)
 Pushes every branch on the current stack — from the bottom branch up to the
 currently checked-out branch — using `--force-with-lease`, setting each branch's
 upstream (`-u`). It is login-free and never opens PRs; it prints your repository's
-URL so you can open pull requests on your host by hand.
+URL so you can open pull requests on your host by hand. For github.com and
+gitlab.com remotes it also prints one compare URL per pushed branch
+(`head -> base`), so each stacked PR can be opened against its correct base;
+`--json` carries the same data as `prHints` (see docs/AGENT.md).
 `--dry-run` prints the plan without pushing. Most stack-mutating commands also accept
 `--json` for machine-readable output.
 
