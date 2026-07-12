@@ -1032,6 +1032,35 @@ func TestCompletionShells(t *testing.T) {
 		if !strings.Contains(out, "create") && !strings.Contains(out, "st") {
 			t.Fatalf("completion %s missing command list:\n%s", shell, out)
 		}
+		// Second-word completions: representative flags and sub-verbs from the
+		// per-command generator must appear in every shell's script.
+		for _, tok := range []string{"--dry-run", "--worktree", "ls", "rm"} {
+			if !strings.Contains(out, tok) {
+				t.Fatalf("completion %s missing per-command token %q:\n%s", shell, tok, out)
+			}
+		}
+	}
+}
+
+// TestCommandCompletions pins the per-command token generator directly: flags
+// come from the same constructors help --json uses, sub-verbs from the
+// hand-maintained map, deduped and sorted.
+func TestCommandCompletions(t *testing.T) {
+	toks := commandCompletions(byName["worktree"])
+	want := []string{"--all", "--json", "ls", "rm"}
+	if !reflect.DeepEqual(toks, want) {
+		t.Fatalf("worktree completions = %v, want %v", toks, want)
+	}
+	toks = commandCompletions(byName["restack"])
+	want = []string{"--all", "--dry-run", "--json"}
+	if !reflect.DeepEqual(toks, want) {
+		t.Fatalf("restack completions = %v, want %v", toks, want)
+	}
+	// completion/shell declare no flags: sub-verbs only.
+	toks = commandCompletions(byName["completion"])
+	want = []string{"bash", "fish", "zsh"}
+	if !reflect.DeepEqual(toks, want) {
+		t.Fatalf("completion completions = %v, want %v", toks, want)
 	}
 }
 
