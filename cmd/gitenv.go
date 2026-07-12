@@ -64,14 +64,43 @@ func (c cachedShell) WorktreeRemove(dir string, force bool) error {
 	return err
 }
 
+// Checkout and CheckoutDetach move HEAD, which changes which branch the
+// current worktree owns — so they must invalidate the worktree cache too, or a
+// later worktrees() read (e.g. sync's prune step after detaching HEAD) sees the
+// stale pre-checkout ownership and can remove the wrong worktree. Reset even on
+// error: a partial checkout can still have moved HEAD, and a re-list is cheap.
+func (c cachedShell) Checkout(name string) error {
+	err := c.Shell.Checkout(name)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedShell) CheckoutDetach(ref string) error {
+	err := c.Shell.CheckoutDetach(ref)
+	resetWorktreeCache()
+	return err
+}
+
 // cachedQuietShell is git.QuietShell (quiet rebase output for JSON mode) with the
-// same cached Worktrees() and invalidating WorktreeRemove overrides.
+// same cached Worktrees() and invalidating WorktreeRemove/Checkout overrides.
 type cachedQuietShell struct{ git.QuietShell }
 
 func (cachedQuietShell) Worktrees() ([]git.Worktree, error) { return worktrees() }
 
 func (c cachedQuietShell) WorktreeRemove(dir string, force bool) error {
 	err := c.QuietShell.WorktreeRemove(dir, force)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedQuietShell) Checkout(name string) error {
+	err := c.QuietShell.Checkout(name)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedQuietShell) CheckoutDetach(ref string) error {
+	err := c.QuietShell.CheckoutDetach(ref)
 	resetWorktreeCache()
 	return err
 }

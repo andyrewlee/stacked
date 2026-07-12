@@ -1686,6 +1686,68 @@ func TestSyncFromLinkedWorktree(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestSyncFromMergedLinkedWorktreeKeepsWorktree pins the fix for the
+// stale-cache bug: running `st sync` from inside a branch's own linked
+// worktree, when that branch has merged into the trunk, must prune the branch
+// WITHOUT deleting the worktree you are standing in. Before the fix, the
+// pre-prune HEAD detach did not invalidate the worktree cache, so PruneMerged
+// read the stale list still showing the branch owned by the current worktree
+// and removed it (destroying the shell CWD and aborting sync half-applied).
+func TestSyncFromMergedLinkedWorktreeKeepsWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+
+	// Materialize a linked worktree for feat-a (the branch we'll be standing in),
+	// then land feat-a on the remote trunk and rewind local main so sync prunes
+	// feat-a as merged.
+	r.stOK("checkout", "main")
+	out := r.stOK("worktree", "feat-a", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &wt); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+	preTrunk := r.rev("main")
+	r.git("merge", "-q", "--no-ff", "feat-a", "-m", "merge feat-a")
+	r.git("push", "-q", "origin", "main")
+	r.git("reset", "--hard", preTrunk)
+
+	// --json on purpose: it drives the quiet git port, so the JSON-mode
+	// CheckoutDetach invalidation override is exercised too (the text-mode
+	// twin is covered by TestSyncFromLinkedWorktree).
+	cmd := exec.Command(stBin, "sync", "--json")
+	cmd.Dir = wt.Path // run from INSIDE feat-a's own worktree
+	cmd.Env = cleanEnv(r.home)
+	syncOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st sync from a merged branch's own worktree: %v\n%s", err, syncOut)
+	}
+	if !strings.Contains(string(syncOut), "sync complete") {
+		t.Fatalf("sync output missing completion:\n%s", syncOut)
+	}
+	if r.branchExists("feat-a") {
+		t.Fatal("merged feat-a should have been pruned")
+	}
+	// The load-bearing assertion: the worktree we ran from still exists.
+	if _, statErr := os.Stat(wt.Path); statErr != nil {
+		t.Fatalf("sync deleted the worktree it ran from (%q): %v", wt.Path, statErr)
+	}
+	if !r.isAncestor("main", "feat-b") {
+		t.Fatal("feat-b was not restacked onto the advanced main")
+	}
+	r.stOK("validate")
+}
+
 // TestRestackAllFromLinkedWorktree proves `st restack --all` reaches a
 // SIBLING stack from inside a linked worktree — the whole-forest restack an
 // orchestrator needs, without a trunk checkout and without sync's fetch/prune.
