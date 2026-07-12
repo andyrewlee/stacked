@@ -1165,3 +1165,80 @@ func TestUpdateRefs(t *testing.T) {
 		t.Fatal("UpdateRefs accepted a whitespace-carrying ref name")
 	}
 }
+
+// TestDiffCachedHunks pins the -U0 hunk parser: single-line edit, pure
+// addition (OldN==0), and two hunks in one file.
+func TestDiffCachedHunks(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "f.txt", "l1\nl2\nl3\nl4\nl5\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "base")
+
+	// Single-line edit staged.
+	writeFile(t, "f.txt", "l1\nEDIT\nl3\nl4\nl5\n")
+	mustGit(t, "add", "f.txt")
+	hunks, err := DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks: %v", err)
+	}
+	if len(hunks) != 1 {
+		t.Fatalf("hunks = %+v, want 1", hunks)
+	}
+	want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
+	if hunks[0] != want {
+		t.Fatalf("hunk = %+v, want %+v", hunks[0], want)
+	}
+
+	// Pure addition (no pre-image) between l3 and l4.
+	writeFile(t, "f.txt", "l1\nl2\nl3\nNEW\nl4\nl5\n")
+	mustGit(t, "add", "f.txt")
+	hunks, err = DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks (addition): %v", err)
+	}
+	if len(hunks) != 1 || hunks[0].OldN != 0 || hunks[0].NewN != 1 {
+		t.Fatalf("addition hunk = %+v, want OldN==0 NewN==1", hunks)
+	}
+
+	// Two separated edits -> two hunks in one file.
+	writeFile(t, "f.txt", "E1\nl2\nl3\nl4\nE5\n")
+	mustGit(t, "add", "f.txt")
+	hunks, err = DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks (two hunks): %v", err)
+	}
+	if len(hunks) != 2 || hunks[0].File != "f.txt" || hunks[1].File != "f.txt" {
+		t.Fatalf("hunks = %+v, want two in f.txt", hunks)
+	}
+	if hunks[0].OldStart != 1 || hunks[1].OldStart != 5 {
+		t.Fatalf("hunk starts = %d,%d, want 1,5", hunks[0].OldStart, hunks[1].OldStart)
+	}
+}
+
+// TestBlamePorcelain pins the porcelain parser: each line maps to the SHA
+// that last touched it, across two commits.
+func TestBlamePorcelain(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "f.txt", "one\ntwo\nthree\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "c1")
+	c1 := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "f.txt", "one\nTWO!\nthree\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "c2")
+	c2 := mustGit(t, "rev-parse", "HEAD")
+
+	lines, err := BlamePorcelain("f.txt", "HEAD")
+	if err != nil {
+		t.Fatalf("BlamePorcelain: %v", err)
+	}
+	if lines[1] != c1 || lines[3] != c1 {
+		t.Fatalf("lines 1/3 = %s/%s, want both %s", lines[1], lines[3], c1)
+	}
+	if lines[2] != c2 {
+		t.Fatalf("line 2 = %s, want %s", lines[2], c2)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("lines = %v, want exactly 3 entries", lines)
+	}
+}

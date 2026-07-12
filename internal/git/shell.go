@@ -62,6 +62,10 @@ func (Shell) RebaseOntoIn(dir, newBase, oldBase, br string) error {
 func (Shell) RebaseAbortIn(dir string) error              { return RebaseAbortIn(dir) }
 func (Shell) IsCleanIn(dir string) (bool, error)          { return IsCleanIn(dir) }
 func (Shell) WorktreeRemove(dir string, force bool) error { return WorktreeRemove(dir, force) }
+func (Shell) DiffCachedHunks() ([]Hunk, error)            { return DiffCachedHunks() }
+func (Shell) BlamePorcelain(file, rev string) (map[int]string, error) {
+	return BlamePorcelain(file, rev)
+}
 
 func (QuietShell) RebaseOnto(newBase, oldBase, br string) error {
 	return RebaseOntoQuiet(newBase, oldBase, br)

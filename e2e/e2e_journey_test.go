@@ -2240,3 +2240,69 @@ func TestRestackSiblingWorktreeConflictRollsBackFromLinkedWorktree(t *testing.T)
 		t.Fatal("feat-x's worktree should have no paused rebase (it was rolled back)")
 	}
 }
+
+// TestAbsorbDryRunMapping drives the absorb attribution black-box on a real
+// 3-branch stack: a staged single-target edit maps to the branch whose tip
+// owns the line, refusals are empty, and NOTHING mutates (dry-run contract).
+func TestAbsorbDryRunMapping(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	// Each branch owns a distinct line of shared.txt.
+	r.create("feat-a", "shared.txt", "A\n", "a")
+	r.create("feat-b", "shared.txt", "A\nB\n", "b")
+	r.create("feat-c", "shared.txt", "A\nB\nC\n", "c")
+
+	// Stage a single-target edit to line 1 (owned by feat-a's tip).
+	r.writeFile("shared.txt", "A!\nB\nC\n")
+	r.git("add", "shared.txt")
+
+	tipsBefore := map[string]string{}
+	for _, b := range []string{"main", "feat-a", "feat-b", "feat-c"} {
+		tipsBefore[b] = r.rev(b)
+	}
+
+	out := r.stOK("absorb", "--dry-run", "--json").stdout
+	var res struct {
+		Summary  string `json:"summary"`
+		Absorbed []struct {
+			File   string `json:"file"`
+			Lines  string `json:"lines"`
+			Branch string `json:"branch"`
+			Commit string `json:"commit"`
+		} `json:"absorbed"`
+		Refused []struct {
+			File   string `json:"file"`
+			Lines  string `json:"lines"`
+			Reason string `json:"reason"`
+		} `json:"refused"`
+		DryRun bool `json:"dryRun"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode absorb json: %v\n%s", err, out)
+	}
+	if !res.DryRun {
+		t.Fatal("absorb --dry-run result not marked dryRun")
+	}
+	if len(res.Absorbed) != 1 || len(res.Refused) != 0 {
+		t.Fatalf("result = %+v, want exactly one absorbed hunk", res)
+	}
+	got := res.Absorbed[0]
+	if got.Branch != "feat-a" || got.File != "shared.txt" || got.Lines != "1" {
+		t.Fatalf("absorbed = %+v, want feat-a shared.txt:1", got)
+	}
+	if got.Commit != tipsBefore["feat-a"] {
+		t.Fatalf("absorbed commit = %s, want feat-a tip %s", got.Commit, tipsBefore["feat-a"])
+	}
+
+	// Zero mutation: every tip unchanged, and the staged hunk still staged.
+	for b, tip := range tipsBefore {
+		if r.rev(b) != tip {
+			t.Fatalf("%s moved during a dry-run absorb", b)
+		}
+	}
+	if diff := r.git("diff", "--cached", "--name-only"); !strings.Contains(diff, "shared.txt") {
+		t.Fatalf("dry-run unstaged the hunk; diff --cached = %q", diff)
+	}
+	r.stOK("validate")
+}

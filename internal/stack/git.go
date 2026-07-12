@@ -64,6 +64,11 @@ type Git interface {
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)
+	// DiffCachedHunks returns the staged change regions (git diff --cached -U0).
+	DiffCachedHunks() ([]git.Hunk, error)
+	// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
+	// last touched it (git blame --porcelain).
+	BlamePorcelain(file, rev string) (map[int]string, error)
 	// WorktreeRemove removes the linked worktree at dir. git refuses to delete a
 	// branch checked out in another worktree, so a lifecycle op (delete/fold/
 	// prune) that removes such a branch must first tear down its (clean) worktree
