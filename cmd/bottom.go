@@ -37,12 +37,12 @@ func runBottom(args []string) error {
 
 	b := s.BottomOf(cur)
 	if b == cur {
-		return navEmitText(asJSON, b, alreadyAtSummary("already at bottom", b), alreadyAtSummaryForTerminal("already at bottom", b))
+		return navEmit(asJSON, b, alreadyAtSummary("already at bottom", b))
 	}
 
 	dest, err := teleportCheckout(b)
 	if err != nil {
 		return err
 	}
-	return navEmitText(asJSON, b, navSummary("switched to bottom:", b, dest), terminalSummary("switched to bottom:", b, dest))
+	return navEmit(asJSON, b, navSummary("switched to bottom:", b, dest))
 }

@@ -70,7 +70,11 @@ func joinNames(names []string) string {
 }
 
 // navEmit renders the result of a navigation command (the branch HEAD ended on
-// plus a human summary) as JSON or text.
+// plus a human summary) as JSON or text. The text summary is sanitized as a
+// whole with the newline-preserving predicate so teleport hints keep their
+// structural "\n" (the two-line "… is in worktree …\nrun: cd …") while
+// ESC/OSC/C1 bytes in a branch name or worktree path still escape. JSON gets
+// the raw summary; encoding/json escapes it.
 func navEmit(asJSON bool, branch, summary string) error {
-	return navEmitText(asJSON, branch, summary, sanitizeForTerminal(summary))
+	return navEmitText(asJSON, branch, summary, sanitizeControls(summary, isErrorTerminalControl))
 }

@@ -37,13 +37,13 @@ func runTop(args []string) error {
 		switch len(children) {
 		case 0:
 			if leaf == cur {
-				return navEmitText(asJSON, cur, alreadyAtSummary("already at the top of the stack", cur), alreadyAtSummaryForTerminal("already at the top of the stack", cur))
+				return navEmit(asJSON, cur, alreadyAtSummary("already at the top of the stack", cur))
 			}
 			dest, err := teleportCheckout(leaf)
 			if err != nil {
 				return err
 			}
-			return navEmitText(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest), terminalSummary("moved to top of stack:", leaf, dest))
+			return navEmit(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest))
 		case 1:
 			leaf = children[0].Name
 		default:

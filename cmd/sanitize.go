@@ -109,34 +109,10 @@ func navEmitText(asJSON bool, branch, summary, textSummary string) error {
 	}{branch, summary}, func() { out("%s\n", textSummary) })
 }
 
-func terminalSummary(verb, branch, dest string) string {
-	if dest == "" {
-		return fmt.Sprintf("%s %s", verb, sanitizeForTerminal(branch))
-	}
-	if shimActive() {
-		return fmt.Sprintf("%s %s (worktree: %s)", verb, sanitizeForTerminal(branch), sanitizeForTerminal(dest))
-	}
-	return teleportHintForTerminal(branch, dest)
-}
-
 func teleportHintForTerminal(branch, dest string) string {
 	safeBranch := sanitizeForTerminal(branch)
 	safeDest := sanitizeForTerminal(dest)
 	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", safeBranch, safeDest, safeDest)
-}
-
-func topSummaryForTerminal(branch, dest string) string {
-	if dest == "" {
-		return fmt.Sprintf("switched to %s (top of stack)", sanitizeForTerminal(branch))
-	}
-	if shimActive() {
-		return fmt.Sprintf("switched to %s (top of stack, worktree: %s)", sanitizeForTerminal(branch), sanitizeForTerminal(dest))
-	}
-	return teleportHintForTerminal(branch, dest)
-}
-
-func alreadyAtSummaryForTerminal(prefix, branch string) string {
-	return fmt.Sprintf("%s: %s", prefix, sanitizeForTerminal(branch))
 }
 
 func branchPointSummaryForTerminal(branch string) string {

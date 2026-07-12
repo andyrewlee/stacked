@@ -57,7 +57,7 @@ func runUp(args []string) error {
 			if cur == start {
 				return navEmit(asJSON, cur, "already at the top of the stack")
 			}
-			return navEmitText(asJSON, cur, topSummary(cur, dest), topSummaryForTerminal(cur, dest))
+			return navEmit(asJSON, cur, topSummary(cur, dest))
 		case 1:
 			cur = children[0].Name
 		default:
@@ -84,5 +84,5 @@ func runUp(args []string) error {
 	if err := checkout(cur); err != nil {
 		return err
 	}
-	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), terminalSummary("switched to", cur, dest))
+	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
 }
