@@ -7,7 +7,7 @@ package main
 import (
 	"os"
 
-	"stacked/cmd"
+	"github.com/andyrewlee/stacked/cmd"
 )
 
 func main() {

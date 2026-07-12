@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {

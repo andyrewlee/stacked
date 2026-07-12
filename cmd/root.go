@@ -13,7 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // version is the stacked release version reported by the version command. It is

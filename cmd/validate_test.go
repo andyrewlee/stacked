@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // TestValidateProblemCategories constructs each malformed state and asserts

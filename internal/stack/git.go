@@ -1,6 +1,6 @@
 package stack
 
-import "stacked/internal/git"
+import "github.com/andyrewlee/stacked/internal/git"
 
 // Git is the port the stack engine uses to manipulate the underlying git
 // repository. internal/git.Shell is the production implementation; tests use an

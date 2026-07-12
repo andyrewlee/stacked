@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/git"
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // Stack-mutating commands over real git: track/untrack, restack, abort,

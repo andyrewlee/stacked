@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 const repoKeyHashBytes = 6

@@ -1,6 +1,6 @@
 package cmd
 
-import "stacked/internal/stack"
+import "github.com/andyrewlee/stacked/internal/stack"
 
 func init() {
 	register(&Command{

@@ -3,7 +3,7 @@ package cmd
 import (
 	"sync"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // cachedWorktrees memoizes `git worktree list --porcelain` for the lifetime of

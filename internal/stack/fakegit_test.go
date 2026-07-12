@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // fakeCommit is a node in the in-memory commit DAG.

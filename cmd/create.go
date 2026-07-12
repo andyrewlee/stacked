@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"stacked/internal/git"
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 const createWorktreeCommitFlagErr = "--worktree cannot be combined with -m/-a; create the worktree first, then commit inside it"

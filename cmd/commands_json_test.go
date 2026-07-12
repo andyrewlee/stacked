@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // Read-only command output and the machine (JSON) contract: log, status,

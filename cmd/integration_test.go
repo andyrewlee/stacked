@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/stack"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // This file holds the shared helpers for the cmd test suite. The engine logic is

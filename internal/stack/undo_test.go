@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 func mustStackGit(t *testing.T, args ...string) string {
