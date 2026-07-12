@@ -328,15 +328,152 @@ func TestCopyWorktreeIncludesRejectsEscapingPath(t *testing.T) {
 	}
 }
 
-func TestCopyWorktreeIncludesTreatsWildcardsAsLiteralPaths(t *testing.T) {
+// TestCopyWorktreeIncludesExpandsGlobs drives the shell-glob matrix: `*`
+// within a segment, `**` across directories (including zero directories),
+// literals unchanged, a non-matching glob as a silent skip, and a bad pattern
+// as a hard error naming the line.
+func TestCopyWorktreeIncludesExpandsGlobs(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "dist\nnode_modules\n.env\n")
+	if err := os.MkdirAll("dist", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join("dist", "a.js"), "a\n")
+	write(t, filepath.Join("dist", "b.js"), "b\n")
+	for _, dir := range []string{
+		filepath.Join("packages", "one", "node_modules"),
+		filepath.Join("packages", "two", "deep", "node_modules"),
+		"node_modules",
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "mod.txt"), "m\n")
+	}
+	write(t, ".env", "TOKEN=1\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore rules")
+	write(t, ".worktreeinclude", "dist/*\npackages/**/node_modules\n.env\nno-such-*\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	want := []string{
+		filepath.Join("dist", "a.js"),
+		filepath.Join("dist", "b.js"),
+		filepath.Join("packages", "one", "node_modules"),
+		filepath.Join("packages", "two", "deep", "node_modules"),
+		".env",
+	}
+	for _, rel := range want {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("%s not copied: %v (copied=%v)", rel, err, copied)
+		}
+	}
+	if len(copied) != len(want) {
+		t.Fatalf("copied = %v, want exactly %v", copied, want)
+	}
+	// The zero-directories case: packages/**/node_modules must NOT have
+	// matched the top-level node_modules (it is not under packages/), and a
+	// separate `**/node_modules` line would. Prove the boundary:
+	if _, err := os.Stat(filepath.Join(dst, "node_modules")); !os.IsNotExist(err) {
+		t.Errorf("top-level node_modules copied by packages/**/node_modules")
+	}
+
+	// A syntactically invalid pattern is a hard error naming the line.
+	write(t, ".worktreeinclude", "dist/[\n")
+	if _, err := copyWorktreeIncludes(root, filepath.Join(t.TempDir(), "wt2")); err == nil || !strings.Contains(err.Error(), "dist/[") {
+		t.Fatalf("bad pattern error = %v, want it to name the line", err)
+	}
+}
+
+// TestCopyWorktreeIncludesDoubleStarMatchesZeroDirs pins "** matches zero or
+// more directories": a/**/f matches a/f as well as a/b/f.
+func TestCopyWorktreeIncludesDoubleStarMatchesZeroDirs(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "a\n")
+	if err := os.MkdirAll(filepath.Join("a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join("a", "f.txt"), "0\n")
+	write(t, filepath.Join("a", "b", "f.txt"), "1\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	write(t, ".worktreeinclude", "a/**/f.txt\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 2 {
+		t.Fatalf("copied = %v, want both f.txt levels", copied)
+	}
+}
+
+// TestCopyWorktreeIncludesGlobCannotEscape proves expansion output feeds the
+// SAME validation pipeline as literals: ..-escaping globs are hard errors,
+// never copies.
+func TestCopyWorktreeIncludesGlobCannotEscape(t *testing.T) {
 	newRepo(t)
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, ".gitignore", "*.env\n")
-	write(t, "secret.env", "TOKEN=1\n")
-	write(t, ".worktreeinclude", "*.env\n")
+	parent := filepath.Dir(root)
+	if err := os.WriteFile(filepath.Join(parent, "outside-glob.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, pattern := range []string{"../*", "dist/../../*"} {
+		write(t, ".worktreeinclude", pattern+"\n")
+		dst := filepath.Join(t.TempDir(), "wt")
+		copied, err := copyWorktreeIncludes(root, dst)
+		if err == nil {
+			t.Fatalf("pattern %q: error = nil, copied = %v; want unsafe path error", pattern, copied)
+		}
+		if !strings.Contains(err.Error(), "unsafe .worktreeinclude path") {
+			t.Fatalf("pattern %q: error = %v, want unsafe path rejection", pattern, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(dst, "..", "outside-glob.txt")); statErr == nil {
+			t.Fatalf("pattern %q escaped the destination", pattern)
+		}
+	}
+}
+
+// TestCopyWorktreeIncludesGlobSkipsSymlinkTraversal mirrors the literal
+// symlink-traversal test with a glob line: a glob that expands to a path
+// through a symlinked directory is skipped by the real-parent containment
+// check, not copied and not an error.
+func TestCopyWorktreeIncludesGlobSkipsSymlinkTraversal(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "escape\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".worktreeinclude", "escape/*.txt\n")
 
 	dst := filepath.Join(t.TempDir(), "wt")
 	copied, err := copyWorktreeIncludes(root, dst)
@@ -344,10 +481,10 @@ func TestCopyWorktreeIncludesTreatsWildcardsAsLiteralPaths(t *testing.T) {
 		t.Fatalf("copyWorktreeIncludes: %v", err)
 	}
 	if len(copied) != 0 {
-		t.Fatalf("copied = %v, want none for wildcard-looking literal entry", copied)
+		t.Fatalf("copied = %v, want none through a symlinked dir", copied)
 	}
-	if _, err := os.Stat(filepath.Join(dst, "secret.env")); !os.IsNotExist(err) {
-		t.Errorf("secret.env should not be copied from wildcard-looking entry")
+	if _, err := os.Stat(filepath.Join(dst, "escape", "secret.txt")); !os.IsNotExist(err) {
+		t.Errorf("escape/secret.txt should not be copied through a symlinked dir")
 	}
 }
 
