@@ -138,27 +138,11 @@ func navSummary(verb, branch, dest string) string {
 	return teleportHint(branch, dest)
 }
 
-func terminalSummary(verb, branch, dest string) string {
-	if dest == "" {
-		return fmt.Sprintf("%s %s", verb, sanitizeForTerminal(branch))
-	}
-	if shimActive() {
-		return fmt.Sprintf("%s %s (worktree: %s)", verb, sanitizeForTerminal(branch), sanitizeForTerminal(dest))
-	}
-	return teleportHintForTerminal(branch, dest)
-}
-
 // teleportHint is the human summary printed when a branch lives in another
 // worktree and the shell shim is not installed: it names where the branch lives
 // and the exact command to get there, instead of falsely reporting a switch.
 func teleportHint(branch, dest string) string {
 	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", branch, dest, dest)
-}
-
-func teleportHintForTerminal(branch, dest string) string {
-	safeBranch := sanitizeForTerminal(branch)
-	safeDest := sanitizeForTerminal(dest)
-	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", safeBranch, safeDest, safeDest)
 }
 
 func topSummary(branch, dest string) string {
@@ -171,26 +155,8 @@ func topSummary(branch, dest string) string {
 	return teleportHint(branch, dest)
 }
 
-func topSummaryForTerminal(branch, dest string) string {
-	if dest == "" {
-		return fmt.Sprintf("switched to %s (top of stack)", sanitizeForTerminal(branch))
-	}
-	if shimActive() {
-		return fmt.Sprintf("switched to %s (top of stack, worktree: %s)", sanitizeForTerminal(branch), sanitizeForTerminal(dest))
-	}
-	return teleportHintForTerminal(branch, dest)
-}
-
 func alreadyAtSummary(prefix, branch string) string {
 	return fmt.Sprintf("%s: %s", prefix, branch)
-}
-
-func alreadyAtSummaryForTerminal(prefix, branch string) string {
-	return fmt.Sprintf("%s: %s", prefix, sanitizeForTerminal(branch))
-}
-
-func branchPointSummaryForTerminal(branch string) string {
-	return fmt.Sprintf("multiple children of %s; pick one and run \"st checkout <name>\":", sanitizeForTerminal(branch))
 }
 
 // writeCDDirective records dir as the place the parent shell should cd to, when

@@ -89,3 +89,56 @@ func isTerminalControl(r rune) bool {
 func isErrorTerminalControl(r rune) bool {
 	return isTerminalControl(r) && r != '\n' && r != '\t'
 }
+
+// The helpers below are the terminal-facing (sanitized) twins of plain
+// summary builders and joiners used in JSON payloads: text output sanitizes,
+// JSON stays raw (encoding/json already escapes).
+
+func joinTerminalNames(names []string) string {
+	safe := make([]string, 0, len(names))
+	for _, name := range names {
+		safe = append(safe, sanitizeForTerminal(name))
+	}
+	return joinNames(safe)
+}
+
+func navEmitText(asJSON bool, branch, summary, textSummary string) error {
+	return emit(asJSON, struct {
+		Branch  string `json:"branch"`
+		Summary string `json:"summary"`
+	}{branch, summary}, func() { out("%s\n", textSummary) })
+}
+
+func terminalSummary(verb, branch, dest string) string {
+	if dest == "" {
+		return fmt.Sprintf("%s %s", verb, sanitizeForTerminal(branch))
+	}
+	if shimActive() {
+		return fmt.Sprintf("%s %s (worktree: %s)", verb, sanitizeForTerminal(branch), sanitizeForTerminal(dest))
+	}
+	return teleportHintForTerminal(branch, dest)
+}
+
+func teleportHintForTerminal(branch, dest string) string {
+	safeBranch := sanitizeForTerminal(branch)
+	safeDest := sanitizeForTerminal(dest)
+	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", safeBranch, safeDest, safeDest)
+}
+
+func topSummaryForTerminal(branch, dest string) string {
+	if dest == "" {
+		return fmt.Sprintf("switched to %s (top of stack)", sanitizeForTerminal(branch))
+	}
+	if shimActive() {
+		return fmt.Sprintf("switched to %s (top of stack, worktree: %s)", sanitizeForTerminal(branch), sanitizeForTerminal(dest))
+	}
+	return teleportHintForTerminal(branch, dest)
+}
+
+func alreadyAtSummaryForTerminal(prefix, branch string) string {
+	return fmt.Sprintf("%s: %s", prefix, sanitizeForTerminal(branch))
+}
+
+func branchPointSummaryForTerminal(branch string) string {
+	return fmt.Sprintf("multiple children of %s; pick one and run \"st checkout <name>\":", sanitizeForTerminal(branch))
+}
