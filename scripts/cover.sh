@@ -44,3 +44,27 @@ if [ "${TOTAL%.*}" -lt "$THRESHOLD" ]; then
 	exit 1
 fi
 echo "OK: total coverage ${TOTAL}% meets threshold ${THRESHOLD}% (in-process + e2e)"
+
+# Per-function floor: a new under-tested function must not hide under a green
+# total. Functions below COVERAGE_FUNC_MIN% (default 50) fail the gate unless
+# justified in scripts/cover-allow.txt (matched on "<path>	<func>", never on
+# line numbers, so entries survive unrelated edits).
+FUNC_MIN="${COVERAGE_FUNC_MIN:-50}"
+ALLOW="scripts/cover-allow.txt"
+allowpats="$(mktemp)"
+trap 'rm -rf "$unitdir" "$e2edir" "$allowpats"' EXIT
+awk -F'\t+' '$1 !~ /^#/ && NF >= 2 { print $1 "\t" $2 }' "$ALLOW" >"$allowpats"
+fails="$(go tool cover -func=cover.out | awk -v min="$FUNC_MIN" '
+	$1 == "total:" { next }
+	{ p = $NF; sub(/%/, "", p); if (p + 0 < min) { f = $1; sub(/:[0-9]+:$/, "", f); print f "\t" $2 } }
+')"
+unallowed=""
+if [ -n "$fails" ]; then
+	unallowed="$(echo "$fails" | grep -v -x -F -f "$allowpats" || true)"
+fi
+if [ -n "$unallowed" ]; then
+	echo "FAIL: functions below the ${FUNC_MIN}% per-function floor (add tests, or justify in $ALLOW):" >&2
+	echo "$unallowed" >&2
+	exit 1
+fi
+echo "OK: per-function floor ${FUNC_MIN}% holds ($(wc -l <"$allowpats" | tr -d ' ') allowlisted)"

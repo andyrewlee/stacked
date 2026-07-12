@@ -13,7 +13,15 @@ make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 
 `make ci` is the single source of truth: `fmt-check` + strict `golangci-lint` +
 `vet` + `build` + race tests + black-box e2e + a merged-coverage gate (≥75%). If
-it's green, you can commit. Keep the tool **standard-library only** — `go.mod` must
+it's green, you can commit.
+
+The coverage gate also enforces a **per-function floor** (default 50%,
+`COVERAGE_FUNC_MIN` to override): a new function below the floor fails the
+build and is listed as `<path>	<func>`. Either add tests, or — only for
+platform stubs and production-overridden port methods — add a justified entry
+to `scripts/cover-allow.txt` (matched on path + function, each line carrying a
+`# why` comment). The allowlist is a ratchet: entries should only be removed;
+allowlisting new feature code defeats the gate's purpose. Keep the tool **standard-library only** — `go.mod` must
 have zero `require` entries (`go mod tidy` stays a no-op).
 
 The lint step needs **golangci-lint v2** on your `PATH` (an external binary, never
