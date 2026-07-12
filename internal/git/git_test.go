@@ -1111,3 +1111,55 @@ func TestCheckBranchName(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateRefs pins the batch wrapper: one invocation moves every ref, a
+// missing ref is created (undo's branch resurrection), a bad batch moves
+// NOTHING (git applies --stdin as one transaction), flag-like names are
+// refused before exec, and empty input is a no-op.
+func TestUpdateRefs(t *testing.T) {
+	newRepo(t)
+	base := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "next.txt", "next\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "next")
+	tip := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "branch", "-q", "one", base)
+	mustGit(t, "branch", "-q", "two", base)
+
+	if err := UpdateRefs(map[string]string{
+		"refs/heads/one":         tip,
+		"refs/heads/two":         tip,
+		"refs/heads/resurrected": base, // does not exist yet: update creates it
+	}); err != nil {
+		t.Fatalf("UpdateRefs: %v", err)
+	}
+	for _, ref := range []string{"one", "two"} {
+		if got := mustGit(t, "rev-parse", "refs/heads/"+ref); got != tip {
+			t.Fatalf("%s = %q, want %q", ref, got, tip)
+		}
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/resurrected"); got != base {
+		t.Fatalf("resurrected = %q, want created at %q", got, base)
+	}
+
+	// Transactionality: a batch with one bogus SHA moves zero refs.
+	err := UpdateRefs(map[string]string{
+		"refs/heads/one": base,
+		"refs/heads/two": "0123456789012345678901234567890123456789",
+	})
+	if err == nil {
+		t.Fatal("UpdateRefs with a bogus SHA succeeded")
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/one"); got != tip {
+		t.Fatalf("one = %q after failed batch, want untouched %q", got, tip)
+	}
+
+	// A flag-like ref name is refused before any exec.
+	if err := UpdateRefs(map[string]string{"--evil": base}); err == nil {
+		t.Fatal("UpdateRefs accepted a flag-like ref name")
+	}
+	// Empty input is a no-op.
+	if err := UpdateRefs(nil); err != nil {
+		t.Fatalf("UpdateRefs(nil): %v", err)
+	}
+}

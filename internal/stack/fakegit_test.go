@@ -375,6 +375,23 @@ func (f *fakeGit) UpdateRef(ref, sha string) error {
 	return nil
 }
 
+// UpdateRefs mirrors the shell's transactional contract: every SHA must
+// resolve before any ref moves.
+func (f *fakeGit) UpdateRefs(updates map[string]string) error {
+	resolved := map[string]string{}
+	for ref, sha := range updates {
+		id := f.resolve(sha)
+		if id == "" {
+			return fmt.Errorf("unknown revision %q", sha)
+		}
+		resolved[strings.TrimPrefix(ref, "refs/heads/")] = id
+	}
+	for name, id := range resolved {
+		f.branches[name] = id
+	}
+	return nil
+}
+
 func (f *fakeGit) RenameBranch(oldName, newName string) error {
 	tip, ok := f.branches[oldName]
 	if !ok {

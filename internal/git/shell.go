@@ -30,6 +30,7 @@ func (Shell) CreateBranchAt(name, ref string) error       { return CreateBranchA
 func (Shell) DeleteBranch(name string, force bool) error  { return DeleteBranch(name, force) }
 func (Shell) ForceBranch(name, ref string) error          { return ForceBranch(name, ref) }
 func (Shell) UpdateRef(ref, sha string) error             { return UpdateRef(ref, sha) }
+func (Shell) UpdateRefs(updates map[string]string) error  { return UpdateRefs(updates) }
 func (Shell) ResetSoft(ref string) error                  { return ResetSoft(ref) }
 func (Shell) Commit(message string, all bool) error       { return Commit(message, all) }
 func (Shell) AmendNoEdit(all bool) error                  { return AmendNoEdit(all) }

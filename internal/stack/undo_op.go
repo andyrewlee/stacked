@@ -112,15 +112,18 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		return nil, fmt.Errorf("restoring stack state: %w", err)
 	}
 
+	// Restore every recorded ref in ONE update-ref transaction: on failure no
+	// ref moves, which is strictly better for a recovery path than a
+	// sequential loop that can die halfway.
+	updates := make(map[string]string, len(entry.Refs))
 	names := make([]string, 0, len(entry.Refs))
-	for name := range entry.Refs {
+	for name, sha := range entry.Refs {
+		updates[branchTipRef(name)] = sha
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		if err := g.UpdateRef(branchTipRef(name), entry.Refs[name]); err != nil {
-			return nil, fmt.Errorf("restoring branch %q: %w", name, err)
-		}
+	if err := g.UpdateRefs(updates); err != nil {
+		return nil, fmt.Errorf("restoring branch refs: %w", err)
 	}
 
 	if !skipCheckoutRestore && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
