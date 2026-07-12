@@ -117,6 +117,50 @@ func TestWorktreeMutationsInvalidateCache(t *testing.T) {
 	}
 }
 
+// TestGitIgnoredSet pins the batched check-ignore probe: one spawn classifies
+// every manifest entry, exit status 1 (nothing ignored) is an empty set, and
+// -z round-trips paths with spaces verbatim.
+func TestGitIgnoredSet(t *testing.T) {
+	newRepo(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "node_modules\ndist\nwith space.txt\n")
+	write(t, "tracked.txt", "t\n")
+	mustRun(t, "git", "add", ".gitignore", "tracked.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore rules")
+
+	got, err := gitIgnoredSet(root, []string{"node_modules", "dist", "with space.txt", "tracked.txt", "nonexistent"})
+	if err != nil {
+		t.Fatalf("gitIgnoredSet: %v", err)
+	}
+	want := map[string]bool{"node_modules": true, "dist": true, "with space.txt": true}
+	if len(got) != len(want) {
+		t.Fatalf("ignored = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("ignored[%q] = false, want true", k)
+		}
+	}
+
+	// Nothing ignored: exit status 1 must be an empty set, not an error.
+	empty, err := gitIgnoredSet(root, []string{"tracked.txt", "nonexistent"})
+	if err != nil {
+		t.Fatalf("gitIgnoredSet (none ignored): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("ignored = %v, want empty", empty)
+	}
+
+	// No entries: no spawn, empty set.
+	none, err := gitIgnoredSet(root, nil)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("gitIgnoredSet(nil) = %v, %v; want empty, nil", none, err)
+	}
+}
+
 func TestPlainCopyRecursive(t *testing.T) {
 	src := t.TempDir()
 	dst := filepath.Join(t.TempDir(), "out")
