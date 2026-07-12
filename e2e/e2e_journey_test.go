@@ -1,7 +1,9 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2097,5 +2099,140 @@ func assertTips(t *testing.T, r *repo, want map[string]string) {
 		if got := r.git("rev-parse", name); got != tip {
 			t.Fatalf("%s tip changed: before=%s after=%s", name, tip, got)
 		}
+	}
+}
+
+// exitCodeOf unwraps a raw exec.Command error into its exit code.
+func exitCodeOf(t *testing.T, err error) int {
+	t.Helper()
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	t.Fatalf("command failed without an exit code: %v", err)
+	return -1
+}
+
+// worktreePath materializes branch's linked worktree via `st worktree <branch>
+// --json` and returns its path.
+func worktreePath(t *testing.T, r *repo, branch string) string {
+	t.Helper()
+	out := r.stOK("worktree", branch, "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &wt); err != nil {
+		t.Fatalf("decode worktree json for %s: %v\n%s", branch, err, out)
+	}
+	return wt.Path
+}
+
+// TestSyncConflictContinueFromLinkedWorktree drives the previously-untested
+// combination: `st sync` run from inside a branch's own linked worktree where
+// that branch conflicts on the advanced trunk. The paused rebase must land in
+// the WORKTREE (exit 2), and `st continue` from the worktree must reconcile.
+func TestSyncConflictContinueFromLinkedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "f.txt", "A\n", "a")
+
+	// Advance local main with conflicting content, then free feat-a so it can
+	// be checked out in its own worktree.
+	r.stOK("checkout", "main")
+	r.writeFile("f.txt", "MAIN\n")
+	r.git("add", "f.txt")
+	r.git("commit", "-q", "-m", "trunk advances")
+
+	wt := worktreePath(t, r, "feat-a")
+
+	sync := exec.Command(stBin, "sync")
+	sync.Dir = wt
+	sync.Env = cleanEnv(r.home)
+	var syncOut, syncErr bytes.Buffer
+	sync.Stdout = &syncOut
+	sync.Stderr = &syncErr
+	code := exitCodeOf(t, sync.Run())
+	if code != 2 {
+		t.Fatalf("sync from linked worktree: exit %d, want 2 (conflict)\nstdout:%s\nstderr:%s", code, syncOut.String(), syncErr.String())
+	}
+	if !strings.Contains(syncErr.String()+syncOut.String(), "st continue") {
+		t.Fatalf("conflict output missing the continue hint:\n%s\n%s", syncOut.String(), syncErr.String())
+	}
+
+	// The paused rebase lives under the WORKTREE's git dir, not the main .git.
+	gitDir := r.gitIn(wt, "rev-parse", "--absolute-git-dir")
+	if _, err := os.Stat(filepath.Join(gitDir, "rebase-merge")); err != nil {
+		t.Fatalf("expected a rebase in progress under the worktree git dir %q: %v", gitDir, err)
+	}
+
+	// Resolve IN the worktree and continue FROM the worktree.
+	if err := os.WriteFile(filepath.Join(wt, "f.txt"), []byte("MAIN\nA\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.gitIn(wt, "add", "f.txt")
+	cont := exec.Command(stBin, "continue")
+	cont.Dir = wt
+	cont.Env = cleanEnv(r.home)
+	if outB, err := cont.CombinedOutput(); err != nil {
+		t.Fatalf("st continue from linked worktree: %v\n%s", err, outB)
+	}
+
+	if !r.isAncestor("main", "feat-a") {
+		t.Fatal("feat-a was not restacked onto the advanced main after continue")
+	}
+	if got := r.gitIn(wt, "rev-parse", "--abbrev-ref", "HEAD"); got != "feat-a" {
+		t.Fatalf("worktree HEAD = %q after continue, want feat-a", got)
+	}
+	r.stOK("validate")
+}
+
+// TestRestackSiblingWorktreeConflictRollsBackFromLinkedWorktree drives the
+// other half: a SIBLING stack owned by a different worktree conflicts during
+// `st restack --all` run from worktree W1. The sibling is rolled back (no
+// paused rebase in W2, non-conflict exit), and W1's branch keeps its progress.
+func TestRestackSiblingWorktreeConflictRollsBackFromLinkedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a") // independent file: rebases clean
+	r.stOK("checkout", "main")
+	r.create("feat-x", "f.txt", "X\n", "x") // touches f.txt: will conflict
+	r.stOK("checkout", "main")
+
+	// Advance main with content that conflicts with feat-x but not feat-a.
+	r.writeFile("f.txt", "MAIN\n")
+	r.git("add", "f.txt")
+	r.git("commit", "-q", "-m", "trunk advances")
+
+	w1 := worktreePath(t, r, "feat-a")
+	w2 := worktreePath(t, r, "feat-x")
+
+	cmd := exec.Command(stBin, "restack", "--all")
+	cmd.Dir = w1
+	cmd.Env = cleanEnv(r.home)
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
+	code := exitCodeOf(t, cmd.Run())
+	if code == 0 || code == 2 {
+		t.Fatalf("restack --all with a sibling-worktree conflict: exit %d, want non-zero non-conflict (1)\nstdout:%s\nstderr:%s", code, so.String(), se.String())
+	}
+	if !strings.Contains(se.String()+so.String(), "feat-x") {
+		t.Fatalf("error should name the conflicting sibling feat-x:\n%s\n%s", so.String(), se.String())
+	}
+
+	if !r.isAncestor("main", "feat-a") {
+		t.Fatal("feat-a should have rebased onto the advanced main before feat-x failed")
+	}
+	if r.isAncestor("main", "feat-x") {
+		t.Fatal("feat-x should have been rolled back, not advanced")
+	}
+	w2GitDir := r.gitIn(w2, "rev-parse", "--absolute-git-dir")
+	if _, err := os.Stat(filepath.Join(w2GitDir, "rebase-merge")); err == nil {
+		t.Fatal("feat-x's worktree should have no paused rebase (it was rolled back)")
 	}
 }
