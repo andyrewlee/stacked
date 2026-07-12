@@ -103,11 +103,10 @@ func restoreHEAD(env Env, target, fallback string) error {
 	if !g.BranchExists(target) {
 		target = fallback
 	}
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return fmt.Errorf("determine current branch: %w", err)
-	}
-	if cur == target {
+	// A CurrentBranch failure (detached HEAD — sync parks there before pruning)
+	// only skips the already-on-target shortcut; the checkout below either
+	// restores the target or surfaces the real problem.
+	if cur, err := g.CurrentBranch(); err == nil && cur == target {
 		return nil
 	}
 	if err := g.Checkout(target); err != nil {
@@ -677,13 +676,27 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	if err != nil {
 		return nil, err
 	}
+	// Resolve where the trunk is checked out ONCE: sync's trunk operations run
+	// in the trunk's own worktree, so `st sync` works from a linked worktree
+	// (where git refuses to check out the trunk a second time).
+	trunkHere := orig == s.Trunk
+	trunkOwnerDir := ""
+	if !trunkHere {
+		wts, wtErr := g.Worktrees()
+		if wtErr != nil {
+			return nil, wtErr
+		}
+		if owner, ok := OwnerOf(wts, s.Trunk); ok {
+			trunkOwnerDir = owner.Path
+		}
+	}
 
 	ffResult := "skipped (no remote)"
 	if r.Exists(remote) {
 		if err := r.Fetch(remote); err != nil {
 			return nil, fmt.Errorf("fetch %q: %w", remote, err)
 		}
-		ffResult, err = r.FastForward(s.Trunk, remote)
+		ffResult, err = r.FastForward(s.Trunk, remote, trunkOwnerDir, trunkHere)
 		if err != nil {
 			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
 				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
@@ -694,7 +707,19 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 
 	var deleted []string
 	if !noDelete {
-		if err := g.Checkout(s.Trunk); err != nil {
+		// HEAD must not sit on a prunable branch. Checking out the trunk does
+		// that; from a linked worktree (trunk owned elsewhere) git refuses the
+		// checkout, so park HEAD detached instead — any branch, including orig,
+		// can then be pruned.
+		if trunkOwnerDir != "" {
+			head, revErr := g.RevParse("HEAD")
+			if revErr != nil {
+				return nil, fmt.Errorf("resolving HEAD before pruning: %w", revErr)
+			}
+			if err := g.CheckoutDetach(head); err != nil {
+				return nil, fmt.Errorf("detaching HEAD before pruning: %w", err)
+			}
+		} else if err := g.Checkout(s.Trunk); err != nil {
 			return nil, fmt.Errorf("checkout trunk %q before pruning: %w", s.Trunk, err)
 		}
 		if deleted, err = PruneMerged(env, s); err != nil {
@@ -719,7 +744,13 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	if err := env.save(); err != nil {
 		return nil, err
 	}
-	if err := restoreHEAD(env, orig, s.Trunk); err != nil {
+	notes := []string{"trunk: " + ffResult}
+	if !g.BranchExists(orig) && trunkOwnerDir != "" {
+		// orig was pruned and restoreHEAD's trunk fallback cannot be checked out
+		// here (it lives in another worktree): stay detached rather than fail or
+		// hijack that worktree's branch.
+		notes = append(notes, "HEAD left detached; trunk is checked out in "+trunkOwnerDir)
+	} else if err := restoreHEAD(env, orig, s.Trunk); err != nil {
 		return nil, err
 	}
 
@@ -727,7 +758,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		Summary:   "sync complete",
 		Deleted:   deleted,
 		Restacked: rebased,
-		Notes:     append([]string{"trunk: " + ffResult}, skippedWorktreeNotes(s)...),
+		Notes:     append(notes, skippedWorktreeNotes(s)...),
 	}, nil
 }
 

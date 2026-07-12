@@ -2,23 +2,35 @@ package stack
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 )
 
 // fakeRemote is an in-memory Remote port for exercising Sync without a real
-// remote. The trunk fast-forward is whatever ff is set to.
+// remote. The trunk fast-forward is whatever ff is set to. It records the
+// owner-resolution arguments the engine passed and mirrors the production
+// contract's dirty-owner refusal so the engine wiring is testable.
 type fakeRemote struct {
 	exists   bool
 	ff       string
 	err      error
 	checkout *fakeGit
+
+	git *fakeGit // when set, enforce the clean-owner contract for ownerDir
+
+	gotOwnerDir       string
+	gotCheckedOutHere bool
+	called            bool
 }
 
 func (r *fakeRemote) Exists(string) bool { return r.exists }
 func (r *fakeRemote) Fetch(string) error { return nil }
-func (r *fakeRemote) FastForward(trunk, _ string) (string, error) {
+func (r *fakeRemote) FastForward(trunk, _, ownerDir string, checkedOutHere bool) (string, error) {
+	r.called = true
+	r.gotOwnerDir = ownerDir
+	r.gotCheckedOutHere = checkedOutHere
 	if r.checkout != nil {
 		if err := r.checkout.Checkout(trunk); err != nil {
 			return "", err
@@ -26,6 +38,15 @@ func (r *fakeRemote) FastForward(trunk, _ string) (string, error) {
 	}
 	if r.err != nil {
 		return "", r.err
+	}
+	if ownerDir != "" && r.git != nil {
+		clean, err := r.git.IsCleanIn(ownerDir)
+		if err != nil {
+			return "", err
+		}
+		if !clean {
+			return "", fmt.Errorf("trunk %q has uncommitted changes in its worktree %s; commit or stash there before syncing", trunk, ownerDir)
+		}
 	}
 	return r.ff, nil
 }
@@ -381,5 +402,138 @@ func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	}
 	if !s.IsTracked("feat-a") {
 		t.Fatal("feat-a should be kept with --no-delete")
+	}
+}
+
+// The four tests below pin sync's owner-aware trunk handling: the engine
+// resolves where the trunk is checked out and drives the fast-forward there,
+// detaching HEAD (instead of checking out the trunk) before pruning when the
+// trunk lives in another worktree.
+
+func TestSyncFastForwardsTrunkInItsOwnWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	f.addWorktree("/wt/trunk", "main")
+	if err := f.Checkout("feat-b"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate feat-a merged into the trunk, and arm git's refusal to check the
+	// trunk out a second time so any stray Checkout(trunk) fails the test.
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+
+	remote := &fakeRemote{exists: true, ff: "main fast-forwarded to refs/remotes/origin/main", git: f}
+	res, err := Sync(env, remote, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync from linked worktree: %v", err)
+	}
+	if remote.gotOwnerDir != "/wt/trunk" || remote.gotCheckedOutHere {
+		t.Fatalf("FastForward got (ownerDir=%q, here=%v), want (/wt/trunk, false)", remote.gotOwnerDir, remote.gotCheckedOutHere)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if f.head != "feat-b" {
+		t.Fatalf("HEAD = %q after sync, want feat-b restored", f.head)
+	}
+}
+
+func TestSyncEndsDetachedWhenOrigPrunedAndTrunkOwnedElsewhere(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	f.addWorktree("/wt/trunk", "main")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if f.BranchExists("feat-a") {
+		t.Fatal("merged feat-a should have been pruned")
+	}
+	if f.head != "" || f.detachedAt == "" {
+		t.Fatalf("HEAD = (%q, %q), want detached after orig was pruned", f.head, f.detachedAt)
+	}
+	wantNote := "HEAD left detached; trunk is checked out in /wt/trunk"
+	found := false
+	for _, note := range res.Notes {
+		if note == wantNote {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want %q", res.Notes, wantNote)
+	}
+}
+
+func TestSyncFailsWhenTrunkWorktreeDirty(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	f.addWorktree("/wt/trunk", "main")
+	if err := f.Checkout("feat-b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	f.markWorktreeDirty("main")
+
+	remote := &fakeRemote{exists: true, ff: "unused", git: f}
+	_, err := Sync(env, remote, s, "origin", false)
+	if err == nil {
+		t.Fatal("sync with a dirty trunk worktree should fail")
+	}
+	if !strings.Contains(err.Error(), "/wt/trunk") {
+		t.Fatalf("error %v does not name the trunk worktree path", err)
+	}
+	if !s.IsTracked("feat-a") {
+		t.Fatal("failed sync pruned feat-a anyway")
+	}
+	if f.head != "feat-b" {
+		t.Fatalf("HEAD = %q, want feat-b restored after failed sync", f.head)
+	}
+}
+
+func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
+	// Trunk checked out here: checkedOutHere=true, no owner dir.
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	remote := &fakeRemote{exists: true, ff: "main already up to date"}
+	if _, err := Sync(env, remote, s, "origin", false); err != nil {
+		t.Fatalf("sync on trunk: %v", err)
+	}
+	if !remote.gotCheckedOutHere || remote.gotOwnerDir != "" {
+		t.Fatalf("FastForward got (ownerDir=%q, here=%v), want (\"\", true)", remote.gotOwnerDir, remote.gotCheckedOutHere)
+	}
+
+	// Trunk checked out nowhere (single worktree, HEAD on a feature branch):
+	// both zero — the shell takes the guarded ref-only path.
+	f2, s2, env2 := newEnvState()
+	mkBranch(t, env2, s2, f2, "main", "feat-a")
+	if err := f2.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	remote2 := &fakeRemote{exists: true, ff: "main already up to date"}
+	if _, err := Sync(env2, remote2, s2, "origin", false); err != nil {
+		t.Fatalf("sync off trunk: %v", err)
+	}
+	if remote2.gotCheckedOutHere || remote2.gotOwnerDir != "" {
+		t.Fatalf("FastForward got (ownerDir=%q, here=%v), want (\"\", false)", remote2.gotOwnerDir, remote2.gotCheckedOutHere)
 	}
 }

@@ -36,7 +36,7 @@ func TestFastForward(t *testing.T) {
 		setup(t)
 		// The local trunk is ahead of the remote: nothing to advance.
 		local := advanceMain(t, "local")
-		desc, err := (RemoteShell{}).FastForward("main", "origin")
+		desc, err := (RemoteShell{}).FastForward("main", "origin", "", true)
 		if err != nil {
 			t.Fatalf("FastForward: %v", err)
 		}
@@ -58,7 +58,7 @@ func TestFastForward(t *testing.T) {
 		if err := Fetch("origin"); err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
-		if _, err := (RemoteShell{}).FastForward("main", "origin"); err != nil {
+		if _, err := (RemoteShell{}).FastForward("main", "origin", "", true); err != nil {
 			t.Fatalf("FastForward: %v", err)
 		}
 		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
@@ -77,13 +77,134 @@ func TestFastForward(t *testing.T) {
 		if err := Fetch("origin"); err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}
-		if _, err := (RemoteShell{}).FastForward("main", "origin"); err == nil {
+		if _, err := (RemoteShell{}).FastForward("main", "origin", "", true); err == nil {
 			t.Fatal("FastForward on a diverged trunk should error")
 		}
 		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != local {
 			t.Fatalf("failed FastForward moved main to %q, want unchanged %q", got, local)
 		}
 	})
+
+	// prepareBehindRemote advances the remote, resets local main to base, and
+	// fetches, leaving refs/heads/main strictly behind origin/main.
+	prepareBehindRemote := func(t *testing.T, base string) (remoteTip string) {
+		t.Helper()
+		remoteTip = advanceMain(t, "remote")
+		if err := PushRemote("origin", "main", false); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		mustGit(t, "reset", "--hard", base)
+		if err := Fetch("origin"); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		return remoteTip
+	}
+
+	t.Run("advances the trunk inside its owning worktree", func(t *testing.T) {
+		base := setup(t)
+		remoteTip := prepareBehindRemote(t, base)
+		// Move the trunk into a linked worktree; the cwd stays on a feature branch.
+		mustGit(t, "checkout", "-q", "-b", "feature")
+		wt := filepath.Join(t.TempDir(), "trunk-wt")
+		mustGit(t, "worktree", "add", "-q", wt, "main")
+		desc, err := (RemoteShell{}).FastForward("main", "origin", wt, false)
+		if err != nil {
+			t.Fatalf("FastForward in owner worktree: %v", err)
+		}
+		if desc != "main fast-forwarded to refs/remotes/origin/main" {
+			t.Fatalf("description = %q", desc)
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
+			t.Fatalf("main = %q, want upstream tip %q", got, remoteTip)
+		}
+		// The owner's working tree advanced too (the remote commit's file exists).
+		if _, err := os.Stat(filepath.Join(wt, "remote.txt")); err != nil {
+			t.Fatalf("owner worktree file not materialized: %v", err)
+		}
+	})
+
+	t.Run("refuses a dirty owning worktree", func(t *testing.T) {
+		base := setup(t)
+		prepareBehindRemote(t, base)
+		local := mustGit(t, "rev-parse", "refs/heads/main")
+		mustGit(t, "checkout", "-q", "-b", "feature")
+		wt := filepath.Join(t.TempDir(), "trunk-wt")
+		mustGit(t, "worktree", "add", "-q", wt, "main")
+		writeFile(t, filepath.Join(wt, "dirty.txt"), "dirty\n")
+		_, err := (RemoteShell{}).FastForward("main", "origin", wt, false)
+		if err == nil || !strings.Contains(err.Error(), wt) {
+			t.Fatalf("FastForward with dirty owner = %v, want error naming %q", err, wt)
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != local {
+			t.Fatalf("dirty-owner FastForward moved main to %q, want unchanged %q", got, local)
+		}
+	})
+
+	t.Run("moves the ref only when the trunk is checked out nowhere", func(t *testing.T) {
+		base := setup(t)
+		remoteTip := prepareBehindRemote(t, base)
+		mustGit(t, "checkout", "-q", "-b", "feature")
+		head := mustGit(t, "rev-parse", "HEAD")
+		desc, err := (RemoteShell{}).FastForward("main", "origin", "", false)
+		if err != nil {
+			t.Fatalf("ref-only FastForward: %v", err)
+		}
+		if desc != "main fast-forwarded to refs/remotes/origin/main" {
+			t.Fatalf("description = %q", desc)
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
+			t.Fatalf("main = %q, want upstream tip %q", got, remoteTip)
+		}
+		if got := mustGit(t, "rev-parse", "HEAD"); got != head {
+			t.Fatalf("ref-only FastForward moved HEAD to %q", got)
+		}
+	})
+
+	t.Run("never force-moves a diverged unchecked-out trunk", func(t *testing.T) {
+		base := setup(t)
+		advanceMain(t, "remote")
+		if err := PushRemote("origin", "main", false); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+		mustGit(t, "reset", "--hard", base)
+		local := advanceMain(t, "local-divergence")
+		if err := Fetch("origin"); err != nil {
+			t.Fatalf("Fetch: %v", err)
+		}
+		mustGit(t, "checkout", "-q", "-b", "feature")
+		if _, err := (RemoteShell{}).FastForward("main", "origin", "", false); err == nil {
+			t.Fatal("ref-only FastForward on a diverged trunk should error")
+		}
+		if got := mustGit(t, "rev-parse", "refs/heads/main"); got != local {
+			t.Fatalf("diverged ref-only FastForward moved main to %q, want unchanged %q", got, local)
+		}
+	})
+}
+
+// TestMergeFFOnlyIn proves the -C variant fast-forwards the branch checked out
+// in another worktree, including its working tree.
+func TestMergeFFOnlyIn(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "extra.txt", "extra\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "extra")
+	tip := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "branch", "-q", "behind", "HEAD~1")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, "worktree", "add", "-q", wt, "behind")
+	if err := MergeFFOnlyIn(wt, "main"); err != nil {
+		t.Fatalf("MergeFFOnlyIn: %v", err)
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/behind"); got != tip {
+		t.Fatalf("behind = %q, want fast-forwarded to %q", got, tip)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "extra.txt")); err != nil {
+		t.Fatalf("worktree file not materialized: %v", err)
+	}
+	if err := MergeFFOnlyIn("", "main"); err == nil {
+		t.Fatal("MergeFFOnlyIn with empty dir should error")
+	}
 }
 
 // newRepo creates a temp git repo with one commit on main and chdirs into it.
@@ -922,7 +1043,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 	mustGit(t, "reset", "--hard", base)
 	mustGit(t, "update-ref", "refs/heads/origin/main", decoy)
 	mustGit(t, "branch", remoteTip, base)
-	if _, err := (RemoteShell{}).FastForward("main", "origin"); err != nil {
+	if _, err := (RemoteShell{}).FastForward("main", "origin", "", true); err != nil {
 		t.Fatalf("FastForward: %v", err)
 	}
 	if got := mustGit(t, "rev-parse", "refs/heads/main"); got != remoteTip {
