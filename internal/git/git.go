@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -1041,6 +1042,46 @@ func UpdateRef(ref, sha string) error {
 	}
 	_, err := Run("update-ref", "--", ref, sha)
 	return err
+}
+
+// UpdateRefs sets every ref in updates to its SHA in a single
+// `git update-ref --stdin` invocation. git applies the batch as one
+// transaction: on any failure no ref is updated. An `update` directive
+// creates a missing ref, which is what resurrects pruned branches on undo.
+// Empty input is a no-op.
+func UpdateRefs(updates map[string]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(updates))
+	for ref := range updates {
+		if err := validRefArg("ref", ref); err != nil {
+			return err
+		}
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs) // deterministic batch for tests and debuggability
+	var b strings.Builder
+	for _, ref := range refs {
+		fmt.Fprintf(&b, "update %s %s\n", ref, updates[ref])
+	}
+	cmd := exec.Command("git", "update-ref", "--stdin")
+	cmd.Env = gitEnv()
+	cmd.Stdin = strings.NewReader(b.String())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg != "" {
+			return fmt.Errorf("git update-ref --stdin: %s: %w", msg, err)
+		}
+		return fmt.Errorf("git update-ref --stdin: %w", err)
+	}
+	return nil
 }
 
 // RemoteURL returns the configured fetch URL of the named remote.

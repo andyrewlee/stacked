@@ -24,6 +24,11 @@ type Git interface {
 	DeleteBranch(name string, force bool) error
 	ForceBranch(name, ref string) error
 	UpdateRef(ref, sha string) error
+	// UpdateRefs applies every ref->SHA update as ONE transaction: on any
+	// failure no ref moves (all or nothing — the fake and the shell must both
+	// honor this). An update creates a missing ref, which is what resurrects
+	// pruned branches on undo.
+	UpdateRefs(updates map[string]string) error
 	ResetSoft(ref string) error
 	Commit(message string, all bool) error
 	AmendNoEdit(all bool) error
