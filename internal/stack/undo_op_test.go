@@ -411,3 +411,36 @@ func TestUndoPropagatesFinalCheckoutErrorOnDirtyTree(t *testing.T) {
 		t.Fatalf("undo error = %v, want %v", err, boom)
 	}
 }
+
+// TestUndoCreateRefusesWorktreePathMismatch pins the safety half of undo's
+// worktree teardown: when the journal recorded a created worktree at one path
+// but the branch's live linked worktree is somewhere else, the journal and
+// topology disagree — refuse, and abort before the branch delete.
+func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/other", "b")
+	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
+
+	_, err := Undo(env, s, entry)
+	if err == nil {
+		t.Fatal("undo succeeded despite created-worktree path mismatch")
+	}
+	if !strings.Contains(err.Error(), "not removing an unexpected worktree") {
+		t.Fatalf("error = %v, want the path-mismatch refusal", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("undo removed the mismatched worktree")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("undo deleted the branch despite refusing its worktree")
+	}
+}
