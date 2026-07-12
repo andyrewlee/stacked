@@ -773,3 +773,105 @@ func TestEmitWorktreeTextOutput(t *testing.T) {
 		t.Fatalf("copied line present with no copied entries: %q", out)
 	}
 }
+
+// TestDropNestedEntries pins the pure suppression rule: descendants of a
+// selected on-disk directory are dropped, path-boundary compared ("a" must
+// not suppress "ax"), survivor order preserved.
+func TestDropNestedEntries(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"a", "c", "ax"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "c", "d"), []byte("d\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := dropNestedEntries(root, []string{"a", filepath.Join("a", "b"), "ax", filepath.Join("c", "d"), "c"})
+	want := []string{"a", "ax", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("dropNestedEntries = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dropNestedEntries[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestCopyWorktreeIncludesDropsNestedLiteralEntry reproduces the duplicate-
+// nesting bug: a directory entry plus a nested subpath of it must copy the
+// tree ONCE, not re-copy the inner dir into its already-populated destination
+// (which produced nm/pkg/nm/nm/inner.txt via cp's copy-into-existing-dir).
+func TestCopyWorktreeIncludesDropsNestedLiteralEntry(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "nm\n")
+	if err := os.MkdirAll(filepath.Join("nm", "pkg", "nm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join("nm", "pkg", "nm", "inner.txt"), "inner\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	write(t, ".worktreeinclude", "nm\nnm/pkg/nm\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	if len(copied) != 1 || copied[0] != "nm" {
+		t.Fatalf("copied = %v, want only the ancestor nm", copied)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "nm", "pkg", "nm", "inner.txt")); err != nil {
+		t.Fatalf("inner.txt missing from the single copy: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "nm", "pkg", "nm", "nm")); !os.IsNotExist(err) {
+		t.Fatalf("spurious nested duplicate nm/pkg/nm/nm exists (stat err = %v)", err)
+	}
+}
+
+// TestCopyWorktreeIncludesDropsGlobNestedDescendant covers the glob trigger:
+// packages/**/node_modules matches both an outer node_modules and a nested
+// one inside it; only the outer copy must happen.
+func TestCopyWorktreeIncludesDropsGlobNestedDescendant(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "node_modules\n")
+	inner := filepath.Join("packages", "one", "node_modules", "dep", "node_modules")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(inner, "leaf.txt"), "leaf\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore")
+	write(t, ".worktreeinclude", "packages/**/node_modules\n")
+
+	dst := filepath.Join(t.TempDir(), "wt")
+	copied, err := copyWorktreeIncludes(root, dst)
+	if err != nil {
+		t.Fatalf("copyWorktreeIncludes: %v", err)
+	}
+	outer := filepath.Join("packages", "one", "node_modules")
+	if len(copied) != 1 || copied[0] != outer {
+		t.Fatalf("copied = %v, want only the outer %s", copied, outer)
+	}
+	if _, err := os.Stat(filepath.Join(dst, inner, "leaf.txt")); err != nil {
+		t.Fatalf("leaf.txt missing from the single copy: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, inner, "node_modules")); !os.IsNotExist(err) {
+		t.Fatalf("spurious nested duplicate under %s exists (stat err = %v)", inner, err)
+	}
+}
