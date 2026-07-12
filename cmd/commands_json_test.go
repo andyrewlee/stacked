@@ -771,6 +771,68 @@ func TestSubmitPRHintsGitHubJSON(t *testing.T) {
 	}
 }
 
+func TestSubmitPRHintsGitLabJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@gitlab.com:owner/repo.git")
+	mustCreate(t, "feat/slash", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit gitlab pr hints", out, &got)
+	if got.RepoURL != "https://gitlab.com/owner/repo" {
+		t.Fatalf("repoURL = %q, want https://gitlab.com/owner/repo", got.RepoURL)
+	}
+	want := []prHint{
+		{
+			Head:       "feat/slash",
+			Base:       "main",
+			CompareURL: "https://gitlab.com/owner/repo/-/compare/main...feat%2Fslash",
+		},
+		{
+			Head:       "feat-b",
+			Base:       "feat/slash",
+			CompareURL: "https://gitlab.com/owner/repo/-/compare/feat%2Fslash...feat-b",
+		},
+	}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
+	}
+}
+
+// TestSubmitPRHintsGitLabMixedCaseHostJSON pins prCompareURL's lowercased host
+// matching: a mixed-case remote host must still take the gitlab /-/compare/
+// path shape (remoteToHTTPS preserves the host's case in the URL prefix).
+func TestSubmitPRHintsGitLabMixedCaseHostJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@GitLab.com:owner/repo.git")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit mixed-case gitlab pr hints", out, &got)
+	want := []prHint{
+		{
+			Head:       "feat-a",
+			Base:       "main",
+			CompareURL: "https://GitLab.com/owner/repo/-/compare/main...feat-a",
+		},
+	}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
+	}
+}
+
 func TestSubmitPRHintsUnknownRemoteJSON(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
