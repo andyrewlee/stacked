@@ -77,6 +77,8 @@ change the engine and these still hold, the topology bookkeeping is sound.
 - `internal/stack/*_test.go` — engine over the fake git (incl. conflicts + sync).
   **The inner loop.**
 - `cmd/*_test.go` — the adapter layer: dispatch, flag parsing, output rendering.
+  The cmd suite silences command stdout; when debugging a failure, run with
+  `ST_TEST_DEBUG=1 go test ./cmd/...` to un-silence it.
 - `e2e/e2e_test.go` — the real binary as a hermetic subprocess; contributes to
   coverage via `GOCOVERDIR`.
 

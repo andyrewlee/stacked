@@ -13,14 +13,14 @@ GOLANGCI_VERSION := v2.12.2
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
 # Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
 # wrong golangci-lint never hides a compile/vet failure; lint still precedes the
 # slow `cover` step. `cover` runs the whole suite once (race + combined
 # in-process/e2e coverage), so ci does not run the tests three times.
-ci: check-deps check-lint-version fmt-check vet vet-cross build lint cover
+ci: check-deps check-lint-version check-go-version fmt-check vet vet-cross build lint cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -83,6 +83,28 @@ check-lint-version:
 	done; \
 	[ $$ok -eq 1 ] || exit 1; \
 	echo "lint pin: $(GOLANGCI_VERSION) consistent across Makefile, ci.yml, README, CONTRIBUTING"
+
+# The Go pin lives in go.mod (source of truth), ci.yml's GO_VERSION env, and
+# the README/CONTRIBUTING "Go 1.NN+" prose. Enforce agreement so a toolchain
+# bump cannot silently leave CI or the docs behind (the same hazard
+# check-lint-version guards for the lint pin).
+check-go-version:
+	@want=$$(sed -nE 's/^go ([0-9]+[.][0-9]+).*/\1/p' go.mod); \
+	ok=1; \
+	ci=$$(sed -nE "s/^[[:space:]]*GO_VERSION:[[:space:]]*'([0-9]+[.][0-9]+)'.*/\1/p" .github/workflows/ci.yml); \
+	if [ "$$ci" != "$$want" ]; then \
+		echo ".github/workflows/ci.yml pins GO_VERSION '$${ci:-<none>}' (want $$want from go.mod)"; \
+		ok=0; \
+	fi; \
+	for f in README.md CONTRIBUTING.md; do \
+		pin=$$(sed -nE 's/.*Go ([0-9]+[.][0-9]+)[+].*/\1/p' $$f | head -1); \
+		if [ "$$pin" != "$$want" ]; then \
+			echo "$$f documents 'Go $${pin:-<none>}+' (want Go $$want+ from go.mod)"; \
+			ok=0; \
+		fi; \
+	done; \
+	[ $$ok -eq 1 ] || exit 1; \
+	echo "go pin: $$want consistent across go.mod, ci.yml, README, CONTRIBUTING"
 
 # Regenerate golden test fixtures after an intended, reviewed output change.
 golden:
