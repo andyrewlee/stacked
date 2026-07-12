@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+# The single Go pin: both jobs' setup-go steps and build-cache keys expand
+# from this value, so a version bump is a one-line edit.
+env:
+  GO_VERSION: '1.26'
+
 # A re-push supersedes the previous run of the same ref; don't keep burning
 # two runners on it. github.ref alone would collide all PRs on the merge ref,
 # so include the event name and PR number.
@@ -31,7 +36,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: ${{ env.GO_VERSION }}
           cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
 
       - name: Resolve Go build cache dir
@@ -44,9 +49,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.gocache.outputs.dir }}
-          key: gobuild-${{ runner.os }}-go1.26-${{ github.sha }}
+          key: gobuild-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ github.sha }}
           restore-keys: |
-            gobuild-${{ runner.os }}-go1.26-
+            gobuild-${{ runner.os }}-go${{ env.GO_VERSION }}-
 
       # Dev tooling is installed as an external binary only; it is never added to
       # go.mod (the shipped tool stays standard-library only). golangci-lint v2
@@ -83,7 +88,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: ${{ env.GO_VERSION }}
           cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
 
       - name: Resolve Go build cache dir
@@ -95,9 +100,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.gocache.outputs.dir }}
-          key: gobuild-${{ runner.os }}-go1.26-${{ github.sha }}
+          key: gobuild-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ github.sha }}
           restore-keys: |
-            gobuild-${{ runner.os }}-go1.26-
+            gobuild-${{ runner.os }}-go${{ env.GO_VERSION }}-
 
       # The lint/fmt/coverage gates are platform-independent and owned by the
       # ubuntu/macos `make ci` legs. This job exists to execute the
