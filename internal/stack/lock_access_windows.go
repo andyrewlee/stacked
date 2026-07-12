@@ -3,27 +3,27 @@
 package stack
 
 import (
-	"errors"
 	"os"
-	"strings"
-	"syscall"
 	"time"
 )
 
-const (
-	windowsAccessDenied     = syscall.Errno(5)  // ERROR_ACCESS_DENIED
-	windowsSharingViolation = syscall.Errno(32) // ERROR_SHARING_VIOLATION
-)
-
+// retryableLockFileAccess gates the read/remove retry loop: on windows a
+// transient access-denied or sharing violation (AV scanner, indexer) is worth
+// retrying. The classification itself lives in lock_access.go.
 func retryableLockFileAccess(err error) bool {
-	return windowsAccessDeniedErr(err) || windowsSharingViolationErr(err)
+	return lockAccessDeniedErr(err) || lockSharingViolationErr(err)
 }
 
+// lockCreateConflictRetry decides whether an O_CREATE|O_EXCL failure is lock
+// contention: a sharing violation always is; an access-denied counts only if
+// the lock file is observed to exist within the retry budget (a persistent
+// access-denied on a path that never appears is a real permission problem,
+// not contention).
 func lockCreateConflictRetry(path string, err error) bool {
-	if windowsSharingViolationErr(err) {
+	if lockSharingViolationErr(err) {
 		return true
 	}
-	if !windowsAccessDeniedErr(err) {
+	if !lockAccessDeniedErr(err) {
 		return false
 	}
 	for attempt := 0; attempt < lockFileAccessRetryAttempts; attempt++ {
@@ -33,27 +33,4 @@ func lockCreateConflictRetry(path string, err error) bool {
 		time.Sleep(time.Millisecond)
 	}
 	return false
-}
-
-func windowsAccessDeniedErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, os.ErrPermission) ||
-		errors.Is(err, windowsAccessDenied) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "access is denied")
-}
-
-func windowsSharingViolationErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, windowsSharingViolation) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "sharing violation")
 }
