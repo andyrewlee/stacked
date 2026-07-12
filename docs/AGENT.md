@@ -127,6 +127,26 @@ message.
   second one fails fast rather than corrupting state): flock on unix-like
   platforms, an exclusive lock file elsewhere.
 
+## Orchestrating parallel agents
+
+One stack, N agents, one worktree per branch:
+
+1. **Spawn.** `st create <name> --worktree --json` returns `worktree` (the
+   directory to start the agent in) and `switched` (whether the calling shell
+   teleported). For an existing branch: `st worktree <branch> --json` returns
+   `path`.
+2. **Observe.** `st log --json` carries, per node, `worktree` (the branch is
+   claimed by that worktree), `dirty` (uncommitted work there), and
+   `needsRestack`. A node with no `worktree` field is unclaimed.
+3. **Coordinate.** `st restack` / `st sync` rebase branches living in other
+   worktrees *inside those worktrees* automatically and SKIP dirty ones, naming
+   them in the result's `notes` — so an orchestrator runs restack/sync from any
+   one worktree and re-checks `notes` for skipped branches. `st sync` works from
+   a linked worktree too (a dirty trunk worktree blocks it with an error naming
+   the path).
+4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree;
+   `st undo` after a `create --worktree` also removes the worktree it created.
+
 ## Discoverability
 
 - `st --help` lists every command; `st help <command>` prints its summary, usage,
