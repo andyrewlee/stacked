@@ -12,16 +12,16 @@ import (
 // teleport path looks up a branch's owner, and the cross-worktree restack cascade
 // resolves ownership per branch — so an unmemoized probe spawns the same git
 // subprocess many times in a single command. The cache stays correct because
-// every worktree-mutating site invalidates it via resetWorktreeCache(): the
-// cached port's WorktreeRemove override (cmd/util.go) covers engine-driven
-// removals, and the cmd layer's direct git.WorktreeAdd/git.WorktreeRemove calls
-// (materializeWorktree and worktreeRemove in cmd/worktree.go, including the
-// copy-failure rollback) reset explicitly. worktrees() may therefore be called
-// at ANY point in a command and reflects the live worktree topology; new
-// worktree-mutating code must either go through the cached port or call
-// resetWorktreeCache() itself. (A branch checkout in the SAME process can
-// still stale the main-worktree entry's Branch field — no current command
-// reads it after switching; invalidating checkouts too is plan 056 territory.)
+// every worktree-mutating AND HEAD-moving site invalidates it via
+// resetWorktreeCache(): the cached port's WorktreeRemove/Checkout/CheckoutDetach
+// overrides (cmd/gitenv.go) cover engine-driven removals and checkouts, and the
+// cmd layer's direct git.WorktreeAdd/git.WorktreeRemove calls (materializeWorktree
+// and worktreeRemove in cmd/worktree.go, including the copy-failure rollback)
+// reset explicitly. worktrees() may therefore be called at ANY point in a
+// command and reflects the live worktree topology — including which branch each
+// worktree currently owns after an in-process checkout. New worktree-mutating or
+// HEAD-moving code must either go through the cached port or call
+// resetWorktreeCache() itself.
 //
 // The OnceValues closure lives behind a swappable package var so the test binary
 // — which runs many commands against different temp repos in one process — can
