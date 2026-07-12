@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -236,5 +237,103 @@ func TestRestoreStateRoundTrips(t *testing.T) {
 	}
 	if s.Trunk != "main" {
 		t.Errorf("restored trunk = %q, want main", s.Trunk)
+	}
+}
+
+// Save goes through the atomic temp+rename writer; it must not leave any .tmp
+// turds behind in the stacked dir (twin of TestWriteUndoLeavesNoTempFiles).
+func TestSaveLeavesNoTempFiles(t *testing.T) {
+	initGitRepo(t)
+
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	dir, err := stackedDir()
+	if err != nil {
+		t.Fatalf("stackedDir: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read stacked dir: %v", err)
+	}
+	sawState := false
+	for _, e := range entries {
+		if e.Name() == "state.json" {
+			sawState = true
+		}
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file after Save: %s", e.Name())
+		}
+	}
+	if !sawState {
+		t.Fatal("Save did not produce state.json")
+	}
+}
+
+// A failed temp-file creation (unwritable dir) must leave the original file
+// byte-identical — the crash-consistency half that fires on permission
+// problems and full disks.
+func TestAtomicWriteFileUnwritableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a read-only directory bit does not block file creation on windows; the rename-failure test covers windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("chmod is advisory for root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	if err := atomicWriteFile(path, []byte("old\n")); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	err := atomicWriteFile(path, []byte("new\n"))
+	if err == nil || !strings.Contains(err.Error(), "create temp file") {
+		t.Fatalf("error = %v, want create temp file failure", err)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "old\n" {
+		t.Fatalf("original = %q, %v; want untouched %q", got, readErr, "old\n")
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("dir entries = %v, want only the original file", names)
+	}
+}
+
+// A failed rename (target is a non-empty directory, which fails on every
+// platform) must clean its temp file up and leave the target untouched.
+func TestAtomicWriteFileRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	if err := os.MkdirAll(filepath.Join(path, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := atomicWriteFile(path, []byte("new\n"))
+	if err == nil || !strings.Contains(err.Error(), "rename temp file") {
+		t.Fatalf("error = %v, want rename temp file failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(path, "x")); statErr != nil {
+		t.Fatalf("target directory's child disturbed: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file after failed rename: %s", e.Name())
+		}
 	}
 }
