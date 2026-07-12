@@ -197,14 +197,41 @@ func buildPRHints(state *stack.State, branches []string, repoURL, host string) [
 func prCompareURL(repoURL, host, base, head string) string {
 	base = url.PathEscape(base)
 	head = url.PathEscape(head)
-	switch strings.ToLower(host) {
-	case "github.com":
+	switch forgeKind(host) {
+	case forgeGitHub:
 		return repoURL + "/compare/" + base + "..." + head
-	case "gitlab.com":
+	case forgeGitLab:
 		return repoURL + "/-/compare/" + base + "..." + head
 	default:
 		return ""
 	}
+}
+
+type forge int
+
+const (
+	forgeUnknown forge = iota
+	forgeGitHub
+	forgeGitLab
+)
+
+// forgeKind classifies a host by its dot-separated labels so both the public
+// hosts (github.com, gitlab.com) and self-hosted variants (github.example.com,
+// gitlab.internal.example.com — GitHub Enterprise and self-managed GitLab use
+// the identical /compare/ and /-/compare/ URL shapes) are recognized. Label
+// matching avoids substring false positives: mygitlab.example.com has no
+// "gitlab" label and stays unknown, keeping the honest "" fallback for forges
+// whose URL shape is not certain.
+func forgeKind(host string) forge {
+	for _, label := range strings.Split(strings.ToLower(host), ".") {
+		switch label {
+		case "github":
+			return forgeGitHub
+		case "gitlab":
+			return forgeGitLab
+		}
+	}
+	return forgeUnknown
 }
 
 // remoteToHTTPS converts a git remote URL (https, ssh, or scp-like) into its
