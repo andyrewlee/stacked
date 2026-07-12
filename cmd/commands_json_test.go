@@ -1659,3 +1659,74 @@ func TestWorktreeRemoveAllIdempotent(t *testing.T) {
 		t.Fatalf("rerun failed = %+v, want nil", got.Failed)
 	}
 }
+
+// TestSubmitPRHintsSelfHostedGitLabJSON pins the forge-label matching: a
+// self-managed GitLab host gets the same /-/compare/ shape as gitlab.com.
+func TestSubmitPRHintsSelfHostedGitLabJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@gitlab.internal.example.com:owner/repo.git")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit self-hosted gitlab pr hints", out, &got)
+	want := []prHint{{
+		Head:       "feat-a",
+		Base:       "main",
+		CompareURL: "https://gitlab.internal.example.com/owner/repo/-/compare/main...feat-a",
+	}}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
+	}
+}
+
+// TestSubmitPRHintsGitHubEnterpriseJSON: a GHE host gets github.com's
+// /compare/ shape.
+func TestSubmitPRHintsGitHubEnterpriseJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@github.example.com:owner/repo.git")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit ghe pr hints", out, &got)
+	want := []prHint{{
+		Head:       "feat-a",
+		Base:       "main",
+		CompareURL: "https://github.example.com/owner/repo/compare/main...feat-a",
+	}}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
+	}
+}
+
+// TestSubmitPRHintsLookalikeHostStaysUnknown pins the label-matching boundary:
+// a host merely CONTAINING "gitlab" is not classified, so no URL is guessed.
+func TestSubmitPRHintsLookalikeHostStaysUnknown(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "remote", "add", "origin", "git@mygitlab.example.com:owner/repo.git")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var got submitResult
+	decodeStrictJSON(t, "submit lookalike host pr hints", out, &got)
+	want := []prHint{{Head: "feat-a", Base: "main"}}
+	if !reflect.DeepEqual(got.PRHints, want) {
+		t.Fatalf("prHints = %+v, want no compare URL: %+v", got.PRHints, want)
+	}
+}
