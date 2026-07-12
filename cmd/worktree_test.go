@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -552,5 +553,86 @@ func TestCopyWorktreeIncludesNoManifest(t *testing.T) {
 	}
 	if copied != nil {
 		t.Errorf("copied = %v, want nil with no manifest", copied)
+	}
+}
+
+// TestReflinkCopyFallsBackWhenCpFails proves the fallback wiring: a failing
+// (or absent) `cp` must route through plainCopy and still produce a correct
+// copy. PATH is overridden only after all fixtures exist; reflinkCopy is the
+// sole subprocess spawned afterward.
+func TestReflinkCopyFallsBackWhenCpFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("reflink cp path is unix-only; windows uses plainCopy directly")
+	}
+	buildSrc := func(t *testing.T) string {
+		src := t.TempDir()
+		if err := os.WriteFile(filepath.Join(src, "top.txt"), []byte("top\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("top.txt", filepath.Join(src, "link")); err != nil {
+			t.Fatal(err)
+		}
+		return src
+	}
+	assertCopied := func(t *testing.T, dst string) {
+		if b, err := os.ReadFile(filepath.Join(dst, "top.txt")); err != nil || string(b) != "top\n" {
+			t.Fatalf("top.txt = %q, %v", b, err)
+		}
+		info, err := os.Lstat(filepath.Join(dst, "link"))
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("link not preserved as symlink: %v, %v", info, err)
+		}
+	}
+
+	t.Run("cp exits nonzero", func(t *testing.T) {
+		src := buildSrc(t)
+		dst := filepath.Join(t.TempDir(), "out")
+		shimDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(shimDir, "cp"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", shimDir)
+		if err := reflinkCopy(src, dst); err != nil {
+			t.Fatalf("reflinkCopy with failing cp: %v", err)
+		}
+		assertCopied(t, dst)
+	})
+
+	t.Run("cp absent from PATH", func(t *testing.T) {
+		src := buildSrc(t)
+		dst := filepath.Join(t.TempDir(), "out")
+		t.Setenv("PATH", t.TempDir())
+		if err := reflinkCopy(src, dst); err != nil {
+			t.Fatalf("reflinkCopy with no cp on PATH: %v", err)
+		}
+		assertCopied(t, dst)
+	})
+}
+
+// TestEmitWorktreeTextOutput covers emitWorktree's text branch: the summary
+// line always, the copied: line only when entries were copied.
+func TestEmitWorktreeTextOutput(t *testing.T) {
+	out := captureStdout(t, func() {
+		if err := emitWorktree(false, "feat-a", "/wt/feat-a", []string{"node_modules", ".env"}, "created worktree"); err != nil {
+			t.Fatalf("emitWorktree: %v", err)
+		}
+	})
+	if !strings.Contains(out, "created worktree: feat-a -> /wt/feat-a") {
+		t.Fatalf("output missing summary line: %q", out)
+	}
+	if !strings.Contains(out, "copied: node_modules, .env") {
+		t.Fatalf("output missing copied line: %q", out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := emitWorktree(false, "feat-a", "/wt/feat-a", nil, "worktree already exists"); err != nil {
+			t.Fatalf("emitWorktree: %v", err)
+		}
+	})
+	if !strings.Contains(out, "worktree already exists: feat-a -> /wt/feat-a") {
+		t.Fatalf("output missing summary line: %q", out)
+	}
+	if strings.Contains(out, "copied:") {
+		t.Fatalf("copied line present with no copied entries: %q", out)
 	}
 }
