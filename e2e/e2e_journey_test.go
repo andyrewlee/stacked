@@ -294,6 +294,40 @@ func TestFailedUndoFromDirtyCreatedWorktreeDoesNotWriteShimDirective(t *testing.
 	}
 }
 
+// TestUndoCreateRemovesManuallyMaterializedWorktree covers the recovery
+// sequence the tool itself recommends after a failed `st create --worktree`:
+// create the branch plainly, switch away, materialize its worktree with
+// `st worktree`, then undo the create. The undo journal never recorded the
+// worktree, so undo must still release the clean linked worktree before
+// deleting the branch.
+func TestUndoCreateRemovesManuallyMaterializedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.stOK("create", "feat-x")
+	r.stOK("checkout", "main")
+	out := r.stOK("worktree", "feat-x", "--json").stdout
+	var created struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+
+	r.stOK("undo")
+	if r.branchExists("feat-x") {
+		t.Fatal("undo left feat-x branch behind")
+	}
+	if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+		t.Fatalf("undo left created worktree at %q: %v", created.Path, err)
+	}
+	if lsOut := r.stOK("worktree", "ls").stdout; strings.Contains(lsOut, "feat-x") {
+		t.Fatalf("worktree ls still lists feat-x:\n%s", lsOut)
+	}
+	r.stOK("validate")
+}
+
 func TestUndoCreateWorktreeChildOfLinkedParentWithShim(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)

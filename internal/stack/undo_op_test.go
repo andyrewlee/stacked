@@ -3,6 +3,7 @@ package stack
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -105,7 +106,11 @@ func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 }
 
-func TestUndoCreateDoesNotRemoveUnrecordedLinkedWorktree(t *testing.T) {
+// A created branch whose worktree was materialized AFTER the create (so the
+// undo entry never recorded it) must still have its clean linked worktree
+// released before the branch delete — this is the recovery sequence the tool
+// itself recommends after a failed `st create --worktree`.
+func TestUndoCreateRemovesUnrecordedLinkedWorktree(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	if err := f.Checkout("a"); err != nil {
@@ -116,13 +121,45 @@ func TestUndoCreateDoesNotRemoveUnrecordedLinkedWorktree(t *testing.T) {
 	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
 		t.Fatalf("create in worktree prep: %v", err)
 	}
-	f.addWorktree("/wt/preexisting", "b")
+	f.addWorktree("/wt/unrecorded", "b")
 
-	if _, err := Undo(env, s, entry); err == nil {
-		t.Fatal("undo succeeded after created branch moved into an unrecorded linked worktree; want delete failure")
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("undo left the created branch behind")
+	}
+	if _, ok := f.linkedWorktrees["b"]; ok {
+		t.Fatal("undo left the unrecorded linked worktree behind")
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// A dirty unrecorded worktree must refuse, leaving both the worktree and the
+// branch in place.
+func TestUndoCreateRefusesDirtyUnrecordedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/unrecorded", "b")
+	f.markWorktreeDirty("b")
+
+	_, err := Undo(env, s, entry)
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("undo error = %v, want dirty-worktree refusal", err)
 	}
 	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("undo removed an unrecorded linked worktree")
+		t.Fatal("failed undo removed the dirty worktree")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("failed undo deleted the branch anyway")
 	}
 }
 
