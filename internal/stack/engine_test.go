@@ -1434,3 +1434,32 @@ func TestRestackAllOpSkipsDirtyOwnedWorktree(t *testing.T) {
 		t.Fatalf("notes = %v, want a skip note naming feat-x", res.Notes)
 	}
 }
+
+// TestDeleteSingleTipsRead pins delete's spawn diet: restacking the
+// re-parented children (and their descendants) reads the full branch-tips map
+// exactly ONCE, however many children the deleted branch had.
+func TestDeleteSingleTipsRead(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "victim")
+	mkBranch(t, env, s, f, "victim", "child-a")
+	mkBranch(t, env, s, f, "child-a", "grand-a")
+	mkBranch(t, env, s, f, "victim", "child-b")
+	mkBranch(t, env, s, f, "victim", "child-c")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+	res, err := Delete(env, s, "victim", true)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if spy.tipsCalls != 1 {
+		t.Fatalf("Tips() called %d times during delete, want 1", spy.tipsCalls)
+	}
+	want := []string{"child-a", "grand-a", "child-b", "child-c"}
+	if !reflect.DeepEqual(res.Restacked, want) {
+		t.Fatalf("restacked = %v, want %v (per-child walk order)", res.Restacked, want)
+	}
+}

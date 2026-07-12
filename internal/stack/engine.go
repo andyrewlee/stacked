@@ -664,20 +664,12 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		return nil, err
 	}
 
-	var restacked []string
-	for _, child := range formerChildren {
-		did, err := s.RestackBranch(env, child)
-		if err != nil {
-			return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
-		}
-		if did {
-			restacked = append(restacked, child)
-		}
-		more, err := s.RestackUpstack(env, child)
-		if err != nil {
-			return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
-		}
-		restacked = append(restacked, more...)
+	// One pass over one shared tips map (the walk order — each child, then its
+	// descendants — matches DeletePlan's appendRestackPlans exactly), instead
+	// of a fresh full ref scan per re-parented child.
+	restacked, err := s.restackForest(env, formerChildren)
+	if err != nil {
+		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 	}
 	notes := skippedWorktreeNotes(s)
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
