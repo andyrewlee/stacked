@@ -3,9 +3,7 @@
 # Matched on path + function (never line numbers). This list is a ratchet:
 # entries should only be removed. Allowlisting NEW feature code is the smell
 # the floor exists to catch.
-github.com/andyrewlee/stacked/cmd/sanitize.go	terminalSummary	# interactive-terminal branch; tests run with piped stdio
 github.com/andyrewlee/stacked/cmd/shell.go	topSummary	# interactive-terminal-only render twin
-github.com/andyrewlee/stacked/cmd/sanitize.go	topSummaryForTerminal	# interactive-terminal-only render twin
 github.com/andyrewlee/stacked/cmd/gitenv.go	WorktreeRemove	# cachedQuietShell twin of the tested cachedShell override (JSON mode)
 github.com/andyrewlee/stacked/cmd/worktree_copy.go	ensureSafeDestinationDir	# defensive symlink/permission branches; happy+attack paths covered
 github.com/andyrewlee/stacked/internal/git/shell.go	Worktrees	# production always uses the cmd-layer cached override
