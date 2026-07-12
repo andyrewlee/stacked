@@ -214,29 +214,66 @@ func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
 	}
 	var rebased []string
 	for _, child := range s.Descendants(name) {
-		b, err := s.tracked(child)
-		if err != nil {
-			return rebased, err
-		}
-		parentTip, ok := tips[b.Parent]
-		if !ok {
-			parentTip, err = env.Git.RevParse(branchTipRef(b.Parent))
-			if err != nil {
-				return rebased, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
-			}
-		}
-		did, err := s.restackBranchWith(env, child, b, parentTip)
+		did, err := s.restackAgainstTips(env, child, tips)
 		if err != nil {
 			return rebased, err
 		}
 		if did {
-			newTip, err := env.Git.RevParse(branchTipRef(child))
-			if err != nil {
-				return rebased, fmt.Errorf("resolve %q after restack: %w", child, err)
-			}
-			tips[child] = newTip
 			rebased = append(rebased, child)
 		}
 	}
 	return rebased, nil
+}
+
+// restackForest restacks each start branch and its descendants, in order,
+// against one shared live tips map — the multi-root generalization of
+// RestackUpstack (same seed-once, refresh-rebased-tips scheme). Returns the
+// rebased branch names in walk order.
+func (s *State) restackForest(env Env, starts []string) ([]string, error) {
+	tips, err := env.Git.Tips()
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	var rebased []string
+	for _, start := range starts {
+		order := append([]string{start}, s.Descendants(start)...)
+		for _, name := range order {
+			did, err := s.restackAgainstTips(env, name, tips)
+			if err != nil {
+				return rebased, err
+			}
+			if did {
+				rebased = append(rebased, name)
+			}
+		}
+	}
+	return rebased, nil
+}
+
+// restackAgainstTips restacks name against the shared live tips map: the
+// parent tip comes from the map (RevParse fallback for parents outside it),
+// and a rebased branch refreshes its own map entry so later dependents see
+// the new tip.
+func (s *State) restackAgainstTips(env Env, name string, tips map[string]string) (bool, error) {
+	b, err := s.tracked(name)
+	if err != nil {
+		return false, err
+	}
+	parentTip, ok := tips[b.Parent]
+	if !ok {
+		parentTip, err = env.Git.RevParse(branchTipRef(b.Parent))
+		if err != nil {
+			return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
+		}
+	}
+	did, err := s.restackBranchWith(env, name, b, parentTip)
+	if err != nil || !did {
+		return did, err
+	}
+	newTip, err := env.Git.RevParse(branchTipRef(name))
+	if err != nil {
+		return false, fmt.Errorf("resolve %q after restack: %w", name, err)
+	}
+	tips[name] = newTip
+	return true, nil
 }
