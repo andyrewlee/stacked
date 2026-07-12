@@ -326,7 +326,14 @@ func Restack(env Env, s *State) (*OpResult, error) {
 		return nil, err
 	}
 	rebased = append(rebased, up...)
+	return restackEpilogue(env, s, start, rebased)
+}
 
+// restackEpilogue is the shared tail of Restack and RestackAllOp: restore HEAD
+// to the branch the caller started on, turn any dirty-worktree skips into
+// notes, and build the OpResult ("everything up to date" when nothing moved
+// and nothing was skipped, else "restacked").
+func restackEpilogue(env Env, s *State, start string, rebased []string) (*OpResult, error) {
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
 		return nil, err
 	}
@@ -355,14 +362,7 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 	}
-	if err := restoreHEAD(env, start, s.Trunk); err != nil {
-		return nil, err
-	}
-	notes := skippedWorktreeNotes(s)
-	if len(rebased) == 0 && len(notes) == 0 {
-		return &OpResult{Summary: "everything up to date"}, nil
-	}
-	return &OpResult{Summary: "restacked", Restacked: rebased, Notes: notes}, nil
+	return restackEpilogue(env, s, start, rebased)
 }
 
 // skippedWorktreeNotes drains the branches a restack skipped because their owning

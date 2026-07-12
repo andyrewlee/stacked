@@ -227,23 +227,20 @@ func RestackAllPlan(env Env, s *State) (*OpResult, error) {
 // (parents before children). The branch name itself is not restacked. It
 // returns the names of the branches that were actually rebased.
 func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
-	tips, err := env.Git.Tips()
-	if err != nil {
-		return nil, fmt.Errorf("read branch tips: %w", err)
+	return s.restackForest(env, s.childNames(name))
+}
+
+// childNames returns the names of name's direct children, sorted (Children is
+// already sorted by name). It is the seed list for restackForest so that
+// restackForest(childNames(name)) walks exactly Descendants(name) in order —
+// Descendants is a pre-order DFS over the same sorted children.
+func (s *State) childNames(name string) []string {
+	children := s.Children(name)
+	names := make([]string, 0, len(children))
+	for _, c := range children {
+		names = append(names, c.Name)
 	}
-	var rebased []string
-	expectedHEAD := currentBranchOr(env.Git)
-	for _, child := range s.Descendants(name) {
-		did, newHEAD, err := s.restackAgainstTips(env, child, tips, expectedHEAD)
-		expectedHEAD = newHEAD
-		if err != nil {
-			return rebased, err
-		}
-		if did {
-			rebased = append(rebased, child)
-		}
-	}
-	return rebased, nil
+	return names
 }
 
 // restackForest restacks each start branch and its descendants, in order,
