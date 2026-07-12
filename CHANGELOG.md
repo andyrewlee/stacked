@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st create <name> --worktree`** creates the branch, tracks it, and
+  materializes its own linked worktree in one command; the main worktree's HEAD
+  does not move, and with the shell shim installed the shell teleports into the
+  new worktree. `-m`/`-a` are rejected in this mode — commit inside the new
+  worktree instead.
+- **Per-branch PR compare URLs from `st submit`.** After pushing, text mode
+  prints one `head -> base  <compare URL>` line per branch for github.com
+  (`/compare/base...head`) and gitlab.com (`/-/compare/base...head`) remotes;
+  `--json` carries the same data as `prHints` (documented in `docs/AGENT.md`).
+- **Windows CI test job.** The engine and lock paths now run on
+  `windows-latest` in CI, exercising the windows-only lock classifiers for real.
 - **Owner-driven cross-worktree restack cascade.** `st restack` / `st sync` now
   rebase a dependent branch that lives in another worktree *inside that worktree*
   (git forbids rebasing a branch checked out elsewhere), gated on a clean tree: a
@@ -24,8 +35,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{"dryRun":true,...}` result) without changing stack metadata or branch refs.
 - **`st worktree` (alias `wt`)** materializes, lists, and removes a branch's own
   git worktree under `~/.stacked/worktrees/` using a collision-resistant repo key
-  and encoded branch segment, copying `.worktreeinclude` matches (gitignore
-  syntax, gitignored-only, copy-on-write reflink) into it — so multiple agents
+  and encoded branch segment, copying `.worktreeinclude` matches (literal
+  paths, gitignored-only, copy-on-write reflink) into it — so multiple agents
   can work different branches of one stack in parallel.
 - **`st shell install [bash|zsh|fish]`** prints a shell shim so `st checkout`/`up`/
   `down`/`top`/`bottom` can teleport (`cd`) into a branch's worktree; without the
@@ -51,7 +62,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Conflict and sync logic is exercised by millisecond fake-git tests, including a
   property/invariant model test over thousands of random operation sequences.
 
+### Security
+- **Terminal output sanitization.** Git-controlled strings (commit subjects,
+  branch names, worktree paths) are control-byte-escaped before rendering, on
+  stdout and on the stderr error path, closing a terminal escape-injection
+  vector. JSON output is unaffected (encoding/json already escapes).
+
+### Fixed
+- **`st sync` works from inside a linked worktree.** The trunk fast-forward now
+  runs in the trunk's own worktree (or moves the ref directly, fast-forward
+  only, when the trunk is checked out nowhere), and pruning no longer requires
+  checking out the trunk locally. A dirty trunk worktree blocks sync with an
+  error naming its path.
+- **`st undo` releases a created branch's worktree even when unrecorded.** The
+  recovery sequence after a failed `st create --worktree` (retry with
+  `st worktree <name>`, then undo) no longer fails on git's refusal to delete a
+  branch checked out in a linked worktree; a clean worktree is released first,
+  a dirty one still refuses.
+- **Windows lock access-denied classification.** Transient
+  `ERROR_ACCESS_DENIED`/`ERROR_SHARING_VIOLATION` during lock-file races are
+  treated as contention and retried, while a stale lock that cannot be
+  reclaimed for permission reasons now reports a permission error instead of
+  "another st command is running".
+
 ### Changed
+- `st submit` pushes the whole stack in a single `git push` invocation; on a
+  failure it falls back to per-branch pushes so partial results are still
+  reported.
 - The stack operations were extracted into a pure **engine** (`internal/stack`)
   behind a small git **port**; `cmd/` commands are now thin adapters. `sync` and
   `continue` moved behind a `Remote` port and are fully fake-testable.
