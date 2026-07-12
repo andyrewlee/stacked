@@ -154,7 +154,9 @@ One stack, N agents, one worktree per branch:
    dirty agents skipped), re-checking `notes` for skipped branches. `st sync` works from
    a linked worktree too (a dirty trunk worktree blocks it with an error naming
    the path).
-4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree;
+4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree, and
+   `st worktree rm --all` releases every linked worktree in one call (dirty
+   ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
    `st undo` after a `create --worktree` also removes the worktree it created.
 
 ## Discoverability

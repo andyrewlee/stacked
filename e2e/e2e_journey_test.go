@@ -1831,6 +1831,35 @@ func TestWorktreeAllJourney(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestWorktreeRemoveAllJourney tears the whole parallel session down in one
+// call: after --all seeds every branch's worktree, rm --all releases them and
+// ls shows only the main worktree.
+func TestWorktreeRemoveAllJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.stOK("checkout", "main")
+
+	r.stOK("worktree", "--all")
+	res := r.stOK("worktree", "rm", "--all")
+	for _, name := range []string{"feat-a", "feat-b"} {
+		if !strings.Contains(res.stdout, "removed worktree "+name) {
+			t.Fatalf("rm --all output missing %s:\n%s", name, res.stdout)
+		}
+	}
+	lsOut := r.stOK("worktree", "ls").stdout
+	for _, name := range []string{"feat-a", "feat-b"} {
+		if strings.Contains(lsOut, name) {
+			t.Fatalf("worktree ls still lists %s after rm --all:\n%s", name, lsOut)
+		}
+	}
+	// Rerun is a clean no-op.
+	r.stOK("worktree", "rm", "--all")
+	r.stOK("validate")
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()

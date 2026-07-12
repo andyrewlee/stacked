@@ -13,7 +13,7 @@ func init() {
 		Name:       "worktree",
 		Aliases:    []string{"wt"},
 		Summary:    "Materialize, list, or remove a branch's own worktree",
-		Usage:      "st worktree <branch> | --all | ls | rm <branch> [--json]",
+		Usage:      "st worktree <branch> | --all | ls | rm <branch> | rm --all [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
 	})
@@ -33,10 +33,14 @@ func runWorktree(args []string) error {
 	asJSON := o.asJSON
 	rest := fs.Args()
 	if o.all {
-		if len(rest) != 0 {
-			return fmt.Errorf("worktree --all takes no arguments")
+		switch {
+		case len(rest) == 0:
+			return worktreeAddAll(asJSON)
+		case len(rest) == 1 && (rest[0] == "rm" || rest[0] == "remove"):
+			return worktreeRemoveAll(asJSON)
+		default:
+			return fmt.Errorf("worktree --all takes no arguments (except: rm --all)")
 		}
-		return worktreeAddAll(asJSON)
 	}
 	if len(rest) == 0 {
 		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>, --all)")
@@ -194,6 +198,97 @@ func worktreeRemove(branch string, asJSON bool) error {
 	}{branch, wt.Path}
 	return emit(asJSON, payload, func() {
 		out("removed worktree %s (%s)\n", sanitizeForTerminal(branch), sanitizeForTerminal(wt.Path))
+	})
+}
+
+// worktreeRemoveAllResult is the aggregate JSON contract of `st worktree rm
+// --all`, mirroring worktreeAllResult: what was removed, what was skipped and
+// why, and — only on the error exit — the branch whose removal failed.
+type worktreeRemoveAllResult struct {
+	Removed []worktreeRemovedEntry `json:"removed"`
+	Skipped []worktreeAllSkip      `json:"skipped,omitempty"`
+	Failed  *worktreeAllFailure    `json:"failed,omitempty"`
+}
+
+type worktreeRemovedEntry struct {
+	Branch string `json:"branch"`
+	Path   string `json:"path"`
+}
+
+// worktreeRemoveAll removes every linked worktree owning a tracked branch, in
+// deterministic (sorted) order under a single lock. The branch checked out in
+// the main worktree is skipped (not a removable linked worktree); a dirty
+// worktree is skipped (in-progress work is never discarded); a tracked branch
+// with no worktree is silently ignored. Removal stops at the first hard
+// failure with a partial result (mirroring worktreeAddAll); rerunning is safe.
+func worktreeRemoveAll(asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	mainBranch := ""
+	if main, ok := stack.MainWorktree(wts); ok {
+		mainBranch = main.Branch
+	}
+
+	result := worktreeRemoveAllResult{Removed: []worktreeRemovedEntry{}}
+	for _, name := range names {
+		if name == mainBranch {
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
+			continue
+		}
+		wt, ok := stack.LinkedOwnerOf(wts, name)
+		if !ok {
+			continue // no worktree to remove
+		}
+		clean, err := git.IsCleanIn(wt.Path)
+		if err != nil {
+			if asJSON {
+				result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+				_ = emit(true, result, func() {})
+			}
+			return fmt.Errorf("checking worktree for %q (%d of %d removed): %w", name, len(result.Removed), len(names), err)
+		}
+		if !clean {
+			// Dirty is a SKIP, decided up front — never classified by parsing
+			// git's refusal, and never a hard failure.
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "worktree has uncommitted changes"})
+			continue
+		}
+		removeErr := git.WorktreeRemove(wt.Path, false)
+		resetWorktreeCache()
+		if removeErr != nil {
+			if asJSON {
+				result.Failed = &worktreeAllFailure{Branch: name, Error: removeErr.Error()}
+				_ = emit(true, result, func() {})
+			}
+			return fmt.Errorf("removing worktree for %q (%d of %d removed): %w", name, len(result.Removed), len(names), removeErr)
+		}
+		result.Removed = append(result.Removed, worktreeRemovedEntry{Branch: name, Path: wt.Path})
+	}
+	return emit(asJSON, result, func() {
+		for _, e := range result.Removed {
+			out("removed worktree %s (%s)\n", sanitizeForTerminal(e.Branch), sanitizeForTerminal(e.Path))
+		}
+		for _, sk := range result.Skipped {
+			out("skipped %s (%s)\n", sanitizeForTerminal(sk.Branch), sanitizeForTerminal(sk.Reason))
+		}
 	})
 }
 
