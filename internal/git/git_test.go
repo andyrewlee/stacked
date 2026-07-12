@@ -1162,4 +1162,25 @@ func TestUpdateRefs(t *testing.T) {
 	if err := UpdateRefs(nil); err != nil {
 		t.Fatalf("UpdateRefs(nil): %v", err)
 	}
+
+	// Directive injection: a value carrying a newline + a forged second
+	// directive must be refused before exec — and, crucially, the forged
+	// delete must NOT fire. (Pre--z framing, this deleted refs/heads/two.)
+	err = UpdateRefs(map[string]string{
+		"refs/heads/one": base + "\ndelete refs/heads/two",
+	})
+	if err == nil {
+		t.Fatal("UpdateRefs accepted a newline-injected value")
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/two"); got != tip {
+		t.Fatalf("two = %q after injected batch, want untouched %q (forged delete fired?)", got, tip)
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/one"); got != tip {
+		t.Fatalf("one = %q after injected batch, want untouched %q", got, tip)
+	}
+
+	// A ref key with embedded whitespace is refused before exec.
+	if err := UpdateRefs(map[string]string{"refs/heads/a b": base}); err == nil {
+		t.Fatal("UpdateRefs accepted a whitespace-carrying ref name")
+	}
 }
