@@ -26,3 +26,25 @@ func TestSanitizeForTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeErrorForTerminal(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain ascii", in: "no such branch", want: "no such branch"},
+		{name: "multi-line keeps newline escapes esc", in: "rebase failed:\n\x1b[31mhint\x1b[0m", want: "rebase failed:\n\\x1b[31mhint\\x1b[0m"},
+		{name: "tab preserved", in: "a\tb", want: "a\tb"},
+		{name: "carriage return escaped", in: "a\rb", want: "a\\x0db"},
+		{name: "del and c1 escaped", in: "a\x7f\u009bb", want: "a\\x7f\\x9bb"},
+		{name: "invalid utf8 byte", in: string([]byte{'a', 0xff, 'b'}), want: "a\\xffb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeErrorForTerminal(tt.in); got != tt.want {
+				t.Fatalf("sanitizeErrorForTerminal(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

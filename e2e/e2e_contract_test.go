@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -172,6 +173,39 @@ func TestLogEscapesControlBytesInSubject(t *testing.T) {
 	}
 	wantStdoutContains(t, res, `evil\x1b[2Ksubject`)
 	wantStdoutContains(t, res, `raw\x9bcsi`)
+}
+
+// TestErrorOutputEscapesControlBytes pins the stderr boundary: an error whose
+// message embeds a git-derived string with a raw control byte (here the main
+// worktree path, interpolated with %s) must reach the terminal only in
+// escaped form. The repo lives in a directory whose name carries a raw ESC.
+func TestErrorOutputEscapesControlBytes(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("windows forbids control bytes in file names")
+	}
+	base := t.TempDir()
+	r := &repo{t: t, dir: filepath.Join(base, "repo\x1besc"), home: filepath.Join(base, "home")}
+	for _, dir := range []string{r.dir, r.home} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", dir, err)
+		}
+	}
+	r.git("init", "-q", "-b", "main")
+	r.writeFile("base.txt", "base\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "init")
+	r.initStack()
+	r.stOK("create", "feat-a")
+
+	// feat-a is checked out in the main worktree, so materializing a worktree
+	// for it fails with an error embedding the main worktree path via %s.
+	res := r.st("worktree", "feat-a")
+	wantExit(t, res, 1)
+	if strings.Contains(res.stderr, "\x1b") {
+		t.Fatalf("stderr contains a raw ESC byte:\n%q", res.stderr)
+	}
+	wantStderrContains(t, res, `\x1b`)
 }
 
 // TestExitCodeContract maps each documented exit code (docs/AGENT.md) to a
