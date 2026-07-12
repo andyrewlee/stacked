@@ -2,6 +2,12 @@ name: CI
 
 on:
   push:
+    # Feature-branch pushes get their CI from the pull_request trigger; running
+    # push CI too double-fired the whole matrix for every push to an open PR
+    # (the concurrency group includes the event name, so the two runs never
+    # cancel each other). Keep push CI where there is no PR run: main and tags.
+    branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
