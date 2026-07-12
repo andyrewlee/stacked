@@ -80,6 +80,9 @@ change the engine and these still hold, the topology bookkeeping is sound.
 - `e2e/e2e_test.go` — the real binary as a hermetic subprocess; contributes to
   coverage via `GOCOVERDIR`.
 
+A historical manual-QA snapshot lives at `docs/qa/FEATURE_STORIES.csv`
+(frozen, not maintained; see `docs/qa/README.md`).
+
 ## Releasing
 
 Releases are cut from a tag:
