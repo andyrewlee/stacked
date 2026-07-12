@@ -444,3 +444,43 @@ func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
 		t.Fatal("undo deleted the branch despite refusing its worktree")
 	}
 }
+
+// A failure of the batched ref restore inside Undo must surface as the wrapped
+// "restoring branch refs" error, and — because UpdateRefs is transactional —
+// leave every ref where it was (no partial restore).
+func TestUndoRefRestoreFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	// Amend a (moves a's tip and restacks b) so the refs differ from the snapshot.
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	postA, _ := f.RevParse("a")
+	postB, _ := f.RevParse("b")
+
+	// Corrupt one recorded ref to a SHA the fake cannot resolve, so Undo's
+	// batched UpdateRefs fails on it.
+	entry.Refs["a"] = "0123456789012345678901234567890123456789"
+
+	_, err := Undo(env, s, entry)
+	if err == nil {
+		t.Fatal("Undo succeeded despite an unresolvable recorded ref")
+	}
+	if !strings.Contains(err.Error(), "restoring branch refs") {
+		t.Fatalf("error = %q, want it wrapped with %q", err.Error(), "restoring branch refs")
+	}
+	// Transactional restore: the failed batch moved zero refs, so the fake's
+	// branches remain at their post-modify tips (NOT rolled back to the snapshot).
+	if got, _ := f.RevParse("a"); got != postA {
+		t.Fatalf("a = %q after failed restore, want unchanged %q", got, postA)
+	}
+	if got, _ := f.RevParse("b"); got != postB {
+		t.Fatalf("b = %q after failed restore, want unchanged %q", got, postB)
+	}
+}
