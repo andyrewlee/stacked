@@ -43,6 +43,19 @@ func newCreateFlags(o *createOpts) *flag.FlagSet {
 
 func createFlagSet() *flag.FlagSet { return newCreateFlags(&createOpts{}) }
 
+type worktreeOpts struct {
+	asJSON bool
+	all    bool
+}
+
+func newWorktreeFlags(o *worktreeOpts) *flag.FlagSet {
+	fs := newFlagSet("worktree", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "materialize a worktree for every tracked branch that lacks one")
+	return withDefaults(fs, "worktree")
+}
+
+func worktreeFlagSet() *flag.FlagSet { return newWorktreeFlags(&worktreeOpts{}) }
+
 type modifyOpts struct {
 	asJSON  bool
 	message string

@@ -1321,3 +1321,172 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestWorktreeAllJSONAggregateAndIdempotency strict-decodes the aggregate
+// payload of `st worktree --all`: from the trunk every tracked branch is
+// materialized, the rerun reports the same set as already existing, and the
+// current tracked branch is skipped rather than failed.
+func TestWorktreeAllJSONAggregateAndIdempotency(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+
+	type allResult struct {
+		Created []struct {
+			Branch  string   `json:"branch"`
+			Path    string   `json:"path"`
+			Copied  []string `json:"copied"`
+			Summary string   `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("worktree --all: %v", err)
+		}
+	})
+	var got allResult
+	decodeStrictJSON(t, "worktree --all", out, &got)
+	if len(got.Created) != 3 || len(got.Skipped) != 0 || got.Failed != nil {
+		t.Fatalf("first run = %+v, want 3 created, 0 skipped", got)
+	}
+	for i, want := range []string{"feat-a", "feat-b", "feat-c"} {
+		if got.Created[i].Branch != want || got.Created[i].Path == "" || got.Created[i].Summary != "created worktree" {
+			t.Fatalf("created[%d] = %+v, want %s freshly created", i, got.Created[i], want)
+		}
+	}
+
+	// Idempotent rerun: same three branches, now already existing.
+	out = captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("worktree --all rerun: %v", err)
+		}
+	})
+	var rerun allResult
+	decodeStrictJSON(t, "worktree --all rerun", out, &rerun)
+	if len(rerun.Created) != 3 || rerun.Failed != nil {
+		t.Fatalf("rerun = %+v, want 3 rows", rerun)
+	}
+	for i := range rerun.Created {
+		if rerun.Created[i].Summary != "worktree already exists" {
+			t.Fatalf("rerun created[%d] = %+v, want already-exists summary", i, rerun.Created[i])
+		}
+	}
+}
+
+// TestWorktreeAllSkipsCurrentBranch pins decision 2: the branch checked out in
+// the main worktree is a skip with a reason, never an error.
+func TestWorktreeAllSkipsCurrentBranch(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+	resetWorktreeCache()
+
+	type allResult struct {
+		Created []struct {
+			Branch  string   `json:"branch"`
+			Path    string   `json:"path"`
+			Copied  []string `json:"copied"`
+			Summary string   `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("worktree --all: %v", err)
+		}
+	})
+	var got allResult
+	decodeStrictJSON(t, "worktree --all skip", out, &got)
+	if len(got.Created) != 1 || got.Created[0].Branch != "feat-b" {
+		t.Fatalf("created = %+v, want only feat-b", got.Created)
+	}
+	if len(got.Skipped) != 1 || got.Skipped[0].Branch != "feat-a" || got.Skipped[0].Reason != "checked out in the main worktree" {
+		t.Fatalf("skipped = %+v, want feat-a with main-worktree reason", got.Skipped)
+	}
+}
+
+// TestWorktreeAllPartialFailureJSON pins decision 1: the loop stops at the
+// first failure, emitting what succeeded plus the failing branch (submit's
+// partial-result shape), and the command exits non-zero.
+func TestWorktreeAllPartialFailureJSON(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+
+	// Occupy feat-b's computed worktree path with a FILE so `git worktree add`
+	// fails for it while feat-a succeeds.
+	key, _, err := repoIdentifier()
+	if err != nil {
+		t.Fatalf("repoIdentifier: %v", err)
+	}
+	bPath, err := stack.WorktreePath(key, "feat-b")
+	if err != nil {
+		t.Fatalf("WorktreePath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(bPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("in the way\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runWorktree([]string{"--all", "--json"})
+	})
+	if runErr == nil {
+		t.Fatal("worktree --all succeeded despite an occupied worktree path")
+	}
+	type allResult struct {
+		Created []struct {
+			Branch  string   `json:"branch"`
+			Path    string   `json:"path"`
+			Copied  []string `json:"copied"`
+			Summary string   `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	var got allResult
+	decodeStrictJSON(t, "worktree --all partial", out, &got)
+	if len(got.Created) != 1 || got.Created[0].Branch != "feat-a" {
+		t.Fatalf("created = %+v, want feat-a only", got.Created)
+	}
+	if got.Failed == nil || got.Failed.Branch != "feat-b" || got.Failed.Error == "" {
+		t.Fatalf("failed = %+v, want feat-b with an error", got.Failed)
+	}
+}
