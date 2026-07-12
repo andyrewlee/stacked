@@ -16,9 +16,10 @@ func init() {
 	})
 }
 
-// runCompletion prints a shell completion script that completes st's subcommand
-// names. The command list is generated from the live registry so new commands
-// are picked up automatically.
+// runCompletion prints a shell completion script. Command names come from the
+// live registry; each command's second-word completions (flags + sub-verbs)
+// come from the same NewFlagSet constructors help --json uses, so new commands
+// and flags are picked up automatically.
 func runCompletion(args []string) error {
 	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprintln(fs.Output(), "usage: st completion <bash|zsh|fish>") }
@@ -31,16 +32,18 @@ func runCompletion(args []string) error {
 		return fmt.Errorf("completion requires one shell argument: bash, zsh, or fish")
 	}
 
-	list := strings.Join(commandNames(), " ")
 	switch rest[0] {
 	case "bash":
-		out(bashCompletion, list)
+		out("%s", bashCompletionScript())
 	case "zsh":
-		out(zshCompletion, list)
+		out("%s", zshCompletionScript())
 	case "fish":
 		var b strings.Builder
 		for _, c := range registry {
 			fmt.Fprintf(&b, "complete -c st -n __fish_use_subcommand -a %s -d %q\n", c.Name, c.Summary)
+			if toks := commandCompletions(c); len(toks) > 0 {
+				fmt.Fprintf(&b, "complete -c st -n \"__fish_seen_subcommand_from %s\" -a %q\n", c.Name, strings.Join(toks, " "))
+			}
 		}
 		out("%s", b.String())
 	default:
@@ -61,23 +64,72 @@ func commandNames() []string {
 	return names
 }
 
-const bashCompletion = `# bash completion for st
-_st_complete() {
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    if [ "$COMP_CWORD" -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "%s" -- "$cur") )
-    fi
+// subVerbs maps a command to its literal sub-verbs (not derivable from the
+// declared flags). Keep in sync with each command's Usage string.
+var subVerbs = map[string][]string{
+	"worktree":   {"ls", "rm"},
+	"shell":      {"install"},
+	"completion": {"bash", "zsh", "fish"},
 }
-complete -F _st_complete st
-`
 
-const zshCompletion = `#compdef st
-_st() {
-    local -a cmds
-    cmds=(%s)
-    if (( CURRENT == 2 )); then
-        compadd -- $cmds
-    fi
+// commandCompletions returns the tokens completable AFTER a command name: its
+// declared flags (rendered as -x / --xxx) plus its sub-verbs, deduped and
+// sorted so the generated scripts are deterministic.
+func commandCompletions(c *Command) []string {
+	seen := map[string]bool{}
+	var toks []string
+	add := func(tok string) {
+		if !seen[tok] {
+			seen[tok] = true
+			toks = append(toks, tok)
+		}
+	}
+	for _, f := range commandFlags(c) { // nil for completion/shell: sub-verbs only
+		add(flagToken(f.Name))
+	}
+	for _, v := range subVerbs[c.Name] {
+		add(v)
+	}
+	sort.Strings(toks)
+	return toks
 }
-_st "$@"
-`
+
+// flagToken renders a flag name in its CLI form: single-char -> "-x", else "--xxx".
+func flagToken(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
+}
+
+// bashCompletionScript generates the bash completion: command names at word 1,
+// then per-command flags/sub-verbs keyed on the chosen command.
+func bashCompletionScript() string {
+	var b strings.Builder
+	b.WriteString("# bash completion for st\n_st_complete() {\n    local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n")
+	fmt.Fprintf(&b, "    if [ \"$COMP_CWORD\" -eq 1 ]; then\n        COMPREPLY=( $(compgen -W %q -- \"$cur\") )\n        return\n    fi\n", strings.Join(commandNames(), " "))
+	b.WriteString("    case \"${COMP_WORDS[1]}\" in\n")
+	for _, c := range registry {
+		if toks := commandCompletions(c); len(toks) > 0 {
+			fmt.Fprintf(&b, "        %s) COMPREPLY=( $(compgen -W %q -- \"$cur\") );;\n", c.Name, strings.Join(toks, " "))
+		}
+	}
+	b.WriteString("    esac\n}\ncomplete -F _st_complete st\n")
+	return b.String()
+}
+
+// zshCompletionScript generates the zsh completion with the same two levels.
+func zshCompletionScript() string {
+	var b strings.Builder
+	b.WriteString("#compdef st\n_st() {\n    local -a cmds\n")
+	fmt.Fprintf(&b, "    cmds=(%s)\n", strings.Join(commandNames(), " "))
+	b.WriteString("    if (( CURRENT == 2 )); then\n        compadd -- $cmds\n        return\n    fi\n")
+	b.WriteString("    case \"${words[2]}\" in\n")
+	for _, c := range registry {
+		if toks := commandCompletions(c); len(toks) > 0 {
+			fmt.Fprintf(&b, "        %s) compadd -- %s;;\n", c.Name, strings.Join(toks, " "))
+		}
+	}
+	b.WriteString("    esac\n}\n_st \"$@\"\n")
+	return b.String()
+}
