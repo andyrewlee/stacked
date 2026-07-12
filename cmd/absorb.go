@@ -1,23 +1,23 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
 	register(&Command{
 		Name:       "absorb",
-		Summary:    "Attribute staged hunks to the stack commits that own their lines",
-		Usage:      "st absorb --dry-run [--json]",
+		Summary:    "Absorb staged hunks into the stack commits that own their lines",
+		Usage:      "st absorb [--dry-run] [--json]",
 		Run:        runAbsorb,
 		NewFlagSet: absorbFlagSet,
 	})
 }
 
-// runAbsorb drives the absorb attribution. Slice 1 ships the dry-run mapping
-// only: hunks are attributed and refusals reported with zero mutation.
+// runAbsorb drives absorb: --dry-run attributes the staged hunks with zero
+// mutation; the bare form applies a single-target plan (amend the owning tip,
+// cascade the descendants) through one mutateState call, so `st undo` reverts
+// the amend and the cascade as one entry.
 func runAbsorb(args []string) error {
 	var o absorbOpts
 	fs := newAbsorbFlags(&o)
@@ -27,26 +27,42 @@ func runAbsorb(args []string) error {
 	if err := rejectArgs("absorb", fs.Args()); err != nil {
 		return err
 	}
-	// Applying the hunks (rewriting the target commits) is the next absorb
-	// slice; until it lands a bare `st absorb` points at the dry-run.
-	if !o.dryRun {
-		return fmt.Errorf("st absorb: applying hunks is not implemented yet; run: st absorb --dry-run")
+	var res *stack.AbsorbResult
+	if o.dryRun {
+		s, err := loadState()
+		if err != nil {
+			return err
+		}
+		res, err = stack.AbsorbPlan(stackEnv(s, o.asJSON), s)
+		if err != nil {
+			return err
+		}
+		return emitAbsorb(o.asJSON, res)
 	}
-	s, err := loadState()
-	if err != nil {
+	if err := mutateState("absorb", o.asJSON, func(env stack.Env, s *stack.State) error {
+		r, err := stack.Absorb(env, s)
+		res = r
+		return err
+	}); err != nil {
 		return err
 	}
-	res, err := stack.AbsorbPlan(stackEnv(s, o.asJSON), s)
-	if err != nil {
-		return err
-	}
-	return emit(o.asJSON, res, func() {
+	return emitAbsorb(o.asJSON, res)
+}
+
+func emitAbsorb(asJSON bool, res *stack.AbsorbResult) error {
+	return emit(asJSON, res, func() {
 		out("%s\n", sanitizeForTerminal(res.Summary))
 		for _, a := range res.Absorbed {
 			out("  absorb %s:%s -> %s (%s)\n", sanitizeForTerminal(a.File), a.Lines, sanitizeForTerminal(a.Branch), sanitizeForTerminal(a.Commit))
 		}
 		for _, r := range res.Refused {
 			out("  refuse %s:%s (%s)\n", sanitizeForTerminal(r.File), r.Lines, sanitizeForTerminal(r.Reason))
+		}
+		if len(res.Restacked) > 0 {
+			out("  restacked: %s\n", joinTerminalNames(res.Restacked))
+		}
+		for _, n := range res.Notes {
+			out("  note: %s\n", sanitizeForTerminal(n))
 		}
 	})
 }

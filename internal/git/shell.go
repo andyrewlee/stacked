@@ -66,6 +66,11 @@ func (Shell) DiffCachedHunks() ([]Hunk, error)            { return DiffCachedHun
 func (Shell) BlamePorcelain(file, rev string) (map[int]string, error) {
 	return BlamePorcelain(file, rev)
 }
+func (Shell) DiffCachedPatch() ([]byte, error) { return DiffCachedPatch() }
+func (Shell) AmendTipWithPatch(branch string, patch []byte) (string, error) {
+	return AmendTipWithPatch(branch, patch)
+}
+func (Shell) ResetHardIn(dir, ref string) error { return ResetHardIn(dir, ref) }
 
 func (QuietShell) RebaseOnto(newBase, oldBase, br string) error {
 	return RebaseOntoQuiet(newBase, oldBase, br)

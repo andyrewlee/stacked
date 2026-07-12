@@ -69,6 +69,21 @@ type Git interface {
 	// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
 	// last touched it (git blame --porcelain).
 	BlamePorcelain(file, rev string) (map[int]string, error)
+	// DiffCachedPatch returns the full staged patch (git diff --cached), the
+	// exact bytes absorb lands on a target tip with AmendTipWithPatch.
+	DiffCachedPatch() ([]byte, error)
+	// AmendTipWithPatch rewrites branch's tip commit to also contain patch via
+	// a temporary-index amend (read-tree/apply --cached/write-tree/commit-tree)
+	// that touches no worktree and preserves the tip's author, message, and
+	// parents. On any failure — including a patch that does not apply to that
+	// tree — the repository is untouched. Returns the new tip SHA.
+	AmendTipWithPatch(branch string, patch []byte) (string, error)
+	// ResetHardIn runs `git reset --hard <ref>` in the worktree at dir (""
+	// means the current worktree). Absorb-only: called after the staged content
+	// is safely committed in the target branch (to drop the now-redundant
+	// staged copy) or on a verified-clean worktree to sync it to its amended
+	// HEAD — never anywhere uncommitted work could be lost.
+	ResetHardIn(dir, ref string) error
 	// WorktreeRemove removes the linked worktree at dir. git refuses to delete a
 	// branch checked out in another worktree, so a lifecycle op (delete/fold/
 	// prune) that removes such a branch must first tear down its (clean) worktree

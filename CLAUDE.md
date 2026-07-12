@@ -111,7 +111,13 @@ engine and these hold, the topology bookkeeping is sound.
   (`internal/stack/lock_unix.go`), an exclusive lock file with stale-owner
   reclamation elsewhere (`internal/stack/lock_other.go`, `lock_stale.go`).
 
-## Deliberately not implemented
+## Absorb is deliberately v1-sliced
 
-`absorb` (auto-distributing staged hunks to ancestor commits) — a large blame/fixup
-subsystem; left as a future item rather than shipped partial.
+`st absorb --dry-run` maps staged hunks to the stack commits that own their
+lines; bare `st absorb` applies a plan only when it names a single target
+branch with zero refusals (amend the owning tip via a temp-index — no checkout
+— then one cascade restack; one undo entry reverts both). Everything ambiguous
+is refused loudly: multi-target plans, hunks spanning commits, pure additions,
+lines owned by trunk/history, and non-tip targets (splitting hunks or rewriting
+mid-branch commits is out of scope). See `plans/058-spike-absorb-design.md`
+for the design.

@@ -1215,6 +1215,88 @@ func TestDiffCachedHunks(t *testing.T) {
 	}
 }
 
+// TestAmendTipWithPatch pins the temp-index amend: a staged patch captured on
+// one branch lands in ANOTHER branch's tip without any checkout, preserving
+// the tip's parent, author, and message; a patch that does not apply leaves
+// the repository (and the caller's index) untouched.
+func TestAmendTipWithPatch(t *testing.T) {
+	newRepo(t)
+	// target owns shared.txt line 2; top adds only its own file, so the staged
+	// patch's context lines are identical in top's and target's trees.
+	writeFile(t, "shared.txt", "one\ntwo\nthree\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "seed shared")
+	mustGit(t, "checkout", "-q", "-b", "target")
+	writeFile(t, "shared.txt", "one\ntwo-owned\nthree\n")
+	mustGit(t, "commit", "-q", "-am", "target owns line 2")
+	oldTip := mustGit(t, "rev-parse", "HEAD")
+	oldParent := mustGit(t, "rev-parse", "HEAD^")
+	oldAuthor := mustGit(t, "log", "-1", "--format=%an <%ae> %aI", oldTip)
+	mustGit(t, "checkout", "-q", "-b", "top")
+	writeFile(t, "top.txt", "top\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "top work")
+
+	writeFile(t, "shared.txt", "one\ntwo-owned-fixed\nthree\n")
+	mustGit(t, "add", "shared.txt")
+	patch, err := DiffCachedPatch()
+	if err != nil || len(patch) == 0 {
+		t.Fatalf("DiffCachedPatch = %d bytes, %v; want a non-empty patch", len(patch), err)
+	}
+
+	newTip, err := AmendTipWithPatch("target", patch)
+	if err != nil {
+		t.Fatalf("AmendTipWithPatch: %v", err)
+	}
+	if newTip == oldTip {
+		t.Fatal("AmendTipWithPatch returned the old tip; nothing was amended")
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
+		t.Fatalf("target = %s, want the returned tip %s", got, newTip)
+	}
+	if got := mustGit(t, "rev-parse", newTip+"^"); got != oldParent {
+		t.Fatalf("amended parent = %s, want %s (amend in place, not a new commit on top)", got, oldParent)
+	}
+	if got := mustGit(t, "log", "-1", "--format=%s", newTip); got != "target owns line 2" {
+		t.Fatalf("amended subject = %q, want the original preserved", got)
+	}
+	if got := mustGit(t, "log", "-1", "--format=%an <%ae> %aI", newTip); got != oldAuthor {
+		t.Fatalf("amended author = %q, want the original %q", got, oldAuthor)
+	}
+	if got := mustGit(t, "show", "target:shared.txt"); !strings.Contains(got, "two-owned-fixed") {
+		t.Fatalf("target:shared.txt = %q, want the absorbed edit", got)
+	}
+	// The caller's worktree and index are untouched: still on top, edit staged.
+	if got := mustGit(t, "rev-parse", "--abbrev-ref", "HEAD"); got != "top" {
+		t.Fatalf("HEAD = %q, want top (no checkout)", got)
+	}
+	if got := mustGit(t, "diff", "--cached", "--name-only"); got != "shared.txt" {
+		t.Fatalf("staged files = %q, want the edit still staged here", got)
+	}
+
+	// A patch that does not apply to target's tree fails cleanly: ref untouched.
+	garbage := []byte("diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1,3 +1,3 @@\n-nope\n-lines\n-mismatch\n+x\n+y\n+z\n")
+	if _, err := AmendTipWithPatch("target", garbage); err == nil {
+		t.Fatal("AmendTipWithPatch with a non-applying patch succeeded")
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
+		t.Fatalf("target = %s after failed apply, want untouched %s", got, newTip)
+	}
+}
+
+// TestResetHardIn pins the dir handling: "" resets the current worktree.
+func TestResetHardIn(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "base.txt", "edited\n")
+	mustGit(t, "add", "base.txt")
+	if err := ResetHardIn("", "HEAD"); err != nil {
+		t.Fatalf("ResetHardIn: %v", err)
+	}
+	if got := mustGit(t, "status", "--porcelain"); got != "" {
+		t.Fatalf("status = %q, want clean after reset --hard", got)
+	}
+}
+
 // TestBlamePorcelain pins the porcelain parser: each line maps to the SHA
 // that last touched it, across two commits.
 func TestBlamePorcelain(t *testing.T) {
