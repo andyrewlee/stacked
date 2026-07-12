@@ -1624,6 +1624,68 @@ func TestSyncUndoRestoresPrunedBranchesAndTrunk(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestSyncFromLinkedWorktree proves the whole maintenance loop works from
+// inside a branch's own worktree: sync fast-forwards the trunk in the MAIN
+// worktree (its owner), prunes the landed branch, restacks the current branch,
+// and leaves both worktrees on their original branches.
+func TestSyncFromLinkedWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+
+	// Land feat-a on the remote trunk, then rewind local main so the sync has
+	// a real fast-forward to perform in the main worktree.
+	r.stOK("checkout", "main")
+	preTrunk := r.rev("main")
+	r.git("merge", "-q", "--no-ff", "feat-a", "-m", "merge feat-a")
+	r.git("push", "-q", "origin", "main")
+	r.git("reset", "--hard", preTrunk)
+
+	out := r.stOK("worktree", "feat-b", "--json").stdout
+	var wt struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &wt); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(stBin, "sync")
+	cmd.Dir = wt.Path
+	cmd.Env = cleanEnv(r.home)
+	syncOut, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("st sync from linked worktree: %v\n%s", err, syncOut)
+	}
+	if !strings.Contains(string(syncOut), "sync complete") {
+		t.Fatalf("sync output missing completion:\n%s", syncOut)
+	}
+
+	if r.branchExists("feat-a") {
+		t.Fatal("feat-a should be pruned after sync")
+	}
+	if r.rev("main") == preTrunk {
+		t.Fatal("sync did not fast-forward local main")
+	}
+	if !r.isAncestor("main", "feat-b") {
+		t.Fatal("feat-b was not restacked onto the advanced main")
+	}
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("main worktree branch = %q after sync, want main", cur)
+	}
+	if got := r.gitIn(wt.Path, "rev-parse", "--abbrev-ref", "HEAD"); got != "feat-b" {
+		t.Fatalf("feat-b worktree branch = %q after sync, want feat-b", got)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()

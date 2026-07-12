@@ -462,6 +462,20 @@ func WorktreeRemove(path string, force bool) error {
 	return err
 }
 
+// MergeFFOnlyIn runs "git -C <dir> merge --ff-only upstream", advancing the
+// branch checked out in the worktree at dir (its working tree included) the
+// way running the merge inside that worktree would.
+func MergeFFOnlyIn(dir, upstream string) error {
+	if dir == "" {
+		return fmt.Errorf("worktree dir is empty")
+	}
+	if err := validRefArg("ref", upstream); err != nil {
+		return err
+	}
+	_, err := run("-C", dir, "merge", "--ff-only", upstream)
+	return err
+}
+
 // RebaseOntoIn runs "git -C <dir> rebase --onto newBase oldBase branch" with no
 // inherited stdio, so a branch checked out in the worktree at dir is rebased by
 // its owner (git refuses to rebase a branch checked out in another worktree).

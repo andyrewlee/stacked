@@ -74,8 +74,12 @@ type Remote interface {
 	Exists(name string) bool
 	Fetch(name string) error
 	// FastForward fast-forwards the local trunk to <remote>/<trunk> and returns a
-	// short human-readable description of the result.
-	FastForward(trunk, remote string) (string, error)
+	// short human-readable description of the result. The engine resolves where
+	// the trunk is checked out: checkedOutHere means this process's worktree;
+	// ownerDir names another worktree owning the trunk (the implementation must
+	// advance it there); both zero means the trunk is checked out nowhere and
+	// only the ref itself may move, fast-forward only.
+	FastForward(trunk, remote, ownerDir string, checkedOutHere bool) (string, error)
 }
 
 // Env bundles the git port with a persistence hook so engine operations can
