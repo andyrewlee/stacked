@@ -226,6 +226,46 @@ type worktreeRemovedEntry struct {
 	Path   string `json:"path"`
 }
 
+// bulkWorktreeSetup owns the shared head of the two bulk worktree ops:
+// lock, load, sorted tracked names, the worktree snapshot, and the branch
+// checked out in the main worktree ("" when undetectable). The caller must
+// defer release() when err is nil.
+func bulkWorktreeSetup() (names []string, wts []git.Worktree, mainBranch string, release func(), err error) {
+	release, err = acquireLock()
+	if err != nil {
+		return nil, nil, "", nil, err
+	}
+	s, err := loadState()
+	if err != nil {
+		release()
+		return nil, nil, "", nil, err
+	}
+	names = make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	wts, err = worktrees()
+	if err != nil {
+		release()
+		return nil, nil, "", nil, err
+	}
+	if main, ok := stack.MainWorktree(wts); ok {
+		mainBranch = main.Branch
+	}
+	return names, wts, mainBranch, release, nil
+}
+
+// bulkWorktreeFailure emits the partial aggregate result (JSON mode only)
+// and returns the uniform "(N of M <verb>)" hard-failure error both bulk
+// ops share. result must already carry its Failed field.
+func bulkWorktreeFailure(asJSON bool, result any, action, branch, verb string, done, total int, cause error) error {
+	if asJSON {
+		_ = emit(true, result, func() {})
+	}
+	return fmt.Errorf("%s %q (%d of %d %s): %w", action, branch, done, total, verb, cause)
+}
+
 // worktreeRemoveAll removes every linked worktree owning a tracked branch, in
 // deterministic (sorted) order under a single lock. The branch checked out in
 // the main worktree is skipped (not a removable linked worktree); a dirty
@@ -233,30 +273,11 @@ type worktreeRemovedEntry struct {
 // with no worktree is silently ignored. Removal stops at the first hard
 // failure with a partial result (mirroring worktreeAddAll); rerunning is safe.
 func worktreeRemoveAll(asJSON bool) error {
-	release, err := acquireLock()
+	names, wts, mainBranch, release, err := bulkWorktreeSetup()
 	if err != nil {
 		return err
 	}
 	defer release()
-
-	s, err := loadState()
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	wts, err := worktrees()
-	if err != nil {
-		return err
-	}
-	mainBranch := ""
-	if main, ok := stack.MainWorktree(wts); ok {
-		mainBranch = main.Branch
-	}
 
 	result := worktreeRemoveAllResult{Removed: []worktreeRemovedEntry{}}
 	for _, name := range names {
@@ -270,11 +291,8 @@ func worktreeRemoveAll(asJSON bool) error {
 		}
 		clean, err := git.IsCleanIn(wt.Path)
 		if err != nil {
-			if asJSON {
-				result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
-				_ = emit(true, result, func() {})
-			}
-			return fmt.Errorf("checking worktree for %q (%d of %d removed): %w", name, len(result.Removed), len(names), err)
+			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
 		}
 		if !clean {
 			// Dirty is a SKIP, decided up front — never classified by parsing
@@ -285,11 +303,8 @@ func worktreeRemoveAll(asJSON bool) error {
 		removeErr := git.WorktreeRemove(wt.Path, false)
 		resetWorktreeCache()
 		if removeErr != nil {
-			if asJSON {
-				result.Failed = &worktreeAllFailure{Branch: name, Error: removeErr.Error()}
-				_ = emit(true, result, func() {})
-			}
-			return fmt.Errorf("removing worktree for %q (%d of %d removed): %w", name, len(result.Removed), len(names), removeErr)
+			result.Failed = &worktreeAllFailure{Branch: name, Error: removeErr.Error()}
+			return bulkWorktreeFailure(asJSON, result, "removing worktree for", name, "removed", len(result.Removed), len(names), removeErr)
 		}
 		result.Removed = append(result.Removed, worktreeRemovedEntry{Branch: name, Path: wt.Path})
 	}
@@ -402,30 +417,11 @@ type worktreeAllFailure struct {
 // out in the main worktree is skipped (git cannot give it a second checkout);
 // branches that already own a worktree report their existing path.
 func worktreeAddAll(asJSON bool) error {
-	release, err := acquireLock()
+	names, _, mainBranch, release, err := bulkWorktreeSetup()
 	if err != nil {
 		return err
 	}
 	defer release()
-
-	s, err := loadState()
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	wts, err := worktrees()
-	if err != nil {
-		return err
-	}
-	mainBranch := ""
-	if main, ok := stack.MainWorktree(wts); ok {
-		mainBranch = main.Branch
-	}
 	// The repo identity is loop-invariant; resolve its two rev-parse spawns
 	// once instead of per branch.
 	repo, root, err := repoIdentifier()
@@ -444,11 +440,8 @@ func worktreeAddAll(asJSON bool) error {
 			// Emit the partial result (what succeeded plus the failing branch)
 			// before returning, mirroring submit's partial-failure contract; the
 			// non-zero exit and error envelope still signal the failure.
-			if asJSON {
-				result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
-				_ = emit(true, result, func() {})
-			}
-			return fmt.Errorf("materializing worktree for %q (%d of %d done): %w", name, len(result.Created), len(names), err)
+			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+			return bulkWorktreeFailure(asJSON, result, "materializing worktree for", name, "done", len(result.Created), len(names), err)
 		}
 		result.Created = append(result.Created, worktreeAllEntry{Branch: name, Path: created.Path, Copied: created.Copied, Summary: created.Summary})
 	}
