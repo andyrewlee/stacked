@@ -64,8 +64,12 @@ type Git interface {
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)
-	// DiffCachedHunks returns the staged change regions (git diff --cached -U0).
-	DiffCachedHunks() ([]git.Hunk, error)
+	// DiffCachedHunks returns the staged text-change regions (git diff
+	// --cached -U0) plus an UnsupportedRecord for every staged section that
+	// is not plain text hunks (binary, mode change, rename, quoted path).
+	// Contract: every staged change appears in one of the two slices, so a
+	// caller gating on "zero refusals" covers the whole staged diff.
+	DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error)
 	// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
 	// last touched it (git blame --porcelain).
 	BlamePorcelain(file, rev string) (map[int]string, error)

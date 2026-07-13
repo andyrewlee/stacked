@@ -366,36 +366,122 @@ type Hunk struct {
 	NewN     int    `json:"newN"`
 }
 
-// DiffCachedHunks returns the staged change regions from `git diff --cached
-// -U0`, in diff order. The current file is tracked from +++ b/<path> lines; a
-// deletion (+++ /dev/null) keeps the --- a/<path> name, since a deleted file's
-// pre-image lines are still attributable.
-func DiffCachedHunks() ([]Hunk, error) {
-	out, err := run("diff", "--cached", "-U0")
+// UnsupportedRecord describes one staged diff section absorb cannot classify
+// as plain text hunks: binary content, mode changes, renames/copies, or a
+// path git must quote (control bytes or quotes in the name). File is the
+// best-known path for display.
+type UnsupportedRecord struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
+// diffSection accumulates the per-section state of the diff parser. Header
+// lines (---/+++/mode/rename/Binary) are only structural BEFORE the first @@
+// of the section; after that, only "@@ " and "diff --git " matter — a -U0
+// content line may legitimately begin with "--- a/" (a removed line reading
+// "-- a/…"), and anchoring on section position keeps it from desyncing the
+// file tracking.
+type diffSection struct {
+	open       bool
+	file       string
+	pendingOld string
+	gitName    string // best-effort name from the "diff --git a/X b/X" line
+	sawHunk    bool
+	hunks      []Hunk
+	modeChange bool
+	rename     bool
+	binary     bool
+	quoted     bool
+}
+
+// DiffCachedHunks returns the staged text-change regions from `git diff
+// --cached -U0` plus an UnsupportedRecord for every staged section that is
+// not plain text hunks. The contract is classify-or-refuse: every staged
+// change is represented in one of the two return slices, so a caller gating
+// on "zero refusals" (absorb) really covers the whole staged diff. A
+// deletion (+++ /dev/null) keeps the --- a/<path> name, since a deleted
+// file's pre-image lines are still attributable. A mode change on a section
+// that ALSO has text hunks keeps the hunks and adds a record: the hunks are
+// attributable, but the mode bit would silently ride any whole-patch apply.
+func DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) {
+	// quotepath=false so non-ASCII paths arrive raw; git then quotes only
+	// paths carrying control bytes, quotes, or backslashes — those remaining
+	// quoted sections are refused below rather than misparsed.
+	out, err := run("-c", "core.quotepath=false", "diff", "--cached", "-U0")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var hunks []Hunk
-	file := ""
-	pendingOld := ""
-	for _, line := range strings.Split(out, "\n") {
+	var unsupported []UnsupportedRecord
+	var sec diffSection
+	flush := func() {
+		if !sec.open {
+			return
+		}
+		name := sec.file
+		if name == "" {
+			name = sec.pendingOld
+		}
+		if name == "" {
+			name = sec.gitName
+		}
 		switch {
-		case strings.HasPrefix(line, "--- a/"):
-			pendingOld = strings.TrimPrefix(line, "--- a/")
-		case strings.HasPrefix(line, "+++ b/"):
-			file = strings.TrimPrefix(line, "+++ b/")
-		case strings.HasPrefix(line, "+++ /dev/null"):
-			file = pendingOld // deletion: the pre-image name is the touched file
-		case strings.HasPrefix(line, "@@ "):
-			h, ok := parseHunkHeader(line)
-			if !ok || file == "" {
-				continue
+		case sec.binary:
+			unsupported = append(unsupported, UnsupportedRecord{File: name, Reason: "binary file"})
+		case sec.rename:
+			unsupported = append(unsupported, UnsupportedRecord{File: name, Reason: "rename"})
+		case sec.quoted:
+			unsupported = append(unsupported, UnsupportedRecord{File: name, Reason: "path needs quoting (control bytes or quotes in name)"})
+		default:
+			if sec.modeChange {
+				unsupported = append(unsupported, UnsupportedRecord{File: name, Reason: "mode change"})
 			}
-			h.File = file
-			hunks = append(hunks, h)
+			hunks = append(hunks, sec.hunks...)
 		}
 	}
-	return hunks, nil
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			flush()
+			sec = diffSection{open: true}
+			if i := strings.LastIndex(line, " b/"); i >= 0 {
+				sec.gitName = line[i+3:]
+			}
+			if strings.Contains(line, ` "`) {
+				sec.quoted = true
+			}
+		case !sec.open:
+			continue
+		case !sec.sawHunk && (strings.HasPrefix(line, "old mode ") || strings.HasPrefix(line, "new mode ")):
+			sec.modeChange = true
+		case !sec.sawHunk && (strings.HasPrefix(line, "rename from ") || strings.HasPrefix(line, "rename to ") ||
+			strings.HasPrefix(line, "copy from ") || strings.HasPrefix(line, "copy to ")):
+			sec.rename = true
+		case !sec.sawHunk && (strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch")):
+			sec.binary = true
+		case !sec.sawHunk && (strings.HasPrefix(line, `--- "`) || strings.HasPrefix(line, `+++ "`)):
+			sec.quoted = true
+		case !sec.sawHunk && strings.HasPrefix(line, "--- a/"):
+			sec.pendingOld = strings.TrimPrefix(line, "--- a/")
+		case !sec.sawHunk && strings.HasPrefix(line, "+++ b/"):
+			sec.file = strings.TrimPrefix(line, "+++ b/")
+		case !sec.sawHunk && strings.HasPrefix(line, "+++ /dev/null"):
+			sec.file = sec.pendingOld // deletion: the pre-image name is the touched file
+		case strings.HasPrefix(line, "@@ "):
+			h, ok := parseHunkHeader(line)
+			if !ok || (sec.file == "" && sec.pendingOld == "") {
+				continue
+			}
+			sec.sawHunk = true
+			h.File = sec.file
+			if h.File == "" {
+				h.File = sec.pendingOld
+			}
+			sec.hunks = append(sec.hunks, h)
+		}
+	}
+	flush()
+	return hunks, unsupported, nil
 }
 
 // parseHunkHeader parses "@@ -<oldStart>[,<oldN>] +<newStart>[,<newN>] @@ ...";
@@ -442,7 +528,7 @@ func parseHunkRange(spec string) (start, n int, ok bool) {
 // surrounding context is typically owned by descendant commits and would make
 // the apply fail there.
 func DiffCachedPatch() ([]byte, error) {
-	out, err := run("diff", "--cached", "-U0")
+	out, err := run("-c", "core.quotepath=false", "diff", "--cached", "-U0")
 	if err != nil {
 		return nil, err
 	}

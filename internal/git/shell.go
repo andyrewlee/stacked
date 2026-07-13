@@ -59,10 +59,10 @@ func (Shell) Worktrees() ([]Worktree, error)                  { return Worktrees
 func (Shell) RebaseOntoIn(dir, newBase, oldBase, br string) error {
 	return RebaseOntoIn(dir, newBase, oldBase, br)
 }
-func (Shell) RebaseAbortIn(dir string) error              { return RebaseAbortIn(dir) }
-func (Shell) IsCleanIn(dir string) (bool, error)          { return IsCleanIn(dir) }
-func (Shell) WorktreeRemove(dir string, force bool) error { return WorktreeRemove(dir, force) }
-func (Shell) DiffCachedHunks() ([]Hunk, error)            { return DiffCachedHunks() }
+func (Shell) RebaseAbortIn(dir string) error                        { return RebaseAbortIn(dir) }
+func (Shell) IsCleanIn(dir string) (bool, error)                    { return IsCleanIn(dir) }
+func (Shell) WorktreeRemove(dir string, force bool) error           { return WorktreeRemove(dir, force) }
+func (Shell) DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) { return DiffCachedHunks() }
 func (Shell) BlamePorcelain(file, rev string) (map[int]string, error) {
 	return BlamePorcelain(file, rev)
 }

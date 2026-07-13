@@ -98,6 +98,51 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 		}
 	})
 
+	t.Run("unsupported staged record is refused and blocks the apply", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.staged = true
+		f.stagedPatch = []byte("fake patch")
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+		f.stagedUnsupported = []git.UnsupportedRecord{{File: "bin.dat", Reason: "binary file"}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Absorbed) != 1 || len(res.Refused) != 1 {
+			t.Fatalf("result = %+v, want one absorbed and one refusal", res)
+		}
+		if !strings.Contains(res.Refused[0].Reason, "binary file") || res.Refused[0].File != "bin.dat" {
+			t.Fatalf("refusal = %+v, want the binary record surfaced", res.Refused[0])
+		}
+
+		applied, err := Absorb(env, s)
+		if err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		if !applied.DryRun || !strings.HasPrefix(applied.Summary, "not applied:") {
+			t.Fatalf("result = %+v, want the plan returned unapplied", applied)
+		}
+		if f.branches["a"] != tips["a"] {
+			t.Fatal("an unsupported staged record must block the apply, but a's tip moved")
+		}
+	})
+
+	t.Run("line missing from blame is refused as unattributable", func(t *testing.T) {
+		f, s, env, _ := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]string{"f.txt": {}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "cannot attribute") {
+			t.Fatalf("result = %+v, want the cannot-attribute refusal", res)
+		}
+	})
+
 	t.Run("stack commit that is not a branch tip is refused", func(t *testing.T) {
 		f, s, env, _ := absorbEnv(t)
 		// Advance b past its recorded tip so the OLD tip is a stack commit that

@@ -66,12 +66,18 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	if err := requireNoUnstaged(g); err != nil {
 		return nil, err
 	}
-	hunks, err := g.DiffCachedHunks()
+	hunks, unsupported, err := g.DiffCachedHunks()
 	if err != nil {
 		return nil, fmt.Errorf("reading staged hunks: %w", err)
 	}
 	res := &AbsorbResult{Absorbed: []AbsorbedHunk{}, Refused: []RefusedHunk{}, DryRun: true}
-	if len(hunks) == 0 {
+	// Every staged section the parser could not classify as text hunks is a
+	// refusal — the zero-refusal apply gate must cover the WHOLE staged diff,
+	// because the apply replays the full patch, not just the hunks.
+	for _, u := range unsupported {
+		res.Refused = append(res.Refused, RefusedHunk{File: u.File, Lines: "-", Reason: u.Reason + "; absorb v1 handles plain text hunks only"})
+	}
+	if len(hunks) == 0 && len(res.Refused) == 0 {
 		res.Summary = "nothing to absorb"
 		return res, nil
 	}
