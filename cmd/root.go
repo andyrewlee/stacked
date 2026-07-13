@@ -18,8 +18,8 @@ import (
 
 // defaultVersion is the compiled-in fallback when neither ldflags nor module
 // metadata provide a real version. Keep it in sync with the release tag being
-// prepared (plan 071 cuts v0.1.0).
-const defaultVersion = "0.1.0"
+// prepared (see the top entry in CHANGELOG.md).
+const defaultVersion = "0.0.1"
 
 // version is the stacked release version reported by the version command. It is
 // overridable at build time via
