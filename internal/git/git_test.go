@@ -1373,6 +1373,92 @@ func TestAmendTipWithPatch(t *testing.T) {
 	}
 }
 
+// TestAmendTipWithPatchMergeTip pins the multi-parent path: amending a
+// branch whose tip is a merge commit preserves BOTH parents (the -p loop),
+// the subject, and the merged content.
+func TestAmendTipWithPatchMergeTip(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "shared.txt", "one\ntwo\nthree\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "seed shared")
+	mustGit(t, "checkout", "-q", "-b", "side")
+	writeFile(t, "side.txt", "side\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "side work")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+	oldTip := mustGit(t, "rev-parse", "HEAD")
+	oldParents := strings.Fields(mustGit(t, "rev-list", "--parents", "-n1", oldTip))[1:]
+	if len(oldParents) != 2 {
+		t.Fatalf("fixture tip has %d parents, want a merge commit", len(oldParents))
+	}
+
+	// Capture a patch against the merged tree from a throwaway branch.
+	mustGit(t, "checkout", "-q", "-b", "scratch")
+	writeFile(t, "shared.txt", "one\ntwo-fixed\nthree\n")
+	mustGit(t, "add", "shared.txt")
+	patch, err := DiffCachedPatch()
+	if err != nil || len(patch) == 0 {
+		t.Fatalf("DiffCachedPatch = %d bytes, %v", len(patch), err)
+	}
+	mustGit(t, "reset", "-q", "--hard", "HEAD")
+
+	newTip, err := AmendTipWithPatch("main", patch)
+	if err != nil {
+		t.Fatalf("AmendTipWithPatch on a merge tip: %v", err)
+	}
+	newParents := strings.Fields(mustGit(t, "rev-list", "--parents", "-n1", newTip))[1:]
+	if len(newParents) != 2 || newParents[0] != oldParents[0] || newParents[1] != oldParents[1] {
+		t.Fatalf("amended parents = %v, want the original merge parents %v in order", newParents, oldParents)
+	}
+	if got := mustGit(t, "log", "-1", "--format=%s", newTip); got != "merge side" {
+		t.Fatalf("amended subject = %q, want the merge subject preserved", got)
+	}
+	if got := mustGit(t, "show", "main:shared.txt"); !strings.Contains(got, "two-fixed") {
+		t.Fatalf("main:shared.txt = %q, want the absorbed edit", got)
+	}
+}
+
+// TestAmendTipWithPatchRootTip pins the root-commit refusal: a branch whose
+// tip has no parent errors out with the ref untouched.
+func TestAmendTipWithPatchRootTip(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "checkout", "-q", "--orphan", "lone")
+	writeFile(t, "lone.txt", "alone\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "root")
+	tip := mustGit(t, "rev-parse", "refs/heads/lone")
+
+	patch := []byte("diff --git a/lone.txt b/lone.txt\n--- a/lone.txt\n+++ b/lone.txt\n@@ -1 +1 @@\n-alone\n+company\n")
+	if _, err := AmendTipWithPatch("lone", patch); err == nil || !strings.Contains(err.Error(), "root commit") {
+		t.Fatalf("AmendTipWithPatch on a root tip = %v, want the root-commit refusal", err)
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/lone"); got != tip {
+		t.Fatalf("lone = %s after refused amend, want untouched %s", got, tip)
+	}
+}
+
+// TestUpdateRefCompareAndSwap pins the update-ref old-value semantics that
+// AmendTipWithPatch's final `update-ref ref newTip tip` relies on: a swap
+// whose expected old value is stale FAILS and moves nothing. (The mid-call
+// race itself cannot be staged deterministically; this is the invariant the
+// CAS depends on.)
+func TestUpdateRefCompareAndSwap(t *testing.T) {
+	newRepo(t)
+	staleTip := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "next.txt", "next\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "advance")
+	newTip := mustGit(t, "rev-parse", "HEAD")
+
+	if _, err := Run("update-ref", "refs/heads/main", staleTip, staleTip); err == nil {
+		t.Fatal("update-ref with a stale expected old value succeeded; the CAS guarantee is gone")
+	}
+	if got := mustGit(t, "rev-parse", "refs/heads/main"); got != newTip {
+		t.Fatalf("main = %s after failed CAS, want untouched %s", got, newTip)
+	}
+}
+
 // TestResetHardIn pins the dir handling: "" resets the current worktree.
 func TestResetHardIn(t *testing.T) {
 	newRepo(t)

@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -249,6 +250,40 @@ func TestAbsorbApply(t *testing.T) {
 		}
 		if len(f.resetHardDirs) != 0 {
 			t.Fatalf("resetHardDirs = %q; amending the current tip must not reset (the index self-resolves)", f.resetHardDirs)
+		}
+	})
+
+	t.Run("cascade conflict after the amend leaves the rebase paused for continue", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips, "a")
+		f.conflictOn("b")
+
+		res, err := Absorb(env, s)
+		if res != nil || !errors.Is(err, ErrConflict) {
+			t.Fatalf("Absorb = %+v, %v; want nil result and ErrConflict", res, err)
+		}
+		// The amend landed before the cascade paused: the edit is safe in a.
+		amendedATip := f.branches["a"]
+		if amendedATip == tips["a"] {
+			t.Fatal("a's tip unchanged; the amend should persist through the conflict")
+		}
+		if inProg, _ := f.RebaseInProgress(); !inProg {
+			t.Fatal("no rebase in progress after the cascade conflict")
+		}
+		if name, _ := f.RebaseHeadName(); name != "b" {
+			t.Fatalf("paused rebase head = %q, want b", name)
+		}
+
+		// st continue finishes the paused rebase and restacks the rest.
+		if _, err := Continue(env, s); err != nil {
+			t.Fatalf("Continue: %v", err)
+		}
+		if f.branches["b"] == tips["b"] || f.branches["c"] == tips["c"] {
+			t.Fatalf("b/c tips = %s/%s, want both moved by the resumed cascade", f.branches["b"], f.branches["c"])
+		}
+		b, _ := s.Get("b")
+		if b.ParentSHA != amendedATip {
+			t.Fatalf("b.ParentSHA = %q, want the amended a tip %q", b.ParentSHA, amendedATip)
 		}
 	})
 
