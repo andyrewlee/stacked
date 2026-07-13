@@ -67,7 +67,13 @@ cannot corrupt your stack metadata.
 
 ## Install / build
 
-Requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git 2.31+** is
+**Prebuilt binaries** (no Go toolchain needed): every release publishes
+darwin/linux tarballs for amd64 and arm64 plus `checksums.txt` on the
+[releases page](https://github.com/andyrewlee/stacked/releases) — download
+`stacked_<version>_<os>_<arch>.tar.gz`, verify the checksum, and put the `st`
+binary on your `PATH`.
+
+Building from source requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git 2.31+** is
 recommended for native common-dir path resolution, while older supported Git
 versions use a fallback. The full gate (`make ci`) additionally needs
 **golangci-lint v2** — an external binary, never a module dependency:
