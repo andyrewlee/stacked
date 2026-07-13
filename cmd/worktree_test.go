@@ -745,8 +745,11 @@ func TestEmitWorktreeTextOutput(t *testing.T) {
 }
 
 // TestDropNestedEntries pins the pure suppression rule: descendants of a
-// selected on-disk directory are dropped, path-boundary compared ("a" must
-// not suppress "ax"), survivor order preserved.
+// selected on-disk directory that WILL BE COPIED (gitignored) are dropped,
+// path-boundary compared ("a" must not suppress "ax"), survivor order
+// preserved. A tracked (non-ignored) directory never suppresses — see
+// TestCopyWorktreeIncludesKeepsIgnoredFileUnderTrackedDir for the pipeline
+// half of that rule.
 func TestDropNestedEntries(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{"a", "c", "ax"} {
@@ -761,7 +764,12 @@ func TestDropNestedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := dropNestedEntries(root, []string{"a", filepath.Join("a", "b"), "ax", filepath.Join("c", "d"), "c"})
+	entries := []string{"a", filepath.Join("a", "b"), "ax", filepath.Join("c", "d"), "c"}
+	allIgnored := map[string]bool{}
+	for _, e := range entries {
+		allIgnored[e] = true
+	}
+	got := dropNestedEntries(root, entries, allIgnored)
 	want := []string{"a", "ax", "c"}
 	if len(got) != len(want) {
 		t.Fatalf("dropNestedEntries = %v, want %v", got, want)
@@ -770,6 +778,55 @@ func TestDropNestedEntries(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("dropNestedEntries[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+// TestCopyWorktreeIncludesKeepsIgnoredFileUnderTrackedDir pins the other half
+// of the nesting rule (the #137 regression): a selected TRACKED directory is
+// skipped by the copy loop, so it must not suppress its selected gitignored
+// descendants — the file the user asked for has to arrive in the worktree.
+func TestCopyWorktreeIncludesKeepsIgnoredFileUnderTrackedDir(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest string
+	}{
+		{name: "glob", manifest: "config/**\n"},
+		{name: "literals", manifest: "config\nconfig/secret.env\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newRepo(t)
+			mustInit(t)
+			root, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, ".gitignore", "config/secret.env\n")
+			if err := os.MkdirAll("config", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join("config", "app.conf"), "app\n")
+			mustRun(t, "git", "add", ".gitignore", filepath.Join("config", "app.conf"))
+			mustRun(t, "git", "commit", "-q", "-m", "tracked config")
+			write(t, filepath.Join("config", "secret.env"), "SECRET=1\n")
+			write(t, ".worktreeinclude", tc.manifest)
+
+			dst := filepath.Join(t.TempDir(), "wt")
+			copied, err := copyWorktreeIncludes(root, dst)
+			if err != nil {
+				t.Fatalf("copyWorktreeIncludes: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dst, "config", "secret.env"))
+			if err != nil {
+				t.Fatalf("secret.env missing from the worktree copy (copied=%v): %v", copied, err)
+			}
+			if string(data) != "SECRET=1\n" {
+				t.Fatalf("secret.env content = %q, want the original", data)
+			}
+			// The tracked file is the worktree-add's job, not the copier's.
+			if _, err := os.Stat(filepath.Join(dst, "config", "app.conf")); !os.IsNotExist(err) {
+				t.Fatalf("tracked app.conf was copied by the include copier: %v", err)
+			}
+		})
 	}
 }
 

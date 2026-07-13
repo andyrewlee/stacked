@@ -54,19 +54,23 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A selected directory already delivers everything beneath it. A nested
-	// selection copied AGAIN would duplicate: `cp -R src dst` copies INTO an
-	// existing destination directory (nesting a spurious extra level), unlike
-	// plainCopy which merges — so drop descendants of selected directories.
-	entries = dropNestedEntries(srcRoot, entries)
-
-	realRoot, err := filepath.EvalSymlinks(srcRoot)
+	// One `git check-ignore --stdin` spawn answers every entry; the per-entry
+	// decision order below (absent -> not ignored -> containment) is unchanged.
+	// Computed BEFORE the nested drop: only a directory the loop will actually
+	// copy (a gitignored one) may suppress its descendants.
+	ignored, err := gitIgnoredSet(srcRoot, entries)
 	if err != nil {
 		return nil, err
 	}
-	// One `git check-ignore --stdin` spawn answers every entry; the per-entry
-	// decision order below (absent -> not ignored -> containment) is unchanged.
-	ignored, err := gitIgnoredSet(srcRoot, entries)
+	// A selected IGNORED directory already delivers everything beneath it
+	// wholesale. A nested selection copied AGAIN would duplicate: `cp -R src
+	// dst` copies INTO an existing destination directory (nesting a spurious
+	// extra level), unlike plainCopy which merges — so drop descendants of
+	// selected to-be-copied directories. A TRACKED selected directory is
+	// skipped by the loop and must NOT suppress its gitignored descendants.
+	entries = dropNestedEntries(srcRoot, entries, ignored)
+
+	realRoot, err := filepath.EvalSymlinks(srcRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +104,20 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 }
 
 // dropNestedEntries removes every entry that lives inside another selected
-// entry that is a directory on disk: copying the ancestor already delivers
-// the descendant. Comparison is on path-segment boundaries ("nm" never
-// suppresses a sibling like "nmx"); only real directories suppress (a
-// symlink-to-dir does not, keeping the conservative pre-existing behavior
-// for links). Survivor order is preserved.
-func dropNestedEntries(srcRoot string, entries []string) []string {
+// entry that is a directory on disk AND will itself be copied (is
+// gitignored): copying that ancestor already delivers the descendant. A
+// tracked selected directory is skipped by the copy loop, so it must not
+// suppress — its gitignored descendants still need their own copy.
+// Comparison is on path-segment boundaries ("nm" never suppresses a sibling
+// like "nmx"); only real directories suppress (a symlink-to-dir does not,
+// keeping the conservative pre-existing behavior for links). Survivor order
+// is preserved.
+func dropNestedEntries(srcRoot string, entries []string, ignored map[string]bool) []string {
 	dirs := make([]string, 0, len(entries))
 	for _, rel := range entries {
+		if !ignored[rel] {
+			continue
+		}
 		if info, err := os.Lstat(filepath.Join(srcRoot, rel)); err == nil && info.IsDir() {
 			dirs = append(dirs, rel)
 		}
