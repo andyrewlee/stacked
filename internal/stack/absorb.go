@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 
@@ -243,7 +244,16 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	plan.DryRun = false
 	rebased, err := s.RestackUpstack(env, target)
 	if err != nil {
-		return nil, restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
+		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
+		// On a hard (non-conflict) cascade failure the staged copy is already
+		// gone from this worktree but the edit is committed in target's tip —
+		// say so, or it silently "vanishes" from where the user was working.
+		// A conflict needs no hint: the paused rebase + st continue is the
+		// documented path and re-delivers the edit itself.
+		if target != cur && !errors.Is(err, ErrConflict) {
+			err = fmt.Errorf("%w; your staged change is safely committed in %q — run: st restack (or st undo to revert the absorb)", err, target)
+		}
+		return nil, err
 	}
 	plan.Restacked = rebased
 	plan.Notes = append(plan.Notes, skippedWorktreeNotes(s)...)

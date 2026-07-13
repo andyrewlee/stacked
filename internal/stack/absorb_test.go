@@ -337,6 +337,27 @@ func TestAbsorbApply(t *testing.T) {
 		}
 	})
 
+	t.Run("non-conflict cascade failure names the recovery path", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips, "a")
+		f.rebaseErr["b"] = fmt.Errorf("boom")
+
+		_, err := Absorb(env, s)
+		if err == nil || errors.Is(err, ErrConflict) {
+			t.Fatalf("Absorb = %v, want a hard non-conflict error", err)
+		}
+		if !strings.Contains(err.Error(), `safely committed in "a"`) || !strings.Contains(err.Error(), "st restack") {
+			t.Fatalf("error = %q, want the recovery hint naming the target and st restack", err)
+		}
+		// The hint is truthful: the amend persisted in a.
+		if f.branches["a"] == tips["a"] {
+			t.Fatal("a's tip unchanged; the hint would be a lie")
+		}
+		// The target==cur arm carries no hint by design (nothing was reset);
+		// it is structurally unreachable here — when cur IS the target, cur
+		// itself is never cascaded, so a failing rebase of cur cannot occur.
+	})
+
 	t.Run("a non-applying patch is an error with nothing mutated", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		stage(f, tips, "a")
