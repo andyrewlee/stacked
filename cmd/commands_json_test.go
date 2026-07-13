@@ -1572,6 +1572,74 @@ func TestWorktreeAllPartialFailureJSON(t *testing.T) {
 }
 
 // TestWorktreeRemoveAllJSON strict-decodes the bulk-teardown aggregate: every
+// TestWorktreeRemoveAllHardFailure pins the bulk-teardown failure contract:
+// a mid-loop WorktreeRemove failure stops the walk with the partial result on
+// stdout (valid JSON: removed so far + the failed branch and cause) and a
+// non-zero return whose message carries the "(N of M removed)" progress.
+func TestWorktreeRemoveAllHardFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based failure injection is not portable to windows")
+	}
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
+	resetWorktreeCache()
+	if err := runWorktree([]string{"--all"}); err != nil {
+		t.Fatalf("worktree --all: %v", err)
+	}
+
+	// Make feat-b's worktree DIRECTORY read-only so the second (sorted)
+	// removal fails hard (git cannot unlink its contents) without the
+	// worktree being dirty — and without touching the parent dir the
+	// sibling worktrees share.
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtB, ok := stack.LinkedOwnerOf(wts, "feat-b")
+	if !ok {
+		t.Fatal("feat-b has no worktree")
+	}
+	if err := os.Chmod(wtB.Path, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(wtB.Path, 0o755) })
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runWorktree([]string{"rm", "--all", "--json"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "(1 of 3 removed)") {
+		t.Fatalf("rm --all error = %v, want the (1 of 3 removed) progress", runErr)
+	}
+	var got struct {
+		Removed []struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+		} `json:"removed"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	decodeStrictJSON(t, "worktree rm --all (partial)", out, &got)
+	if len(got.Removed) != 1 || got.Removed[0].Branch != "feat-a" {
+		t.Fatalf("removed = %+v, want only feat-a before the failure", got.Removed)
+	}
+	if got.Failed == nil || got.Failed.Branch != "feat-b" || got.Failed.Error == "" {
+		t.Fatalf("failed = %+v, want feat-b with a cause", got.Failed)
+	}
+	if _, err := os.Stat(got.Removed[0].Path); !os.IsNotExist(err) {
+		t.Fatalf("feat-a's worktree should be gone: %v", err)
+	}
+	if _, err := os.Stat(wtB.Path); err != nil {
+		t.Fatalf("feat-b's worktree should survive the failed removal: %v", err)
+	}
+}
+
 // linked worktree removed in sorted order, the main-worktree branch skipped
 // with a reason, no failure.
 func TestWorktreeRemoveAllJSON(t *testing.T) {
