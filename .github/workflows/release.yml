@@ -13,6 +13,13 @@ on:
 permissions:
   contents: write
 
+# One release run per tag; a re-pushed tag queues rather than racing the
+# in-flight publish (deliberately NOT cancel-in-progress: killing a
+# half-published release is worse than waiting).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release
@@ -31,10 +38,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Tag matches compiled-in defaultVersion
+        run: make check-release-version RELEASE_TAG="${GITHUB_REF_NAME}"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          # Pinned like golangci-lint (Makefile GOLANGCI_VERSION); bump deliberately.
+          version: v2.17.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -96,4 +96,8 @@ make release          # build and publish the release (needs a publish token)
 make snapshot         # build the release artifacts without publishing
 ```
 
-Update `CHANGELOG.md` before tagging.
+Before tagging: fold `CHANGELOG.md`'s `[Unreleased]` into the new `[x.y.z]`
+heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
+`make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (the release
+workflow enforces it too). `make release`/`make snapshot` need the external
+`goreleaser` binary (`brew install goreleaser`); it is not a Go dependency.

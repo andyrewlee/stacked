@@ -35,12 +35,12 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history so `git describe` can produce a version
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
@@ -76,6 +76,18 @@ jobs:
       # `make ci` is the single source of truth: fmt-check + strict lint + vet +
       # build + race tests + black-box e2e + coverage gate. Local and CI run the
       # exact same command.
+      # Catch a broken .goreleaser.yaml on the PR that breaks it, not on the
+      # next v* tag. install-only skips any release/build work.
+      - name: Install GoReleaser (binary only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.17.0
+          install-only: true
+      - name: Validate .goreleaser.yaml
+        if: matrix.os == 'ubuntu-latest'
+        run: goreleaser check
+
       - name: make ci
         run: make ci
 
@@ -87,12 +99,12 @@ jobs:
         run: git config --global core.autocrlf false
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history so `git describe` can produce a version
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
