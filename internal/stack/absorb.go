@@ -58,17 +58,24 @@ func requireNoUnstaged(g Git) error {
 // hunks, lines owned by trunk/history, pure additions, and targets that are
 // not a tracked branch's tip.
 func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
+	res, _, err := absorbPlan(env, s)
+	return res, err
+}
+
+// absorbPlan is AbsorbPlan plus the resolved current branch, so Absorb can
+// reuse it without a second CurrentBranch read.
+func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	g := env.Git
 	cur, _, err := currentTracked(g, s)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := requireNoUnstaged(g); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	hunks, unsupported, err := g.DiffCachedHunks()
 	if err != nil {
-		return nil, fmt.Errorf("reading staged hunks: %w", err)
+		return nil, "", fmt.Errorf("reading staged hunks: %w", err)
 	}
 	res := &AbsorbResult{Absorbed: []AbsorbedHunk{}, Refused: []RefusedHunk{}, DryRun: true}
 	// Every staged section the parser could not classify as text hunks is a
@@ -79,37 +86,21 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	}
 	if len(hunks) == 0 && len(res.Refused) == 0 {
 		res.Summary = "nothing to absorb"
-		return res, nil
+		return res, cur, nil
 	}
 
 	// Stack set = commits reachable from the current branch but not from the
-	// trunk — exactly `git rev-list trunk..HEAD`, from the existing port.
-	curTip, err := g.RevParse(branchTipRef(cur))
+	// trunk — one bounded `git rev-list trunk..cur` (CommitRange). The old
+	// two-AncestorSet subtraction walked the ENTIRE trunk history for the
+	// same set.
+	stackSet, err := g.CommitRange(branchTipRef(s.Trunk), branchTipRef(cur))
 	if err != nil {
-		return nil, fmt.Errorf("resolve %q: %w", cur, err)
-	}
-	trunkTip, err := g.RevParse(branchTipRef(s.Trunk))
-	if err != nil {
-		return nil, fmt.Errorf("resolve trunk %q: %w", s.Trunk, err)
-	}
-	curSet, err := g.AncestorSet(curTip)
-	if err != nil {
-		return nil, fmt.Errorf("walk %q: %w", cur, err)
-	}
-	trunkSet, err := g.AncestorSet(trunkTip)
-	if err != nil {
-		return nil, fmt.Errorf("walk trunk %q: %w", s.Trunk, err)
-	}
-	stackSet := make(map[string]bool, len(curSet))
-	for sha := range curSet {
-		if !trunkSet[sha] {
-			stackSet[sha] = true
-		}
+		return nil, "", fmt.Errorf("walk %s..%s: %w", s.Trunk, cur, err)
 	}
 
 	tips, err := g.TipsFor(stateTipNames(s))
 	if err != nil {
-		return nil, fmt.Errorf("read branch tips: %w", err)
+		return nil, "", fmt.Errorf("read branch tips: %w", err)
 	}
 	tipToBranch := make(map[string]string, len(tips))
 	for name, tip := range tips {
@@ -131,7 +122,7 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 		if !ok {
 			blame, err = g.BlamePorcelain(h.File, "HEAD")
 			if err != nil {
-				return nil, fmt.Errorf("blame %q: %w", h.File, err)
+				return nil, "", fmt.Errorf("blame %q: %w", h.File, err)
 			}
 			blameByFile[h.File] = blame
 		}
@@ -176,7 +167,7 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 		}
 	}
 	res.Summary = fmt.Sprintf("would absorb %d hunk(s); refused %d", len(res.Absorbed), len(res.Refused))
-	return res, nil
+	return res, cur, nil
 }
 
 // Absorb applies the attribution plan when it names exactly one target branch
@@ -188,7 +179,7 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 // owner worktree) returns the plan as data, unapplied — never an error.
 func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	g := env.Git
-	plan, err := AbsorbPlan(env, s)
+	plan, cur, err := absorbPlan(env, s)
 	if err != nil {
 		return nil, err
 	}
@@ -200,11 +191,6 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 		plan.Summary = "not applied: absorb v1 handles a single target with no refusals; " + plan.Summary
 		return plan, nil
 	}
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return nil, err
-	}
-
 	// Resolve where the target lives. A dirty owner worktree is skipped loudly
 	// (its uncommitted work is never clobbered by the post-amend sync).
 	ownerDir := ""

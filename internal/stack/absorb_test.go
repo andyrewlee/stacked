@@ -351,6 +351,32 @@ func TestAbsorbApply(t *testing.T) {
 	})
 }
 
+// TestAbsorbPlanSpawnDiet is a deliberate perf ratchet in the style of
+// restack_spawn_test.go: it pins the spawn STRATEGY, not behavior. The stack
+// set comes from one bounded CommitRange (no per-tip RevParse, no unbounded
+// AncestorSet trunk walk) and the current branch is read exactly once.
+func TestAbsorbPlanSpawnDiet(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+
+	if _, err := AbsorbPlan(env, s); err != nil {
+		t.Fatalf("AbsorbPlan: %v", err)
+	}
+	if spy.revParseCalls != 0 {
+		t.Fatalf("revParseCalls = %d, want 0 (tips resolve inside the one CommitRange)", spy.revParseCalls)
+	}
+	if spy.currentBranchCalls != 1 {
+		t.Fatalf("currentBranchCalls = %d, want exactly the single currentTracked read", spy.currentBranchCalls)
+	}
+	if spy.ancestorSetCalls != 0 || spy.commitRangeCalls != 1 {
+		t.Fatalf("ancestorSet/commitRange = %d/%d, want 0/1 (the bounded range walk)", spy.ancestorSetCalls, spy.commitRangeCalls)
+	}
+}
+
 // TestAbsorbPlanGuards pins the absorb-local preconditions: nothing staged is
 // a clean no-op, and UNSTAGED changes refuse (while a staged index — dirty by
 // requireClean's standard — is precisely absorb's input and allowed).

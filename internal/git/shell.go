@@ -55,7 +55,10 @@ func (Shell) RebaseHeadName() (string, error)                 { return RebaseHea
 func (Shell) RebaseContinue() error                           { return RebaseContinue() }
 func (Shell) RebaseAbort() error                              { return RebaseAbort() }
 func (Shell) AncestorSet(ref string) (map[string]bool, error) { return AncestorSet(ref) }
-func (Shell) Worktrees() ([]Worktree, error)                  { return Worktrees() }
+func (Shell) CommitRange(exclude, include string) (map[string]bool, error) {
+	return CommitRange(exclude, include)
+}
+func (Shell) Worktrees() ([]Worktree, error) { return Worktrees() }
 func (Shell) RebaseOntoIn(dir, newBase, oldBase, br string) error {
 	return RebaseOntoIn(dir, newBase, oldBase, br)
 }

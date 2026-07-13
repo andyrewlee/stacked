@@ -1472,6 +1472,44 @@ func TestResetHardIn(t *testing.T) {
 	}
 }
 
+// TestCommitRange pins the bounded range walk: exclude..include semantics
+// (shared history AND trunk-only commits excluded), the empty range, and the
+// injection guards.
+func TestCommitRange(t *testing.T) {
+	newRepo(t)
+	commit := func(name, content string) string {
+		writeFile(t, name, content)
+		mustGit(t, "add", "-A")
+		mustGit(t, "commit", "-q", "-m", name)
+		return mustGit(t, "rev-parse", "HEAD")
+	}
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	b := commit("b.txt", "b\n")
+	c := commit("c.txt", "c\n")
+	mustGit(t, "checkout", "-q", "main")
+	d := commit("d.txt", "d\n") // trunk advanced past the branch point
+
+	set, err := CommitRange("main", "feat")
+	if err != nil {
+		t.Fatalf("CommitRange: %v", err)
+	}
+	if len(set) != 2 || !set[b] || !set[c] || set[d] {
+		t.Fatalf("main..feat = %v, want exactly {B,C} (D on the advanced trunk excluded)", set)
+	}
+
+	empty, err := CommitRange("feat", "feat")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("feat..feat = %v, %v; want empty, nil", empty, err)
+	}
+
+	if _, err := CommitRange("--evil", "feat"); err == nil {
+		t.Fatal("CommitRange accepted a flag-like exclude ref")
+	}
+	if _, err := CommitRange("main", "-bad"); err == nil {
+		t.Fatal("CommitRange accepted a flag-like include ref")
+	}
+}
+
 // TestBlamePorcelain pins the porcelain parser: each line maps to the SHA
 // that last touched it, across two commits.
 func TestBlamePorcelain(t *testing.T) {

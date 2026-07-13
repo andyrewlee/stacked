@@ -1266,16 +1266,40 @@ func AncestorSet(ref string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return revListSet(out), nil
+}
+
+// CommitRange returns the set of commit SHAs reachable from include but not
+// from exclude — `git rev-list include ^exclude`, i.e. exclude..include — in
+// one bounded invocation. Unlike AncestorSet the walk stops at the excluded
+// history, so the cost is O(range size), not O(repo history). The "^" prefix
+// on the exclude ref also means it can never be parsed as an option.
+func CommitRange(exclude, include string) (map[string]bool, error) {
+	if err := validRefArg("ref", exclude); err != nil {
+		return nil, err
+	}
+	if err := validRefArg("ref", include); err != nil {
+		return nil, err
+	}
+	out, err := Run("rev-list", localBranchRef(include), "^"+localBranchRef(exclude))
+	if err != nil {
+		return nil, err
+	}
+	return revListSet(out), nil
+}
+
+// revListSet splits rev-list output into a SHA set.
+func revListSet(out string) map[string]bool {
 	set := map[string]bool{}
 	if out == "" {
-		return set, nil
+		return set
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if line != "" {
 			set[line] = true
 		}
 	}
-	return set, nil
+	return set
 }
 
 // GitDir returns the absolute path to the repository's .git directory.

@@ -162,6 +162,8 @@ type tipReadSpyGit struct {
 	tipsCalls          int
 	tipsForCalls       int
 	currentBranchCalls int
+	ancestorSetCalls   int
+	commitRangeCalls   int
 	tipsForNames       [][]string
 }
 
@@ -184,6 +186,16 @@ func (g *tipReadSpyGit) TipsFor(names []string) (map[string]string, error) {
 	g.tipsForCalls++
 	g.tipsForNames = append(g.tipsForNames, append([]string(nil), names...))
 	return g.Git.TipsFor(names)
+}
+
+func (g *tipReadSpyGit) AncestorSet(ref string) (map[string]bool, error) {
+	g.ancestorSetCalls++
+	return g.Git.AncestorSet(ref)
+}
+
+func (g *tipReadSpyGit) CommitRange(exclude, include string) (map[string]bool, error) {
+	g.commitRangeCalls++
+	return g.Git.CommitRange(exclude, include)
 }
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
@@ -629,6 +641,26 @@ func (f *fakeGit) AncestorSet(ref string) (map[string]bool, error) {
 	}
 	set := map[string]bool{}
 	for cur := start; cur != ""; cur = f.commits[cur].parent {
+		set[cur] = true
+	}
+	return set, nil
+}
+
+// CommitRange mirrors `rev-list include ^exclude` over the fake's linear
+// parent chains: walk from include, stopping at anything reachable from
+// exclude.
+func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) {
+	to := f.resolve(include)
+	ex := f.resolve(exclude)
+	if to == "" || ex == "" {
+		return nil, fmt.Errorf("unknown revision in range %q..%q", exclude, include)
+	}
+	excluded := map[string]bool{}
+	for cur := ex; cur != ""; cur = f.commits[cur].parent {
+		excluded[cur] = true
+	}
+	set := map[string]bool{}
+	for cur := to; cur != "" && !excluded[cur]; cur = f.commits[cur].parent {
 		set[cur] = true
 	}
 	return set, nil

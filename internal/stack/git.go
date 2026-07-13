@@ -49,6 +49,9 @@ type Git interface {
 	// AncestorSet returns the set of commit SHAs reachable from ref, so callers
 	// can answer many ancestry questions about ref with map lookups.
 	AncestorSet(ref string) (map[string]bool, error)
+	// CommitRange returns the SHAs in exclude..include (reachable from
+	// include, not from exclude) in one bounded rev-list walk.
+	CommitRange(exclude, include string) (map[string]bool, error)
 	// Worktrees returns every worktree linked to the repository (including the
 	// main worktree), parsed from `git worktree list --porcelain`.
 	Worktrees() ([]git.Worktree, error)
