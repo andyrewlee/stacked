@@ -13,7 +13,7 @@ import (
 // resolves ownership per branch — so an unmemoized probe spawns the same git
 // subprocess many times in a single command. The cache stays correct because
 // every worktree-mutating AND HEAD-moving site invalidates it via
-// resetWorktreeCache(): the cached port's WorktreeRemove/Checkout/CheckoutDetach
+// resetWorktreeCache(): the cached port's WorktreeRemove/Checkout/CheckoutDetach/RenameBranch
 // overrides (cmd/gitenv.go) cover engine-driven removals and checkouts, and the
 // cmd layer's direct git.WorktreeAdd/git.WorktreeRemove calls (materializeWorktree
 // and worktreeRemove in cmd/worktree.go, including the copy-failure rollback)

@@ -115,6 +115,33 @@ func teleportHintForTerminal(branch, dest string) string {
 	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", safeBranch, safeDest, safeDest)
 }
 
+// navSummaryForTerminal is navSummary with branch/dest field-sanitized for
+// terminal output: control bytes in a worktree PATH (including \n/\t, which
+// are legal in unix paths) escape, while the teleport template's structural
+// newline survives. JSON callers keep the raw navSummary. This deliberately
+// restores part of the per-field strictness the #144 collapse traded away —
+// only where a filesystem path is interpolated.
+func navSummaryForTerminal(verb, branch, dest string) string {
+	if dest == "" {
+		return fmt.Sprintf("%s %s", verb, sanitizeForTerminal(branch))
+	}
+	if shimActive() {
+		return fmt.Sprintf("%s %s (worktree: %s)", verb, sanitizeForTerminal(branch), sanitizeForTerminal(dest))
+	}
+	return teleportHintForTerminal(branch, dest)
+}
+
+// topSummaryForTerminal mirrors topSummary with the same field sanitizing.
+func topSummaryForTerminal(branch, dest string) string {
+	if dest == "" {
+		return fmt.Sprintf("switched to %s (top of stack)", sanitizeForTerminal(branch))
+	}
+	if shimActive() {
+		return fmt.Sprintf("switched to %s (top of stack, worktree: %s)", sanitizeForTerminal(branch), sanitizeForTerminal(dest))
+	}
+	return teleportHintForTerminal(branch, dest)
+}
+
 func branchPointSummaryForTerminal(branch string) string {
 	return fmt.Sprintf("multiple children of %s; pick one and run \"st checkout <name>\":", sanitizeForTerminal(branch))
 }

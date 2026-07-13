@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // This file pins the Phase-3 UX/logistical fixes (F1-F3, F6) found by driving
@@ -97,5 +99,51 @@ func TestSyncLocalWhenDefaultRemoteAbsent(t *testing.T) {
 	mustCreate(t, "feat", "f.txt", "x\n", "feat")
 	if err := runSync(nil); err != nil {
 		t.Fatalf("local sync with no remote should succeed: %v", err)
+	}
+}
+
+// TestRenameInvalidatesWorktreeCache pins the cachedShell RenameBranch
+// override: after an in-process rename of a branch owning a linked worktree,
+// a fresh worktrees() read reports the NEW name, not the cached pre-rename
+// ownership.
+func TestRenameInvalidatesWorktreeCache(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat", "f.txt", "x\n", "feat")
+	mustRun(t, "git", "checkout", "-q", "main")
+	resetWorktreeCache()
+	if err := runWorktree([]string{"feat"}); err != nil {
+		t.Fatalf("worktree feat: %v", err)
+	}
+	// Warm the cache, then rename through the cached port (as engine ops do).
+	if _, err := worktrees(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (cachedShell{}).RenameBranch("feat", "feat-renamed"); err != nil {
+		t.Fatalf("RenameBranch: %v", err)
+	}
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stack.LinkedOwnerOf(wts, "feat"); ok {
+		t.Fatal("stale cache: old name still owns a worktree after rename")
+	}
+	if _, ok := stack.LinkedOwnerOf(wts, "feat-renamed"); !ok {
+		t.Fatal("fresh read is missing the renamed branch's worktree ownership")
+	}
+
+	// The quiet (JSON-mode) shell carries the same override: rename back
+	// through it and assert the cache refreshes again.
+	if err := (cachedQuietShell{}).RenameBranch("feat-renamed", "feat"); err != nil {
+		t.Fatalf("quiet RenameBranch: %v", err)
+	}
+	wts, err = worktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stack.LinkedOwnerOf(wts, "feat"); !ok {
+		t.Fatal("quiet-shell rename did not refresh the cache")
 	}
 }

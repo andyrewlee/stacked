@@ -187,3 +187,24 @@ func TestCheckoutUntrackedError(t *testing.T) {
 		t.Fatalf("expected error checking out an untracked branch")
 	}
 }
+
+// TestNavSummaryForTerminalEscapesPathControls pins the terminal twins: a
+// worktree path carrying \n/\t (legal in unix paths) escapes to \x0a/\x09,
+// while the teleport template's single structural newline survives.
+func TestNavSummaryForTerminalEscapesPathControls(t *testing.T) {
+	t.Setenv("ST_CD_FILE", "") // shim inactive: the teleport-hint arm renders
+	got := navSummaryForTerminal("switched to", "feat", "/tmp/evil\npath\twt")
+	if !strings.Contains(got, `\x0a`) || !strings.Contains(got, `\x09`) {
+		t.Fatalf("summary = %q, want \\x0a and \\x09 escapes for the path's control bytes", got)
+	}
+	if strings.Count(got, "\n") != 1 {
+		t.Fatalf("summary = %q, want exactly ONE structural newline (the template's)", got)
+	}
+	if strings.Contains(got, "\t") {
+		t.Fatalf("summary = %q, must not carry a raw tab", got)
+	}
+	top := topSummaryForTerminal("feat", "/tmp/evil\npath\twt")
+	if !strings.Contains(top, `\x0a`) || strings.Count(top, "\n") != 1 {
+		t.Fatalf("topSummary = %q, want escaped path with one structural newline", top)
+	}
+}
