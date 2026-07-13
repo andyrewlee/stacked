@@ -119,5 +119,6 @@ branch with zero refusals (amend the owning tip via a temp-index — no checkout
 — then one cascade restack; one undo entry reverts both). Everything ambiguous
 is refused loudly: multi-target plans, hunks spanning commits, pure additions,
 lines owned by trunk/history, and non-tip targets (splitting hunks or rewriting
-mid-branch commits is out of scope). See `plans/058-spike-absorb-design.md`
-for the design.
+mid-branch commits is out of scope). The design rationale lives in the PR
+bodies of the two absorb slices (#155/#156) and the doc comments in
+`internal/stack/absorb.go`.

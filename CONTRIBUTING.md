@@ -90,7 +90,7 @@ A historical manual-QA snapshot lives at `docs/qa/FEATURE_STORIES.csv`
 Releases are cut from a tag:
 
 ```sh
-git tag v0.2.0
+git tag vX.Y.Z          # must match defaultVersion in cmd/root.go
 make release          # build and publish the release (needs a publish token)
 # or dry-run locally:
 make snapshot         # build the release artifacts without publishing

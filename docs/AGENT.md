@@ -65,6 +65,21 @@ message.
   feat-a: its worktree is dirty (…)"`) rather than clobbered. `continue` resumes an interrupted restack,
   emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
   `notes` entry naming the branch whose conflict was just completed.
+- **`absorb --json`** — its own shape, NOT the shared one:
+  ```json
+  { "summary": "...", "absorbed": [{ "file", "lines", "branch", "commit" }],
+    "refused": [{ "file", "lines", "reason" }], "restacked": [], "notes": [],
+    "dryRun": true }
+  ```
+  `restacked`, `notes`, and `dryRun` are `omitempty`. `--dry-run` maps staged
+  hunks to the stack commits owning their lines with zero mutation
+  (`"dryRun": true`). Bare `absorb` applies ONLY a plan naming a single target
+  branch with zero refusals — anything wider comes back unapplied with the
+  summary prefixed `"not applied: ..."` and exit 0 (refusals are data, not
+  errors). An applied absorb reports the amended tip in `absorbed[].commit`
+  and the cascaded branches in `restacked`; a conflict mid-cascade exits 2
+  for `st continue`/`st abort`, and one `st undo` reverts the amend plus the
+  cascade.
 - **`create --worktree --json`** — creates and tracks the branch without moving
   the current worktree, materializes the new branch's linked worktree, copies
   `.worktreeinclude` entries, and returns
@@ -89,14 +104,16 @@ message.
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
-- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }`. `st shell install` emits a shell script, not JSON.
+- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip dirty/main-worktree branches into `skipped`. `st shell install` emits a shell script, not JSON.
 - **`submit --json`** — one shape for every outcome:
   `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "summary", "failed" }`
   (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
   `pushed` is empty and `summary` explains why). On successful non-trunk submits,
   `prHints` lists `{ "head", "base", "compareURL" }` objects so each stacked PR
   targets its stack parent; `compareURL` is present for known compare URL shapes
-  such as github.com and gitlab.com. On a partial push failure the result is the
+  (github.com, gitlab.com, and self-hosted hosts whose name carries a
+  `github`/`gitlab` label); for unrecognized hosts the hint object still
+  carries `head`/`base` but `compareURL` is simply absent. On a partial push failure the result is the
   same shape carrying `{ "remote", "dryRun", "pushed", "failed" }`: `failed` names the
   branch whose push failed, the branches in `pushed` were already pushed to the
   remote, and the process still exits non-zero with the error envelope on stderr.
