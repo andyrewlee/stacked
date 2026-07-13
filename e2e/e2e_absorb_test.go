@@ -112,6 +112,126 @@ func TestAbsorbApplyJourney(t *testing.T) {
 	r.stOK("validate")
 }
 
+// absorbConflictFixture builds the adjacency fixture: feat-a owns line 1,
+// feat-b edits the ADJACENT line 2, so absorbing a line-1 edit forces a
+// genuine rebase conflict when feat-b cascades onto the amended feat-a. It
+// stages the conflicting edit, runs bare absorb, asserts exit code 2 with
+// the amend landed and a rebase paused, and returns the pre-absorb tips.
+func absorbConflictFixture(t *testing.T, r *repo) map[string]string {
+	t.Helper()
+	r.initStack()
+	r.writeFile("shared.txt", "A0\nB0\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "seed")
+	r.create("feat-a", "shared.txt", "A1\nB0\n", "a")
+	r.create("feat-b", "shared.txt", "A1\nB1\n", "b")
+
+	tipsBefore := map[string]string{}
+	for _, b := range []string{"main", "feat-a", "feat-b"} {
+		tipsBefore[b] = r.rev(b)
+	}
+	r.writeFile("shared.txt", "A2\nB1\n")
+	r.git("add", "shared.txt")
+
+	res := r.st("absorb")
+	if res.exitCode != 2 {
+		t.Fatalf("absorb exit = %d, want 2 (conflict)\nstdout:\n%s\nstderr:\n%s", res.exitCode, res.stdout, res.stderr)
+	}
+	if r.rev("feat-a") == tipsBefore["feat-a"] {
+		t.Fatal("feat-a tip unchanged; the amend should land before the cascade conflicts")
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); err != nil {
+		t.Fatalf("expected a paused rebase after the absorb conflict: %v", err)
+	}
+	return tipsBefore
+}
+
+// TestAbsorbConflictContinueJourney proves the dangerous half of absorb: the
+// amend lands, the staged copy is gone, the cascade conflicts — and
+// `st continue` still reconciles the stack with the edit preserved.
+func TestAbsorbConflictContinueJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	absorbConflictFixture(t, r)
+
+	// Resolve the conflict in feat-b's favor of both edits and continue.
+	r.writeFile("shared.txt", "A2\nB1\n")
+	r.git("add", "shared.txt")
+	r.stOK("continue")
+
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("status = %q, want a clean tree after continue", got)
+	}
+	if got := r.git("show", "feat-b:shared.txt"); got != "A2\nB1" {
+		t.Fatalf("feat-b:shared.txt = %q, want the absorbed edit plus feat-b's line", got)
+	}
+	r.stOK("validate")
+}
+
+// TestAbsorbConflictAbortUndoJourney proves the other recovery: abort the
+// paused cascade, then one undo restores every pre-absorb tip.
+func TestAbsorbConflictAbortUndoJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	tipsBefore := absorbConflictFixture(t, r)
+
+	r.stOK("abort")
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); !os.IsNotExist(err) {
+		t.Fatalf("rebase still in progress after abort: %v", err)
+	}
+	r.stOK("validate")
+
+	undoOut := r.stOK("undo").stdout
+	for b, tip := range tipsBefore {
+		if got := r.rev(b); got != tip {
+			t.Fatalf("%s = %s after undo, want restored %s\nundo output:\n%s", b, got, tip, undoOut)
+		}
+	}
+	// Undo restores refs, never the working tree (documented); the edit
+	// stays reachable in the dangling amended commit. The repo must be usable.
+	r.stOK("status")
+}
+
+// TestAbsorbMultiHunkSingleTarget pins the most common real absorb: two
+// separated staged edits both owned by ONE branch land in a single amend.
+func TestAbsorbMultiHunkSingleTarget(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.writeFile("shared.txt", "A0\np\nq\nr\ns\nt\nZ0\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "seed")
+	// feat-a owns lines 1 AND 7.
+	r.create("feat-a", "shared.txt", "A1\np\nq\nr\ns\nt\nZ1\n", "a")
+
+	tipBefore := r.rev("feat-a")
+	r.writeFile("shared.txt", "A2\np\nq\nr\ns\nt\nZ2\n")
+	r.git("add", "shared.txt")
+
+	out := r.stOK("absorb", "--json").stdout
+	var res struct {
+		Absorbed []struct {
+			Branch string `json:"branch"`
+			Lines  string `json:"lines"`
+		} `json:"absorbed"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode absorb json: %v\n%s", err, out)
+	}
+	if len(res.Absorbed) != 2 || res.Absorbed[0].Branch != "feat-a" || res.Absorbed[1].Branch != "feat-a" {
+		t.Fatalf("absorbed = %+v, want two hunks both into feat-a", res.Absorbed)
+	}
+	if r.rev("feat-a") == tipBefore {
+		t.Fatal("feat-a tip unchanged")
+	}
+	if got := r.git("show", "feat-a:shared.txt"); got != "A2\np\nq\nr\ns\nt\nZ2" {
+		t.Fatalf("feat-a:shared.txt = %q, want both edits landed in one amend", got)
+	}
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("status = %q, want clean", got)
+	}
+}
+
 // TestAbsorbRefusesModeRideAlong pins the classify-or-refuse gate end to end:
 // a cleanly absorbable text hunk co-staged with a chmod on another file must
 // come back unapplied (the mode bit would otherwise silently ride the applied
