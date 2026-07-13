@@ -127,14 +127,18 @@ func TestAbsorbRefusesModeRideAlong(t *testing.T) {
 	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
 
 	tipBefore := r.rev("feat-a")
-	// A single-target text edit plus a staged chmod on tool.sh (worktree and
-	// index agree on the new mode, so only the STAGED set carries it).
+	// A single-target text edit plus a staged chmod on tool.sh. The chmod is
+	// applied to BOTH the worktree file and the index: on unix the two must
+	// agree or the unstaged-mode guard fires first; on Windows
+	// core.filemode=false makes the worktree bit invisible to git, so only
+	// the explicit update-index staging creates the mode change there.
 	r.writeFile("shared.txt", "A2\np\nq\nB0\n")
 	r.git("add", "shared.txt")
 	if err := os.Chmod(filepath.Join(r.dir, "tool.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r.git("add", "tool.sh")
+	r.git("update-index", "--chmod=+x", "tool.sh")
 
 	res := r.stOK("absorb")
 	if !strings.Contains(res.stdout, "not applied:") || !strings.Contains(res.stdout, "mode change") {
