@@ -162,6 +162,18 @@ func LinkedOwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool)
 // current branch here) it returns false, so the in-place rebase path is taken
 // and existing behavior is preserved. The returned Worktree is branch's owner.
 func (s *State) ownerElsewhere(g Git, branch string) (git.Worktree, bool, error) {
+	return s.ownerElsewhereWith(g, branch, "")
+}
+
+// ownerElsewhereWith is ownerElsewhere with the caller's known current branch
+// as a hint: the restack cascade already threads HEAD's position
+// (expectedHEAD), so passing it avoids one CurrentBranch spawn per
+// worktree-owned branch. curHint == "" means unknown (detached HEAD, or a
+// caller without the threading discipline) and falls back to the live read.
+// The fallback deliberately ignores the CurrentBranch error, exactly like the
+// original: on a detached HEAD cur is "" and the branch counts as owned
+// elsewhere.
+func (s *State) ownerElsewhereWith(g Git, branch, curHint string) (git.Worktree, bool, error) {
 	wts, err := g.Worktrees()
 	if err != nil {
 		return git.Worktree{}, false, err
@@ -173,7 +185,10 @@ func (s *State) ownerElsewhere(g Git, branch string) (git.Worktree, bool, error)
 	if !ok {
 		return git.Worktree{}, false, nil // not checked out anywhere: rebase here
 	}
-	cur, _ := g.CurrentBranch()
+	cur := curHint
+	if cur == "" {
+		cur, _ = g.CurrentBranch()
+	}
 	if branch == cur {
 		return git.Worktree{}, false, nil // checked out HERE: rebase in place
 	}
