@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`st absorb` applies multi-target plans.** A staged set whose hunks belong
+  to different stack branches now lands as one amend per owning tip (each
+  with only its own hunks, post-image line numbers corrected for same-file
+  splits) plus a single cascade restack; one `st undo` reverts everything.
+  All-or-nothing: any refusal or dirty target worktree leaves the whole plan
+  unapplied.
+
+
 ## [0.0.1] - 2026-07-12
 
 ### Added

@@ -192,6 +192,83 @@ func TestAbsorbConflictAbortUndoJourney(t *testing.T) {
 	r.stOK("status")
 }
 
+// TestAbsorbMultiTargetJourney proves absorb v2 end to end: one staged set
+// carrying edits owned by TWO different stack branches lands as two in-place
+// amends plus one cascade, the top of the stack carries both edits, the tree
+// ends clean, and a single st undo restores every tip.
+func TestAbsorbMultiTargetJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.writeFile("shared.txt", "A0\np\nq\nB0\nr\ns\nC0\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "seed")
+	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\nr\ns\nC0\n", "a")
+	r.create("feat-b", "shared.txt", "A1\np\nq\nB1\nr\ns\nC0\n", "b")
+	r.create("feat-c", "shared.txt", "A1\np\nq\nB1\nr\ns\nC1\n", "c")
+
+	tipsBefore := map[string]string{}
+	for _, b := range []string{"main", "feat-a", "feat-b", "feat-c"} {
+		tipsBefore[b] = r.rev(b)
+	}
+	parentABefore := r.rev("feat-a^")
+
+	// One staged set editing feat-a's line 1 AND feat-b's line 4.
+	r.writeFile("shared.txt", "A2\np\nq\nB2\nr\ns\nC1\n")
+	r.git("add", "shared.txt")
+
+	out := r.stOK("absorb", "--json").stdout
+	var res struct {
+		Absorbed []struct {
+			Branch string `json:"branch"`
+			Commit string `json:"commit"`
+		} `json:"absorbed"`
+		Restacked []string `json:"restacked"`
+		DryRun    bool     `json:"dryRun"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode absorb json: %v\n%s", err, out)
+	}
+	if res.DryRun || len(res.Absorbed) != 2 {
+		t.Fatalf("result = %+v, want two applied hunks", res)
+	}
+	if res.Absorbed[0].Branch != "feat-a" || res.Absorbed[1].Branch != "feat-b" {
+		t.Fatalf("absorbed = %+v, want feat-a then feat-b", res.Absorbed)
+	}
+	// Both amended in place: feat-a's parent unchanged; each reported commit
+	// is the branch's live tip.
+	if r.rev("feat-a") == tipsBefore["feat-a"] || r.rev("feat-b") == tipsBefore["feat-b"] {
+		t.Fatal("both target tips must move")
+	}
+	if got := r.rev("feat-a^"); got != parentABefore {
+		t.Fatalf("feat-a^ = %s, want unchanged %s", got, parentABefore)
+	}
+	if res.Absorbed[0].Commit != r.rev("feat-a") || res.Absorbed[1].Commit != r.rev("feat-b") {
+		t.Fatalf("absorbed commits = %+v, want the LIVE post-cascade tips", res.Absorbed)
+	}
+	if got := r.git("show", "feat-a:shared.txt"); got != "A2\np\nq\nB0\nr\ns\nC0" {
+		t.Fatalf("feat-a:shared.txt = %q, want ONLY feat-a's edit", got)
+	}
+	if got := r.git("show", "feat-b:shared.txt"); got != "A2\np\nq\nB2\nr\ns\nC0" {
+		t.Fatalf("feat-b:shared.txt = %q, want both edits below feat-c", got)
+	}
+	if got := r.git("show", "feat-c:shared.txt"); got != "A2\np\nq\nB2\nr\ns\nC1" {
+		t.Fatalf("feat-c:shared.txt = %q, want the full stack content", got)
+	}
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("status = %q, want clean", got)
+	}
+	r.stOK("validate")
+
+	undoOut := r.stOK("undo").stdout
+	for b, tip := range tipsBefore {
+		if got := r.rev(b); got != tip {
+			t.Fatalf("%s = %s after undo, want %s\n%s", b, got, tip, undoOut)
+		}
+	}
+	r.stOK("validate")
+}
+
 // TestAbsorbMultiHunkSingleTarget pins the most common real absorb: two
 // separated staged edits both owned by ONE branch land in a single amend.
 func TestAbsorbMultiHunkSingleTarget(t *testing.T) {
@@ -269,37 +346,5 @@ func TestAbsorbRefusesModeRideAlong(t *testing.T) {
 	}
 	if diff := r.git("diff", "--cached", "--name-only"); !strings.Contains(diff, "shared.txt") || !strings.Contains(diff, "tool.sh") {
 		t.Fatalf("refused absorb disturbed the staged set; diff --cached = %q", diff)
-	}
-}
-
-// TestAbsorbApplyRefusesMultiTarget pins the v1 single-target gate end to end:
-// staged hunks attributed to two different branches come back as an unapplied
-// plan (exit 0, refs untouched, edit still staged).
-func TestAbsorbApplyRefusesMultiTarget(t *testing.T) {
-	t.Parallel()
-	r := newRepo(t)
-	r.initStack()
-	r.writeFile("shared.txt", "A0\np\nq\nB0\n")
-	r.git("add", "shared.txt")
-	r.git("commit", "-q", "-m", "seed")
-	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
-	r.create("feat-b", "shared.txt", "A1\np\nq\nB1\n", "b")
-
-	tipsBefore := map[string]string{"feat-a": r.rev("feat-a"), "feat-b": r.rev("feat-b")}
-	// Line 1 is feat-a's, line 4 is feat-b's: two targets in one staged set.
-	r.writeFile("shared.txt", "A2\np\nq\nB2\n")
-	r.git("add", "shared.txt")
-
-	res := r.stOK("absorb")
-	if !strings.Contains(res.stdout, "not applied: absorb v1 handles a single target") {
-		t.Fatalf("stdout = %q, want the not-applied summary", res.stdout)
-	}
-	for b, tip := range tipsBefore {
-		if r.rev(b) != tip {
-			t.Fatalf("%s moved during an unapplied absorb", b)
-		}
-	}
-	if diff := r.git("diff", "--cached", "--name-only"); !strings.Contains(diff, "shared.txt") {
-		t.Fatalf("unapplied absorb unstaged the edit; diff --cached = %q", diff)
 	}
 }

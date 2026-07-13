@@ -73,10 +73,11 @@ message.
   ```
   `restacked`, `notes`, and `dryRun` are `omitempty`. `--dry-run` maps staged
   hunks to the stack commits owning their lines with zero mutation
-  (`"dryRun": true`). Bare `absorb` applies ONLY a plan naming a single target
-  branch with zero refusals — anything wider comes back unapplied with the
-  summary prefixed `"not applied: ..."` and exit 0 (refusals are data, not
-  errors). An applied absorb reports the amended tip in `absorbed[].commit`
+  (`"dryRun": true`). Bare `absorb` applies any plan with ZERO refusals — multi-target
+  plans amend each owning tip with its own hunks and run one cascade; any
+  refusal (or a dirty target worktree) comes back unapplied with the summary
+  prefixed `"not applied: ..."` and exit 0 (refusals are data, not errors).
+  `absorbed[].commit` reports each branch's live post-cascade tip. An applied absorb reports the amended tip in `absorbed[].commit`
   and the cascaded branches in `restacked`; a conflict mid-cascade exits 2
   for `st continue`/`st abort`, and one `st undo` reverts the amend plus the
   cascade.

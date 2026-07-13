@@ -227,7 +227,9 @@ func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]string, error) {
 	return f.blame[file], nil
 }
 
-func (f *fakeGit) DiffCachedPatch() ([]byte, error) { return f.stagedPatch, nil }
+// DiffCachedPatchFor ignores the hunk selection (patch content is not
+// modeled; real reassembly is proven by the git-level and e2e tests).
+func (f *fakeGit) DiffCachedPatchFor(_ []git.Hunk) ([]byte, error) { return f.stagedPatch, nil }
 
 // AmendTipWithPatch models the temp-index amend: the branch's tip is replaced
 // by a new commit with the same parent and subject (patch content is not

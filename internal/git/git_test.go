@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1470,6 +1471,79 @@ func TestResetHardIn(t *testing.T) {
 	if got := mustGit(t, "status", "--porcelain"); got != "" {
 		t.Fatalf("status = %q, want clean after reset --hard", got)
 	}
+}
+
+// TestDiffCachedPatchFor pins the per-target patch reassembler: only the
+// wanted hunks are emitted (headers verbatim, bodies intact), and when two
+// targets own different hunks of the SAME file, each assembled patch's
+// post-image numbers are corrected for the omitted hunks — proven by
+// round-tripping every assembled patch through `git apply --cached
+// --unidiff-zero --check` against a temp index of the pre-image tree.
+func TestDiffCachedPatchFor(t *testing.T) {
+	newRepo(t)
+	// Pre-image: 8 lines; stage an UNEQUAL-size edit early in the file (1
+	// line -> 3 lines, net +2) plus a single-line edit later — the later
+	// hunk's NewStart must shift by −2 when the earlier hunk is omitted.
+	writeFile(t, "f.txt", "a1\np\nq\nr\ns\nt\nu\nz1\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "seed")
+	tip := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "f.txt", "A1\nA2\nA3\np\nq\nr\ns\nt\nu\nZ1\n")
+	mustGit(t, "add", "f.txt")
+
+	hunks, unsupported, err := DiffCachedHunks()
+	if err != nil || len(hunks) != 2 || len(unsupported) != 0 {
+		t.Fatalf("fixture hunks = %+v (%v), unsupported=%v; want exactly two text hunks", hunks, err, unsupported)
+	}
+
+	applyCheck := func(t *testing.T, patch []byte) {
+		t.Helper()
+		tmp := filepath.Join(t.TempDir(), "idx")
+		env := append(os.Environ(), "LC_ALL=C", "GIT_INDEX_FILE="+tmp)
+		read := exec.Command("git", "read-tree", tip)
+		read.Env = env
+		if out, err := read.CombinedOutput(); err != nil {
+			t.Fatalf("read-tree: %v\n%s", err, out)
+		}
+		check := exec.Command("git", "apply", "--cached", "--unidiff-zero", "--check", "-")
+		check.Env = env
+		check.Stdin = bytes.NewReader(patch)
+		if out, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("assembled patch does not apply to the pre-image tree: %v\n%s\npatch:\n%s", err, out, patch)
+		}
+	}
+
+	// Each single-hunk selection round-trips against the pre-image tree.
+	first, err := DiffCachedPatchFor(hunks[:1])
+	if err != nil {
+		t.Fatalf("DiffCachedPatchFor(first): %v", err)
+	}
+	if !strings.Contains(string(first), "A2") || strings.Contains(string(first), "Z1") {
+		t.Fatalf("first patch carries the wrong hunks:\n%s", first)
+	}
+	applyCheck(t, first)
+
+	second, err := DiffCachedPatchFor(hunks[1:])
+	if err != nil {
+		t.Fatalf("DiffCachedPatchFor(second): %v", err)
+	}
+	if strings.Contains(string(second), "A2") || !strings.Contains(string(second), "Z1") {
+		t.Fatalf("second patch carries the wrong hunks:\n%s", second)
+	}
+	// The delta-correction: the omitted first hunk is net +2 lines, so the
+	// second hunk's NewStart must read 8 (its position with only ITS change),
+	// not the full-staged 10.
+	if !strings.Contains(string(second), "@@ -8 +8 @@") {
+		t.Fatalf("second patch header not delta-corrected:\n%s", second)
+	}
+	applyCheck(t, second)
+
+	// Selecting both reproduces the full patch semantics.
+	both, err := DiffCachedPatchFor(hunks)
+	if err != nil {
+		t.Fatalf("DiffCachedPatchFor(both): %v", err)
+	}
+	applyCheck(t, both)
 }
 
 // TestCommitRange pins the bounded range walk: exclude..include semantics

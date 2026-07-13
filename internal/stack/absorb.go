@@ -29,6 +29,10 @@ type AbsorbedHunk struct {
 	Lines  string `json:"lines"` // pre-image range, e.g. "2" or "3-4"
 	Branch string `json:"branch"`
 	Commit string `json:"commit"`
+
+	// hunk is the source tuple, kept for per-target patch reassembly
+	// (unexported: never marshaled).
+	hunk git.Hunk
 }
 
 // RefusedHunk is one staged hunk absorb will not touch, with the reason.
@@ -164,20 +168,24 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 				res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "target is not a branch tip; squash the branch or absorb manually"})
 				continue
 			}
-			res.Absorbed = append(res.Absorbed, AbsorbedHunk{File: h.File, Lines: lines, Branch: branch, Commit: target})
+			res.Absorbed = append(res.Absorbed, AbsorbedHunk{File: h.File, Lines: lines, Branch: branch, Commit: target, hunk: h})
 		}
 	}
 	res.Summary = fmt.Sprintf("would absorb %d hunk(s); refused %d", len(res.Absorbed), len(res.Refused))
 	return res, cur, nil
 }
 
-// Absorb applies the attribution plan when it names exactly one target branch
-// with zero refusals (the v1 apply slice). The staged patch is committed into
-// the target's tip via AmendTipWithPatch — a temp-index amend that touches no
-// worktree, so the user's edit is safely in a commit before any destructive
-// step — then ONE upstack cascade restacks the descendants and HEAD returns to
-// the starting branch. Anything wider (multiple targets, any refusal, a dirty
-// owner worktree) returns the plan as data, unapplied — never an error.
+// Absorb applies the attribution plan when every staged hunk attributed to
+// a tracked tip and nothing was refused. Each target branch's tip is amended
+// with ONLY its own hunks via AmendTipWithPatch — a temp-index amend that
+// touches no worktree, so the user's edits are safely in commits before any
+// destructive step — then ONE upstack cascade from the lowest amended target
+// restacks everything above it and HEAD returns to the starting branch. All
+// targets lie on the current branch's ancestor path (the stack set is
+// trunk..cur), so the lowest target's upstack covers every other target. Any
+// refusal, or a dirty owner worktree for any target, returns the plan as
+// data, unapplied — never an error; one undo entry reverts all amends plus
+// the cascade.
 func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	g := env.Git
 	plan, cur, err := absorbPlan(env, s)
@@ -187,15 +195,20 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	if len(plan.Absorbed) == 0 && len(plan.Refused) == 0 {
 		return plan, nil // nothing staged
 	}
-	target, ok := singleTarget(plan)
-	if !ok {
-		plan.Summary = "not applied: absorb v1 handles a single target with no refusals; " + plan.Summary
+	targets := targetsOf(s, plan)
+	if len(plan.Refused) > 0 || len(targets) == 0 {
+		plan.Summary = "not applied: absorb refuses to apply a plan with refusals; " + plan.Summary
 		return plan, nil
 	}
-	// Resolve where the target lives. A dirty owner worktree is skipped loudly
-	// (its uncommitted work is never clobbered by the post-amend sync).
-	ownerDir := ""
-	if target != cur {
+
+	// Pre-flight EVERY target's owner worktree before any mutation: absorb is
+	// all-or-nothing, so one dirty owner blocks the whole plan (a partial
+	// apply would fracture the one-undo-entry story).
+	ownerDirs := map[string]string{}
+	for _, target := range targets {
+		if target == cur {
+			continue
+		}
 		owner, elsewhere, err := s.ownerElsewhere(g, target)
 		if err != nil {
 			return nil, err
@@ -206,56 +219,86 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 				return nil, fmt.Errorf("checking worktree %s: %w", owner.Path, err)
 			}
 			if !clean {
-				plan.Summary = "not applied: the target's worktree is dirty; " + plan.Summary
+				plan.Summary = "not applied: a target's worktree is dirty; " + plan.Summary
 				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q is checked out in %s with uncommitted changes; commit or stash there first", target, owner.Path))
 				return plan, nil
 			}
-			ownerDir = owner.Path
+			ownerDirs[target] = owner.Path
 		}
 	}
 
-	patch, err := g.DiffCachedPatch()
-	if err != nil {
-		return nil, fmt.Errorf("capturing the staged patch: %w", err)
+	// Amend ancestors first (deterministic; the amends are independent — each
+	// reads only its own tip tree, and targets' hunks are line-disjoint by the
+	// multi-owner refusal). If amend k fails, amends 1..k-1 persist and the
+	// undo entry reverts them.
+	hunksByTarget := map[string][]git.Hunk{}
+	for _, a := range plan.Absorbed {
+		hunksByTarget[a.Branch] = append(hunksByTarget[a.Branch], a.hunk)
 	}
-	newTip, err := g.AmendTipWithPatch(target, patch)
-	if err != nil {
-		// Nothing was mutated: the temp-index apply is the pre-flight check.
-		return nil, fmt.Errorf("absorb: %w", err)
+	newTips := make(map[string]string, len(targets))
+	for _, target := range targets {
+		patch, err := g.DiffCachedPatchFor(hunksByTarget[target])
+		if err != nil {
+			return nil, fmt.Errorf("assembling %q's patch: %w", target, err)
+		}
+		newTip, err := g.AmendTipWithPatch(target, patch)
+		if err != nil {
+			// The temp-index apply is the pre-flight check: THIS target is
+			// untouched; earlier amends persist under the undo entry.
+			return nil, fmt.Errorf("absorb into %q: %w", target, err)
+		}
+		newTips[target] = newTip
 	}
-	// From here the staged content is committed at target's tip; the resets
-	// below only drop copies of it.
+	// From here every staged edit is committed at its target's tip; the
+	// resets below only drop copies.
 	for i := range plan.Absorbed {
-		plan.Absorbed[i].Commit = newTip
+		plan.Absorbed[i].Commit = newTips[plan.Absorbed[i].Branch]
 	}
-	if ownerDir != "" {
-		if err := g.ResetHardIn(ownerDir, "HEAD"); err != nil {
-			return nil, fmt.Errorf("syncing worktree %s to the amended %q: %w", ownerDir, target, err)
+	for target, dir := range ownerDirs {
+		if err := g.ResetHardIn(dir, "HEAD"); err != nil {
+			return nil, fmt.Errorf("syncing worktree %s to the amended %q: %w", dir, target, err)
 		}
 	}
-	if target != cur {
-		// Drop the staged copy from this worktree so the cascade can rebase;
-		// the edit now lives in target's tip and the restack re-delivers it.
+	soleTargetIsCur := len(targets) == 1 && targets[0] == cur
+	if !soleTargetIsCur {
+		// Drop the staged copies from this worktree so the cascade can
+		// rebase; the edits now live in their targets' tips and the restack
+		// re-delivers them. (When cur is the ONLY target its index
+		// self-resolves against the amended HEAD — no reset.)
 		if err := g.ResetHardIn("", "HEAD"); err != nil {
-			return nil, fmt.Errorf("dropping the absorbed staged copy: %w", err)
+			return nil, fmt.Errorf("dropping the absorbed staged copies: %w", err)
 		}
 	}
 
 	plan.DryRun = false
-	rebased, err := s.RestackUpstack(env, target)
+	lowest := targets[0]
+	rebased, err := s.RestackUpstack(env, lowest)
 	if err != nil {
 		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
-		// On a hard (non-conflict) cascade failure the staged copy is already
-		// gone from this worktree but the edit is committed in target's tip —
-		// say so, or it silently "vanishes" from where the user was working.
-		// A conflict needs no hint: the paused rebase + st continue is the
-		// documented path and re-delivers the edit itself.
-		if target != cur && !errors.Is(err, ErrConflict) {
-			err = fmt.Errorf("%w; your staged change is safely committed in %q — run: st restack (or st undo to revert the absorb)", err, target)
+		// On a hard (non-conflict) cascade failure the staged copies are
+		// already gone from this worktree but the edits are committed in the
+		// targets' tips — say so, or they silently "vanish" from where the
+		// user was working. A conflict needs no hint: the paused rebase +
+		// st continue is the documented path and re-delivers them itself.
+		soleTargetIsCur := len(targets) == 1 && targets[0] == cur
+		if !errors.Is(err, ErrConflict) && !soleTargetIsCur {
+			err = fmt.Errorf("%w; your staged changes are safely committed in %s — run: st restack (or st undo to revert the absorb)", err, joinComma(targets))
 		}
 		return nil, err
 	}
 	plan.Restacked = rebased
+	// The cascade rebases every target above the lowest, so the amend-time
+	// commits recorded above are stale for them — report each hunk's commit
+	// as its branch's live post-cascade tip.
+	finalTips, err := g.TipsFor(targets)
+	if err != nil {
+		return nil, fmt.Errorf("re-reading amended tips: %w", err)
+	}
+	for i := range plan.Absorbed {
+		if tip, ok := finalTips[plan.Absorbed[i].Branch]; ok {
+			plan.Absorbed[i].Commit = tip
+		}
+	}
 	plan.Notes = append(plan.Notes, skippedWorktreeNotes(s)...)
 	if err := env.save(); err != nil {
 		return nil, err
@@ -263,23 +306,30 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	if err := restoreHEAD(env, cur, s.Trunk); err != nil {
 		return nil, err
 	}
-	plan.Summary = fmt.Sprintf("absorbed %d hunk(s) into %s; restacked %d branch(es)", len(plan.Absorbed), target, len(rebased))
+	plan.Summary = fmt.Sprintf("absorbed %d hunk(s) into %s; restacked %d branch(es)", len(plan.Absorbed), joinComma(targets), len(rebased))
 	return plan, nil
 }
 
-// singleTarget reports the one branch every absorbed hunk targets, false when
-// the plan has any refusal or more than one distinct target branch.
-func singleTarget(plan *AbsorbResult) (string, bool) {
-	if len(plan.Refused) > 0 || len(plan.Absorbed) == 0 {
-		return "", false
-	}
-	target := plan.Absorbed[0].Branch
-	for _, a := range plan.Absorbed[1:] {
-		if a.Branch != target {
-			return "", false
+// targetsOf returns the distinct target branches of a zero-refusal plan,
+// sorted ancestors-first by stack depth (every target lies on the current
+// branch's ancestor path, so depth is a total order here).
+func targetsOf(s *State, plan *AbsorbResult) []string {
+	seen := map[string]bool{}
+	var targets []string
+	for _, a := range plan.Absorbed {
+		if !seen[a.Branch] {
+			seen[a.Branch] = true
+			targets = append(targets, a.Branch)
 		}
 	}
-	return target, true
+	sort.Slice(targets, func(i, j int) bool {
+		di, dj := len(s.Ancestors(targets[i])), len(s.Ancestors(targets[j]))
+		if di != dj {
+			return di < dj
+		}
+		return targets[i] < targets[j]
+	})
+	return targets
 }
 
 // hunkLines renders a hunk's pre-image range for humans: "2" or "3-4"; a pure

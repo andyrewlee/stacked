@@ -69,7 +69,11 @@ func (Shell) DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) { return Dif
 func (Shell) BlamePorcelain(file, rev string) (map[int]string, error) {
 	return BlamePorcelain(file, rev)
 }
-func (Shell) DiffCachedPatch() ([]byte, error) { return DiffCachedPatch() }
+
+func (Shell) DiffCachedPatchFor(hunks []Hunk) ([]byte, error) {
+	return DiffCachedPatchFor(hunks)
+}
+
 func (Shell) AmendTipWithPatch(branch string, patch []byte) (string, error) {
 	return AmendTipWithPatch(branch, patch)
 }
