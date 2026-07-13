@@ -125,8 +125,10 @@ func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, ex
 	// worktree. This path activates only in a multi-worktree repo where name is
 	// owned elsewhere; single-tree behavior (and the model invariant test, whose
 	// fake reports a single worktree) is unchanged. It never moves the caller's
-	// HEAD, so expectedHEAD passes through.
-	if owner, elsewhere, err := s.ownerElsewhere(env.Git, name); err != nil {
+	// HEAD, so expectedHEAD passes through — and doubles as the current-branch
+	// hint (the threading keeps it equal to the live HEAD on every path into
+	// this call; "" falls back to a live read).
+	if owner, elsewhere, err := s.ownerElsewhereWith(env.Git, name, expectedHEAD); err != nil {
 		return false, expectedHEAD, err
 	} else if elsewhere {
 		did, err := s.restackInWorktree(env, name, b, parentTip, owner)

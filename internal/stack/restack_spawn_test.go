@@ -57,6 +57,45 @@ func TestRestackCascadeAvoidsPerBranchCurrentBranch(t *testing.T) {
 	}
 }
 
+// TestRestackCascadeAvoidsPerBranchCurrentBranchAcrossWorktrees is the
+// multi-worktree twin of the pin above: ownerElsewhere used to spawn
+// CurrentBranch once per worktree-owned branch, re-introducing the very
+// per-branch read the expectedHEAD threading removed. With the hint passed
+// through, the count stays constant in N. Deliberate implementation-strategy
+// ratchet, like its sibling.
+func TestRestackCascadeAvoidsPerBranchCurrentBranchAcrossWorktrees(t *testing.T) {
+	countFor := func(n int) int {
+		f, s, env := newEnvState()
+		parent := "main"
+		for i := 1; i <= n; i++ {
+			name := fmt.Sprintf("b%d", i)
+			mkBranch(t, env, s, f, parent, name)
+			parent = name
+		}
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("advance main") // whole stack drifts
+		// Every stack branch owns a linked worktree; HEAD stays on main (the
+		// fake's synthesized main worktree), so each branch takes the
+		// ownerElsewhere path.
+		for i := 1; i <= n; i++ {
+			name := fmt.Sprintf("b%d", i)
+			f.addWorktree("/wt/"+name, name)
+		}
+		spy := &tipReadSpyGit{Git: f}
+		env.Git = spy
+		if _, err := Restack(env, s); err != nil {
+			t.Fatalf("restack N=%d: %v", n, err)
+		}
+		return spy.currentBranchCalls
+	}
+	small, large := countFor(3), countFor(8)
+	if small != large {
+		t.Fatalf("CurrentBranch calls scale with worktree-owned branches: N=3 -> %d, N=8 -> %d", small, large)
+	}
+}
+
 // TestRestackLeafSkipsPostRebaseRevParse pins PERF-02: only branches with
 // children refresh their tip after a rebase; a fan of K leaves costs O(1)
 // post-rebase rev-parse, not O(K).
