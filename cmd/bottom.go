@@ -44,5 +44,5 @@ func runBottom(args []string) error {
 	if err != nil {
 		return err
 	}
-	return navEmit(asJSON, b, navSummary("switched to bottom:", b, dest))
+	return navEmitText(asJSON, b, navSummary("switched to bottom:", b, dest), navSummaryForTerminal("switched to bottom:", b, dest))
 }

@@ -81,6 +81,16 @@ func (c cachedShell) CheckoutDetach(ref string) error {
 	return err
 }
 
+// RenameBranch retargets any worktree HEAD that had the old name checked out
+// (git branch -m), so cached ownership is stale after it — invalidate like
+// Checkout. Dormant today (no in-process reader follows a rename), but the
+// cache comment promises every ownership-changing op invalidates.
+func (c cachedShell) RenameBranch(oldName, newName string) error {
+	err := c.Shell.RenameBranch(oldName, newName)
+	resetWorktreeCache()
+	return err
+}
+
 // cachedQuietShell is git.QuietShell (quiet rebase output for JSON mode) with the
 // same cached Worktrees() and invalidating WorktreeRemove/Checkout overrides.
 type cachedQuietShell struct{ git.QuietShell }
@@ -101,6 +111,12 @@ func (c cachedQuietShell) Checkout(name string) error {
 
 func (c cachedQuietShell) CheckoutDetach(ref string) error {
 	err := c.QuietShell.CheckoutDetach(ref)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedQuietShell) RenameBranch(oldName, newName string) error {
+	err := c.QuietShell.RenameBranch(oldName, newName)
 	resetWorktreeCache()
 	return err
 }

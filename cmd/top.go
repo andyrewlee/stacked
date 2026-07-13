@@ -43,7 +43,7 @@ func runTop(args []string) error {
 			if err != nil {
 				return err
 			}
-			return navEmit(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest))
+			return navEmitText(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest), navSummaryForTerminal("moved to top of stack:", leaf, dest))
 		case 1:
 			leaf = children[0].Name
 		default:

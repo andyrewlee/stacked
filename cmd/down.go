@@ -50,5 +50,5 @@ func runDown(args []string) error {
 	if err != nil {
 		return err
 	}
-	return navEmit(asJSON, cur, navSummary("switched to", cur, dest))
+	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), navSummaryForTerminal("switched to", cur, dest))
 }
