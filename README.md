@@ -67,7 +67,18 @@ cannot corrupt your stack metadata.
 
 ## Install / build
 
-**Prebuilt binaries** (no Go toolchain needed): every release publishes
+**One-line install** (no Go toolchain needed):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/andyrewlee/stacked/main/install.sh | sh
+```
+
+The installer detects OS/arch (darwin/linux, amd64/arm64), verifies the
+release checksum, and installs `st` to `/usr/local/bin` (override with
+`INSTALL_DIR`). Until release signing is provisioned it requires
+`ST_ALLOW_UNVERIFIED=1` — it refuses unverifiable downloads by default.
+
+**Prebuilt binaries**: every release publishes
 darwin/linux tarballs for amd64 and arm64 plus `checksums.txt` on the
 [releases page](https://github.com/andyrewlee/stacked/releases) — download
 `stacked_<version>_<os>_<arch>.tar.gz`, verify the checksum, and put the `st`
