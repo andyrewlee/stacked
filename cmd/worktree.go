@@ -115,7 +115,22 @@ type materializedWorktree struct {
 	Summary string
 }
 
+// materializeWorktree resolves the repo identity itself — the single-shot
+// path (st worktree <name>, st create --worktree).
 func materializeWorktree(branch string) (materializedWorktree, error) {
+	repo, root, err := repoIdentifier()
+	if err != nil {
+		return materializedWorktree{}, err
+	}
+	return materializeWorktreeAt(repo, root, branch)
+}
+
+// materializeWorktreeAt is materializeWorktree with the loop-invariant repo
+// identity precomputed, so worktree --all does not respawn the two rev-parse
+// probes per branch. Everything else — the live worktrees() probe, the
+// idempotency and main-worktree checks, cache invalidation, include-copy
+// rollback — is unchanged and still runs per call.
+func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, error) {
 	wts, err := worktrees()
 	if err != nil {
 		return materializedWorktree{}, err
@@ -133,10 +148,6 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 		return materializedWorktree{}, fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
 	}
 
-	repo, root, err := repoIdentifier()
-	if err != nil {
-		return materializedWorktree{}, err
-	}
 	path, err := stack.WorktreePath(repo, branch)
 	if err != nil {
 		return materializedWorktree{}, err
@@ -415,6 +426,12 @@ func worktreeAddAll(asJSON bool) error {
 	if main, ok := stack.MainWorktree(wts); ok {
 		mainBranch = main.Branch
 	}
+	// The repo identity is loop-invariant; resolve its two rev-parse spawns
+	// once instead of per branch.
+	repo, root, err := repoIdentifier()
+	if err != nil {
+		return err
+	}
 
 	result := worktreeAllResult{Created: []worktreeAllEntry{}}
 	for _, name := range names {
@@ -422,7 +439,7 @@ func worktreeAddAll(asJSON bool) error {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
 			continue
 		}
-		created, err := materializeWorktree(name)
+		created, err := materializeWorktreeAt(repo, root, name)
 		if err != nil {
 			// Emit the partial result (what succeeded plus the failing branch)
 			// before returning, mirroring submit's partial-failure contract; the
