@@ -13,7 +13,7 @@ GOLANGCI_VERSION := v2.12.2
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-release-version golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
 # Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
@@ -72,7 +72,7 @@ check-lint-version:
 	for f in .github/workflows/ci.yml README.md CONTRIBUTING.md; do \
 		case $$f in \
 			.github/workflows/ci.yml) \
-				pins=$$(sed -nE 's/^[[:space:]]*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p' $$f);; \
+				pins=$$(grep -A6 'golangci/golangci-lint-action' $$f | sed -nE 's/^[[:space:]]*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p');; \
 			*) \
 				pins=$$(sed -nE 's/.*golangci-lint@((v[0-9]+\.[0-9]+\.[0-9]+)).*/\1/p' $$f);; \
 		esac; \
@@ -151,8 +151,22 @@ clean:
 	rm -f $(BINARY) cover.out
 	rm -rf dist
 
+# The release tag must match the compiled-in fallback version, or plain
+# `go build` source builds of the tagged tree report the wrong version.
+# Takes RELEASE_TAG=vX.Y.Z or derives it from an exact tag on HEAD.
+check-release-version:
+	@tag=$${RELEASE_TAG:-$$(git describe --tags --exact-match 2>/dev/null)}; \
+	if [ -z "$$tag" ]; then echo "no release tag (set RELEASE_TAG=vX.Y.Z or tag HEAD)"; exit 1; fi; \
+	want=$${tag#v}; \
+	have=$$(sed -nE 's/^const defaultVersion = "([^"]+)"$$/\1/p' cmd/root.go); \
+	if [ "$$have" != "$$want" ]; then \
+		echo "cmd/root.go defaultVersion is '$$have' but the release tag is '$$tag' - bump the const first"; \
+		exit 1; \
+	fi; \
+	echo "release pin: defaultVersion $$have matches tag $$tag"
+
 # Cut a release from the current git tag with GoReleaser (needs GITHUB_TOKEN).
-release:
+release: check-release-version
 	goreleaser release --clean
 
 # Build release artifacts locally without publishing (dry run).
