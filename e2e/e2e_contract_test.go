@@ -13,6 +13,28 @@ import (
 // exit codes, navigation wording, submit, completion, and JSON envelopes.
 // TestVersion asserts `st version` prints build info and exits 0, and that the
 // -v/--version aliases behave the same.
+// decodeStderrEnvelope decodes the JSON error envelope from stderr,
+// tolerating non-JSON noise BEFORE it: a coverage-instrumented binary can
+// emit "error: coverage meta-data emit failed ..." lines on stderr when
+// macOS recycles the GOCOVERDIR tmpdir mid-run (an environmental flake seen
+// on CI main pushes), and the envelope is always the LAST thing the CLI
+// writes. Decoding from the first '{' that starts a line keeps the contract
+// assertion strict about the envelope itself without being brittle about
+// harness noise.
+func decodeStderrEnvelope(t *testing.T, label, stderr string, env any) {
+	t.Helper()
+	payload := stderr
+	if err := json.Unmarshal([]byte(payload), env); err == nil {
+		return
+	}
+	if i := strings.Index(stderr, "\n{"); i >= 0 {
+		payload = stderr[i+1:]
+	}
+	if err := json.Unmarshal([]byte(payload), env); err != nil {
+		t.Fatalf("%s stderr not a JSON envelope: %v\n%s", label, err, stderr)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
@@ -89,9 +111,7 @@ func TestUnknownCommand(t *testing.T) {
 	var env struct {
 		Error struct{ Code, Message string }
 	}
-	if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
-		t.Fatalf("unknown command --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
-	}
+	decodeStderrEnvelope(t, "unknown command --json", res.stderr, &env)
 	if env.Error.Code != "error" {
 		t.Errorf("unknown command --json code = %q, want error", env.Error.Code)
 	}
@@ -247,9 +267,7 @@ func TestExitCodeContract(t *testing.T) {
 		var env struct {
 			Error struct{ Code, Branch, Onto string }
 		}
-		if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
-			t.Fatalf("conflict --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
-		}
+		decodeStderrEnvelope(t, "conflict --json", res.stderr, &env)
 		if env.Error.Code != "conflict" {
 			t.Errorf("conflict code = %q, want conflict", env.Error.Code)
 		}
@@ -323,9 +341,7 @@ func TestCorruptState(t *testing.T) {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
-		t.Fatalf("corrupt state --json stderr not a JSON envelope: %v\n%s", err, res.stderr)
-	}
+	decodeStderrEnvelope(t, "corrupt state --json", res.stderr, &env)
 	if env.Error.Code != "error" {
 		t.Errorf("corrupt state --json code = %q, want error", env.Error.Code)
 	}
