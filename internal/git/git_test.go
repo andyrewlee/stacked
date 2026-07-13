@@ -1166,53 +1166,142 @@ func TestUpdateRefs(t *testing.T) {
 	}
 }
 
-// TestDiffCachedHunks pins the -U0 hunk parser: single-line edit, pure
-// addition (OldN==0), and two hunks in one file.
+// TestDiffCachedHunks pins the -U0 section parser: the classify-or-refuse
+// contract means every staged change is either a text Hunk or an
+// UnsupportedRecord, across edits, deletions, binary, mode, rename,
+// non-ASCII names, and content lines that look like diff headers.
 func TestDiffCachedHunks(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "f.txt", "l1\nl2\nl3\nl4\nl5\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "base")
-
-	// Single-line edit staged.
-	writeFile(t, "f.txt", "l1\nEDIT\nl3\nl4\nl5\n")
-	mustGit(t, "add", "f.txt")
-	hunks, err := DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks: %v", err)
-	}
-	if len(hunks) != 1 {
-		t.Fatalf("hunks = %+v, want 1", hunks)
-	}
-	want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
-	if hunks[0] != want {
-		t.Fatalf("hunk = %+v, want %+v", hunks[0], want)
+	// mustHunks stages nothing itself; it just runs the parser and fails on error.
+	mustHunks := func(t *testing.T) ([]Hunk, []UnsupportedRecord) {
+		t.Helper()
+		hunks, unsupported, err := DiffCachedHunks()
+		if err != nil {
+			t.Fatalf("DiffCachedHunks: %v", err)
+		}
+		return hunks, unsupported
 	}
 
-	// Pure addition (no pre-image) between l3 and l4.
-	writeFile(t, "f.txt", "l1\nl2\nl3\nNEW\nl4\nl5\n")
-	mustGit(t, "add", "f.txt")
-	hunks, err = DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks (addition): %v", err)
-	}
-	if len(hunks) != 1 || hunks[0].OldN != 0 || hunks[0].NewN != 1 {
-		t.Fatalf("addition hunk = %+v, want OldN==0 NewN==1", hunks)
-	}
+	t.Run("single edit, pure addition, two hunks", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "f.txt", "l1\nl2\nl3\nl4\nl5\n")
+		mustGit(t, "add", "f.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
 
-	// Two separated edits -> two hunks in one file.
-	writeFile(t, "f.txt", "E1\nl2\nl3\nl4\nE5\n")
-	mustGit(t, "add", "f.txt")
-	hunks, err = DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks (two hunks): %v", err)
-	}
-	if len(hunks) != 2 || hunks[0].File != "f.txt" || hunks[1].File != "f.txt" {
-		t.Fatalf("hunks = %+v, want two in f.txt", hunks)
-	}
-	if hunks[0].OldStart != 1 || hunks[1].OldStart != 5 {
-		t.Fatalf("hunk starts = %d,%d, want 1,5", hunks[0].OldStart, hunks[1].OldStart)
-	}
+		writeFile(t, "f.txt", "l1\nEDIT\nl3\nl4\nl5\n")
+		mustGit(t, "add", "f.txt")
+		hunks, unsupported := mustHunks(t)
+		want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
+		if len(hunks) != 1 || hunks[0] != want || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want exactly %+v", hunks, unsupported, want)
+		}
+
+		writeFile(t, "f.txt", "l1\nl2\nl3\nNEW\nl4\nl5\n")
+		mustGit(t, "add", "f.txt")
+		hunks, _ = mustHunks(t)
+		if len(hunks) != 1 || hunks[0].OldN != 0 || hunks[0].NewN != 1 {
+			t.Fatalf("addition hunk = %+v, want OldN==0 NewN==1", hunks)
+		}
+
+		writeFile(t, "f.txt", "E1\nl2\nl3\nl4\nE5\n")
+		mustGit(t, "add", "f.txt")
+		hunks, _ = mustHunks(t)
+		if len(hunks) != 2 || hunks[0].OldStart != 1 || hunks[1].OldStart != 5 {
+			t.Fatalf("hunks = %+v, want two in f.txt at 1 and 5", hunks)
+		}
+	})
+
+	t.Run("whole-file deletion keeps the pre-image name", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "gone.txt", "a\nb\n")
+		mustGit(t, "add", "gone.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		mustGit(t, "rm", "-q", "gone.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "gone.txt" || hunks[0].OldN != 2 || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one deletion hunk on gone.txt OldN=2", hunks, unsupported)
+		}
+	})
+
+	t.Run("binary file is an unsupported record", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "bin.dat", "\x00\x01\x02")
+		mustGit(t, "add", "bin.dat")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "binary file" || unsupported[0].File != "bin.dat" {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one binary record for bin.dat", hunks, unsupported)
+		}
+	})
+
+	t.Run("mode-only change is an unsupported record", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "script.sh", "echo hi\n")
+		mustGit(t, "add", "script.sh")
+		mustGit(t, "commit", "-q", "-m", "base")
+		mustGit(t, "update-index", "--chmod=+x", "script.sh")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "mode change" || unsupported[0].File != "script.sh" {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one mode record for script.sh", hunks, unsupported)
+		}
+	})
+
+	t.Run("mode change plus text edit keeps the hunk AND records the mode", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "script.sh", "one\ntwo\n")
+		mustGit(t, "add", "script.sh")
+		mustGit(t, "commit", "-q", "-m", "base")
+		writeFile(t, "script.sh", "one\nTWO\n")
+		mustGit(t, "add", "script.sh")
+		mustGit(t, "update-index", "--chmod=+x", "script.sh")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "script.sh" {
+			t.Fatalf("hunks = %+v, want the text hunk kept", hunks)
+		}
+		if len(unsupported) != 1 || unsupported[0].Reason != "mode change" {
+			t.Fatalf("unsupported = %+v, want the mode record alongside the hunk", unsupported)
+		}
+	})
+
+	t.Run("rename with edit is an unsupported record, hunks dropped", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "old.txt", "a\nb\nc\nd\ne\nf\ng\nh\n")
+		mustGit(t, "add", "old.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		mustGit(t, "mv", "old.txt", "new.txt")
+		writeFile(t, "new.txt", "a\nB\nc\nd\ne\nf\ng\nh\n")
+		mustGit(t, "add", "new.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "rename" {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one rename record with no hunks", hunks, unsupported)
+		}
+	})
+
+	t.Run("non-ASCII filename arrives raw and unquoted", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "fö.txt", "x\ny\n")
+		mustGit(t, "add", "fö.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		writeFile(t, "fö.txt", "X\ny\n")
+		mustGit(t, "add", "fö.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "fö.txt" || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one hunk on the raw name", hunks, unsupported)
+		}
+	})
+
+	t.Run("content line that looks like a diff header does not desync", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "real.txt", "keep\n-- a/decoy\nkeep2\n")
+		mustGit(t, "add", "real.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		// Deleting the decoy line makes the -U0 diff carry the content line
+		// "--- a/decoy", which must NOT be taken as a file header.
+		writeFile(t, "real.txt", "keep\nkeep2\n")
+		mustGit(t, "add", "real.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "real.txt" || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one hunk still attributed to real.txt", hunks, unsupported)
+		}
+	})
 }
 
 // TestAmendTipWithPatch pins the temp-index amend: a staged patch captured on

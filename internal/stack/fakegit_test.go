@@ -52,10 +52,12 @@ type fakeGit struct {
 	// linkedWorktrees models extra (non-main) worktrees by branch -> path. The
 	// main worktree (f.head) is synthesized in Worktrees().
 	linkedWorktrees map[string]string
-	// stagedHunks/blame are the canned inputs for the absorb attribution:
-	// DiffCachedHunks returns stagedHunks; BlamePorcelain returns blame[file].
-	stagedHunks []git.Hunk
-	blame       map[string]map[int]string
+	// stagedHunks/stagedUnsupported/blame are the canned inputs for the
+	// absorb attribution: DiffCachedHunks returns stagedHunks plus
+	// stagedUnsupported; BlamePorcelain returns blame[file].
+	stagedHunks       []git.Hunk
+	stagedUnsupported []git.UnsupportedRecord
+	blame             map[string]map[int]string
 	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
 	// makes AmendTipWithPatch fail like a patch that does not apply to the
 	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
@@ -203,7 +205,9 @@ func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 }
 
 // DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
-func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, error) { return f.stagedHunks, nil }
+func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error) {
+	return f.stagedHunks, f.stagedUnsupported, nil
+}
 
 // BlamePorcelain returns the canned per-file blame a test set on blame. The
 // rev is ignored: engine tests only ever blame HEAD.

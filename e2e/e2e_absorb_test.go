@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -108,6 +110,42 @@ func TestAbsorbApplyJourney(t *testing.T) {
 		}
 	}
 	r.stOK("validate")
+}
+
+// TestAbsorbRefusesModeRideAlong pins the classify-or-refuse gate end to end:
+// a cleanly absorbable text hunk co-staged with a chmod on another file must
+// come back unapplied (the mode bit would otherwise silently ride the applied
+// patch into the target commit), with refs and the staged set untouched.
+func TestAbsorbRefusesModeRideAlong(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.writeFile("shared.txt", "A0\np\nq\nB0\n")
+	r.writeFile("tool.sh", "echo hi\n")
+	r.git("add", "shared.txt", "tool.sh")
+	r.git("commit", "-q", "-m", "seed")
+	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
+
+	tipBefore := r.rev("feat-a")
+	// A single-target text edit plus a staged chmod on tool.sh (worktree and
+	// index agree on the new mode, so only the STAGED set carries it).
+	r.writeFile("shared.txt", "A2\np\nq\nB0\n")
+	r.git("add", "shared.txt")
+	if err := os.Chmod(filepath.Join(r.dir, "tool.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.git("add", "tool.sh")
+
+	res := r.stOK("absorb")
+	if !strings.Contains(res.stdout, "not applied:") || !strings.Contains(res.stdout, "mode change") {
+		t.Fatalf("stdout = %q, want the not-applied summary naming the mode change", res.stdout)
+	}
+	if r.rev("feat-a") != tipBefore {
+		t.Fatal("feat-a moved during a refused absorb")
+	}
+	if diff := r.git("diff", "--cached", "--name-only"); !strings.Contains(diff, "shared.txt") || !strings.Contains(diff, "tool.sh") {
+		t.Fatalf("refused absorb disturbed the staged set; diff --cached = %q", diff)
+	}
 }
 
 // TestAbsorbApplyRefusesMultiTarget pins the v1 single-target gate end to end:
