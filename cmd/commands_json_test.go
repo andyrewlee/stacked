@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -1047,7 +1048,7 @@ func TestCompletionShells(t *testing.T) {
 // hand-maintained map, deduped and sorted.
 func TestCommandCompletions(t *testing.T) {
 	toks := commandCompletions(byName["worktree"])
-	want := []string{"--all", "--json", "ls", "rm"}
+	want := []string{"--all", "--json", "list", "ls", "remove", "rm"}
 	if !reflect.DeepEqual(toks, want) {
 		t.Fatalf("worktree completions = %v, want %v", toks, want)
 	}
@@ -1061,6 +1062,56 @@ func TestCommandCompletions(t *testing.T) {
 	want = []string{"bash", "fish", "zsh"}
 	if !reflect.DeepEqual(toks, want) {
 		t.Fatalf("completion completions = %v, want %v", toks, want)
+	}
+}
+
+// TestSubVerbsMatchUsage pins the hand-maintained subVerbs map against each
+// command's Usage line — the same source the dispatcher documents. A new
+// sub-verb added to Usage without a subVerbs entry (or vice versa) fails
+// here. One-way limitation, stated honestly: a verb missing from BOTH the
+// map and the Usage cannot be caught by any test.
+func TestSubVerbsMatchUsage(t *testing.T) {
+	for name, verbs := range subVerbs {
+		c := byName[name]
+		if c == nil {
+			t.Fatalf("subVerbs names %q, which is not a registered command", name)
+		}
+		for _, v := range verbs {
+			if !strings.Contains(c.Usage, v) {
+				t.Errorf("subVerbs[%q] lists %q but the Usage (%q) does not mention it", name, v, c.Usage)
+			}
+		}
+	}
+}
+
+// TestCompletionScriptsParse feeds each generated script to its real shell's
+// no-execute parser when the interpreter is on PATH (skip otherwise, for
+// hermeticity). The substring assertions elsewhere document content; this
+// proves the emitted script is actually loadable in a user's shell.
+func TestCompletionScriptsParse(t *testing.T) {
+	cases := []struct {
+		shell  string
+		flag   string
+		script string
+	}{
+		{"bash", "-n", bashCompletionScript()},
+		{"zsh", "-n", zshCompletionScript()},
+		{"fish", "--no-execute", fishCompletionScript()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.shell, func(t *testing.T) {
+			path, err := exec.LookPath(tc.shell)
+			if err != nil {
+				t.Skipf("%s not on PATH", tc.shell)
+			}
+			file := filepath.Join(t.TempDir(), "st."+tc.shell)
+			if err := os.WriteFile(file, []byte(tc.script), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := exec.Command(path, tc.flag, file).CombinedOutput(); err != nil {
+				t.Fatalf("%s rejected the generated script: %v\n%s", tc.shell, err, out)
+			}
+		})
 	}
 }
 

@@ -38,14 +38,7 @@ func runCompletion(args []string) error {
 	case "zsh":
 		out("%s", zshCompletionScript())
 	case "fish":
-		var b strings.Builder
-		for _, c := range registry {
-			fmt.Fprintf(&b, "complete -c st -n __fish_use_subcommand -a %s -d %q\n", c.Name, c.Summary)
-			if toks := commandCompletions(c); len(toks) > 0 {
-				fmt.Fprintf(&b, "complete -c st -n \"__fish_seen_subcommand_from %s\" -a %q\n", c.Name, strings.Join(toks, " "))
-			}
-		}
-		out("%s", b.String())
+		out("%s", fishCompletionScript())
 	default:
 		return fmt.Errorf("unsupported shell %q (use bash, zsh, or fish)", rest[0])
 	}
@@ -67,7 +60,7 @@ func commandNames() []string {
 // subVerbs maps a command to its literal sub-verbs (not derivable from the
 // declared flags). Keep in sync with each command's Usage string.
 var subVerbs = map[string][]string{
-	"worktree":   {"ls", "rm"},
+	"worktree":   {"list", "ls", "remove", "rm"},
 	"shell":      {"install"},
 	"completion": {"bash", "zsh", "fish"},
 }
@@ -102,6 +95,29 @@ func flagToken(name string) string {
 	return "--" + name
 }
 
+// casePattern renders a command's case-arm pattern: the canonical name plus
+// any aliases, pipe-joined ("worktree|wt"), so `st wt <TAB>` completes the
+// same sub-verbs/flags as the canonical form. Word-1 completion deliberately
+// stays canonical-only (advertising aliases there is noise).
+func casePattern(c *Command) string {
+	return strings.Join(append([]string{c.Name}, c.Aliases...), "|")
+}
+
+// fishCompletionScript generates the fish completion: canonical names (with
+// summaries) at word 1; sub-verb/flag tokens keyed on the seen subcommand,
+// aliases included.
+func fishCompletionScript() string {
+	var b strings.Builder
+	for _, c := range registry {
+		fmt.Fprintf(&b, "complete -c st -n __fish_use_subcommand -a %s -d %q\n", c.Name, c.Summary)
+		if toks := commandCompletions(c); len(toks) > 0 {
+			names := strings.Join(append([]string{c.Name}, c.Aliases...), " ")
+			fmt.Fprintf(&b, "complete -c st -n \"__fish_seen_subcommand_from %s\" -a %q\n", names, strings.Join(toks, " "))
+		}
+	}
+	return b.String()
+}
+
 // bashCompletionScript generates the bash completion: command names at word 1,
 // then per-command flags/sub-verbs keyed on the chosen command.
 func bashCompletionScript() string {
@@ -111,7 +127,7 @@ func bashCompletionScript() string {
 	b.WriteString("    case \"${COMP_WORDS[1]}\" in\n")
 	for _, c := range registry {
 		if toks := commandCompletions(c); len(toks) > 0 {
-			fmt.Fprintf(&b, "        %s) COMPREPLY=( $(compgen -W %q -- \"$cur\") );;\n", c.Name, strings.Join(toks, " "))
+			fmt.Fprintf(&b, "        %s) COMPREPLY=( $(compgen -W %q -- \"$cur\") );;\n", casePattern(c), strings.Join(toks, " "))
 		}
 	}
 	b.WriteString("    esac\n}\ncomplete -F _st_complete st\n")
@@ -127,7 +143,7 @@ func zshCompletionScript() string {
 	b.WriteString("    case \"${words[2]}\" in\n")
 	for _, c := range registry {
 		if toks := commandCompletions(c); len(toks) > 0 {
-			fmt.Fprintf(&b, "        %s) compadd -- %s;;\n", c.Name, strings.Join(toks, " "))
+			fmt.Fprintf(&b, "        %s) compadd -- %s;;\n", casePattern(c), strings.Join(toks, " "))
 		}
 	}
 	b.WriteString("    esac\n}\n_st \"$@\"\n")
