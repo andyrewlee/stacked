@@ -1,0 +1,40 @@
+name: Release
+
+# Tag-driven releases, mirroring the amux pipeline (minus artifact signing,
+# which needs a provisioned keypair — add it alongside amux's when that
+# happens): push a v* tag and GoReleaser publishes the GitHub Release with
+# darwin/linux amd64+arm64 tarballs and checksums.txt.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history so GoReleaser can derive the changelog since the
+          # previous tag.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

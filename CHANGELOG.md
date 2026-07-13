@@ -6,7 +6,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-07-12
+
 ### Added
+- **`st absorb` (v1).** `st absorb --dry-run` maps each staged hunk to the
+  stack commit that owns its lines (blame-based, refusing everything ambiguous
+  with a reason); bare `st absorb` applies a single-target plan — the owning
+  branch tip is amended via a checkout-free temp-index commit, descendants are
+  restacked, and one `st undo` reverts both.
+- **`st worktree rm --all`** tears down every clean stacked-owned linked
+  worktree in one command (dirty ones are skipped loudly).
+- Shell completion now completes flags and sub-verbs per command
+  (bash/zsh/fish), not just command names.
+- Compare URLs from `st submit` for self-hosted GitLab and GitHub Enterprise
+  remotes (forge detection by host label).
+- `st version` reports the module build version for `go install` builds
+  instead of always printing the compiled-in default.
+- Initial `st` CLI: a login-free, dependency-free tool for stacked
+  diffs — `init`, `create`, navigation (`up`/`down`/`top`/`bottom`/`checkout`),
+  `log`, `status`, `track`/`untrack`, `modify`, `restack`, `continue`, `abort`,
+  `fold`, `squash`, `onto`, `rename`, `delete`, `sync`, `submit`, `undo`,
+  `validate`, `repair`, `completion`.
 - **`st create <name> --worktree`** creates the branch, tracks it, and
   materializes its own linked worktree in one command; the main worktree's HEAD
   does not move, and with the shell shim installed the shell teleports into the
@@ -64,12 +84,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   property/invariant model test over thousands of random operation sequences.
 
 ### Security
+- **Ref-update injection hardening.** Transactional ref restores
+  (`st undo`) use NUL-framed `git update-ref -z --stdin`, so branch names can
+  never be misparsed as record framing.
 - **Terminal output sanitization.** Git-controlled strings (commit subjects,
   branch names, worktree paths) are control-byte-escaped before rendering, on
   stdout and on the stderr error path, closing a terminal escape-injection
   vector. JSON output is unaffected (encoding/json already escapes).
 
 ### Fixed
+- **`st sync` from a linked worktree no longer deletes that worktree.** The
+  worktree cache is invalidated on checkout/detach, so prune sees the true
+  layout.
+- Nested `.worktreeinclude` selections are no longer copied twice into a new
+  worktree.
+- Sync's "HEAD left detached" note reflects where HEAD actually landed.
 - **`st sync` works from inside a linked worktree.** The trunk fast-forward now
   runs in the trunk's own worktree (or moves the ref directly, fast-forward
   only, when the trunk is checked out nowhere), and pruning no longer requires
@@ -85,6 +114,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   treated as contention and retried, while a stale lock that cannot be
   reclaimed for permission reasons now reports a permission error instead of
   "another st command is running".
+- Non-flock platforms use a real lock file with stale-owner reclamation instead
+  of a no-op lock.
+- Git output parsing is locale-pinned, and fast-forward detection uses plumbing
+  instead of message text.
+- Parent inference (`st track`) is deterministic.
 
 ### Changed
 - `st submit` pushes the whole stack in a single `git push` invocation; on a
@@ -99,22 +133,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `delete` results include the `restacked` list. `log --json` always includes
   `children` (empty array on leaves).
 
-### Fixed
-- Non-flock platforms use a real lock file with stale-owner reclamation instead
-  of a no-op lock.
-- Git output parsing is locale-pinned, and fast-forward detection uses plumbing
-  instead of message text.
-- Parent inference (`st track`) is deterministic.
-
 ### Removed
 - Redundant slow `cmd` integration tests now covered by the engine and e2e suites;
   duplicated `restoreHEAD`/clean-check/fast-forward helpers.
-
-## [0.1.0]
-
-### Added
-- Initial `st` CLI: a login-free, dependency-free tool for stacked
-  diffs — `init`, `create`, navigation (`up`/`down`/`top`/`bottom`/`checkout`),
-  `log`, `status`, `track`/`untrack`, `modify`, `restack`, `continue`, `abort`,
-  `fold`, `squash`, `onto`, `rename`, `delete`, `sync`, `submit`, `undo`,
-  `validate`, `repair`, `completion`.
