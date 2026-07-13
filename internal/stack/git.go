@@ -76,9 +76,11 @@ type Git interface {
 	// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
 	// last touched it (git blame --porcelain).
 	BlamePorcelain(file, rev string) (map[int]string, error)
-	// DiffCachedPatch returns the full staged patch (git diff --cached), the
-	// exact bytes absorb lands on a target tip with AmendTipWithPatch.
-	DiffCachedPatch() ([]byte, error)
+	// DiffCachedPatchFor returns a minimal staged patch containing ONLY the
+	// given hunks (keyed by the DiffCachedHunks tuple), with post-image line
+	// numbers corrected for omitted same-file hunks — the per-target bytes
+	// absorb lands with AmendTipWithPatch.
+	DiffCachedPatchFor(hunks []git.Hunk) ([]byte, error)
 	// AmendTipWithPatch rewrites branch's tip commit to also contain patch via
 	// a temporary-index amend (read-tree/apply --cached/write-tree/commit-tree)
 	// that touches no worktree and preserves the tip's author, message, and

@@ -114,11 +114,12 @@ engine and these hold, the topology bookkeeping is sound.
 ## Absorb is deliberately v1-sliced
 
 `st absorb --dry-run` maps staged hunks to the stack commits that own their
-lines; bare `st absorb` applies a plan only when it names a single target
-branch with zero refusals (amend the owning tip via a temp-index — no checkout
-— then one cascade restack; one undo entry reverts both). Everything ambiguous
-is refused loudly: multi-target plans, hunks spanning commits, pure additions,
-lines owned by trunk/history, and non-tip targets (splitting hunks or rewriting
-mid-branch commits is out of scope). The design rationale lives in the PR
+lines; bare `st absorb` applies any ZERO-REFUSAL plan — each target branch's
+tip is amended with only its own hunks via a temp-index (no checkout), then
+one cascade restack from the lowest target; one undo entry reverts all amends
+plus the cascade. Everything ambiguous is refused loudly: hunks spanning
+commits, pure additions, lines owned by trunk/history, non-tip targets, and
+unclassifiable staged records (binary/mode/rename/quoted paths) — splitting
+hunks or rewriting mid-branch commits is out of scope. The design rationale lives in the PR
 bodies of the two absorb slices (#155/#156) and the doc comments in
 `internal/stack/absorb.go`.

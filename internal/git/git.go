@@ -535,6 +535,113 @@ func DiffCachedPatch() ([]byte, error) {
 	return []byte(out), nil
 }
 
+// DiffCachedPatchFor returns a minimal unified diff containing ONLY the
+// given staged hunks, reassembled from one `diff --cached -U0` capture: per
+// file with ≥1 wanted hunk, the original header lines verbatim plus the
+// wanted hunk blocks in original order. Hunks are keyed by the same
+// (File, OldStart, OldN, NewStart, NewN) tuple DiffCachedHunks returns, so
+// attribution entries join losslessly.
+//
+// Line-number subtlety: OldStart values are relative to the shared pre-image
+// (HEAD) and never shift, but NewStart values assume EVERY staged hunk
+// applied — omitting another target's earlier hunk in the same file shifts
+// this hunk's post-image position by that hunk's net line delta. Each
+// emitted hunk's NewStart is therefore corrected by the cumulative
+// (NewN−OldN) of the file's OMITTED earlier hunks. The classify-or-refuse
+// contract guarantees the stream holds only plain text-hunk sections
+// whenever absorb's apply gate passes, so no binary/rename/mode cases arise
+// here.
+func DiffCachedPatchFor(want []Hunk) ([]byte, error) {
+	out, err := run("-c", "core.quotepath=false", "diff", "--cached", "-U0")
+	if err != nil {
+		return nil, err
+	}
+	wanted := make(map[Hunk]bool, len(want))
+	for _, h := range want {
+		wanted[h] = true
+	}
+	var buf strings.Builder
+	lines := strings.Split(out, "\n")
+	var headers []string // current section's header lines, verbatim
+	var file, pendingOld string
+	emittedHeader := false
+	delta := 0 // cumulative NewN-OldN of omitted earlier hunks in this file
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			headers = headers[:0]
+			file, pendingOld = "", ""
+			emittedHeader = false
+			delta = 0
+			for i < len(lines) && !strings.HasPrefix(lines[i], "@@ ") {
+				hl := lines[i]
+				headers = append(headers, hl)
+				switch {
+				case strings.HasPrefix(hl, "--- a/"):
+					pendingOld = strings.TrimPrefix(hl, "--- a/")
+				case strings.HasPrefix(hl, "+++ b/"):
+					file = strings.TrimPrefix(hl, "+++ b/")
+				case strings.HasPrefix(hl, "+++ /dev/null"):
+					file = pendingOld
+				}
+				i++
+			}
+		case strings.HasPrefix(line, "@@ "):
+			h, ok := parseHunkHeader(line)
+			end := i + 1
+			for end < len(lines) && !strings.HasPrefix(lines[end], "@@ ") && !strings.HasPrefix(lines[end], "diff --git ") {
+				end++
+			}
+			if ok {
+				h.File = file
+				if h.File == "" {
+					h.File = pendingOld
+				}
+				if wanted[h] {
+					if !emittedHeader {
+						for _, hl := range headers {
+							buf.WriteString(hl)
+							buf.WriteByte('\n')
+						}
+						emittedHeader = true
+					}
+					buf.WriteString(formatHunkHeader(h.OldStart, h.OldN, h.NewStart-delta, h.NewN))
+					buf.WriteByte('\n')
+					for idx := i + 1; idx < end; idx++ {
+						// Drop only the artifact empty element strings.Split
+						// leaves after the stream's final newline.
+						if idx == len(lines)-1 && lines[idx] == "" {
+							continue
+						}
+						buf.WriteString(lines[idx])
+						buf.WriteByte('\n')
+					}
+				} else {
+					delta += h.NewN - h.OldN
+				}
+			}
+			i = end
+		default:
+			i++
+		}
+	}
+	return []byte(buf.String()), nil
+}
+
+// formatHunkHeader renders "@@ -<old> +<new> @@" with git's single-line
+// shorthand (",1" omitted).
+func formatHunkHeader(oldStart, oldN, newStart, newN int) string {
+	rng := func(start, n int) string {
+		if n == 1 {
+			return fmt.Sprintf("%d", start)
+		}
+		return fmt.Sprintf("%d,%d", start, n)
+	}
+	return fmt.Sprintf("@@ -%s +%s @@", rng(oldStart, oldN), rng(newStart, newN))
+}
+
 // AmendTipWithPatch rewrites branch's tip commit to also contain patch,
 // without touching any worktree or the real index: the patch is applied to
 // the tip's tree in a throwaway temporary index, a new tree and commit are

@@ -287,21 +287,94 @@ func TestAbsorbApply(t *testing.T) {
 		}
 	})
 
-	t.Run("multi-target plan is returned as data, unapplied", func(t *testing.T) {
-		f, s, env, tips := absorbEnv(t)
+	// stageTwoTargets stages two hunks owned by a and b respectively.
+	stageTwoTargets := func(f *fakeGit, tips map[string]string) {
 		stage(f, tips, "a")
 		f.stagedHunks = append(f.stagedHunks, git.Hunk{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1})
 		f.blame["f.txt"][5] = tips["b"]
+	}
+
+	t.Run("multi-target plan amends every target and cascades once", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwoTargets(f, tips)
 
 		res, err := Absorb(env, s)
 		if err != nil {
 			t.Fatalf("Absorb: %v", err)
 		}
-		if !res.DryRun || !strings.HasPrefix(res.Summary, "not applied: absorb v1 handles a single target") {
-			t.Fatalf("result = %+v, want the unapplied plan", res)
+		if res.DryRun {
+			t.Fatal("applied result still marked DryRun")
+		}
+		newATip, newBTip := f.branches["a"], f.branches["b"]
+		if newATip == tips["a"] || newBTip == tips["b"] {
+			t.Fatalf("tips a=%s b=%s, want BOTH amended", newATip, newBTip)
+		}
+		if len(res.Absorbed) != 2 || res.Absorbed[0].Commit != newATip || res.Absorbed[1].Commit != newBTip {
+			t.Fatalf("Absorbed = %+v, want commits on the two NEW tips", res.Absorbed)
+		}
+		// One cascade from the lowest target (a): b re-based onto amended a,
+		// then c. b appears in Restacked because its recorded parent moved.
+		if len(res.Restacked) != 2 || res.Restacked[0] != "b" || res.Restacked[1] != "c" {
+			t.Fatalf("Restacked = %v, want [b c] from the single cascade", res.Restacked)
+		}
+		b, _ := s.Get("b")
+		if b.ParentSHA != f.branches["a"] {
+			t.Fatalf("b.ParentSHA = %q, want the amended a tip", b.ParentSHA)
+		}
+		if f.head != "c" {
+			t.Fatalf("HEAD = %q, want restored to c", f.head)
+		}
+		if !strings.Contains(res.Summary, "into a, b") {
+			t.Fatalf("summary = %q, want both targets named", res.Summary)
+		}
+	})
+
+	t.Run("one undo entry reverts a multi-target absorb", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwoTargets(f, tips)
+		entry := mustSnapshot(t, s, f, "absorb")
+
+		if _, err := Absorb(env, s); err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		if _, err := Undo(env, s, entry); err != nil {
+			t.Fatalf("Undo: %v", err)
+		}
+		assertUndoRestored(t, f, s, entry)
+	})
+
+	t.Run("one dirty owner among two targets blocks the whole plan", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwoTargets(f, tips)
+		f.addWorktree("/wt/b", "b")
+		f.dirtyWT = map[string]bool{"b": true}
+
+		res, err := Absorb(env, s)
+		if err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		if !res.DryRun || !strings.HasPrefix(res.Summary, "not applied: a target's worktree is dirty") {
+			t.Fatalf("result = %+v, want the whole plan unapplied", res)
 		}
 		if f.branches["a"] != tips["a"] || f.branches["b"] != tips["b"] {
-			t.Fatal("a multi-target plan mutated refs")
+			t.Fatal("all-or-nothing violated: a ref moved despite the dirty owner")
+		}
+		if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "/wt/b") {
+			t.Fatalf("Notes = %v, want the dirty-worktree path named", res.Notes)
+		}
+	})
+
+	t.Run("cascade conflict after multi-target amends leaves both amends standing", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwoTargets(f, tips)
+		f.conflictOn("c")
+
+		res, err := Absorb(env, s)
+		if res != nil || !errors.Is(err, ErrConflict) {
+			t.Fatalf("Absorb = %+v, %v; want ErrConflict", res, err)
+		}
+		if f.branches["a"] == tips["a"] || f.branches["b"] == tips["b"] {
+			t.Fatal("both amends must persist through the conflict (undo-covered)")
 		}
 	})
 
@@ -346,7 +419,7 @@ func TestAbsorbApply(t *testing.T) {
 		if err == nil || errors.Is(err, ErrConflict) {
 			t.Fatalf("Absorb = %v, want a hard non-conflict error", err)
 		}
-		if !strings.Contains(err.Error(), `safely committed in "a"`) || !strings.Contains(err.Error(), "st restack") {
+		if !strings.Contains(err.Error(), "safely committed in a") || !strings.Contains(err.Error(), "st restack") {
 			t.Fatalf("error = %q, want the recovery hint naming the target and st restack", err)
 		}
 		// The hint is truthful: the amend persisted in a.

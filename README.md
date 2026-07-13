@@ -410,8 +410,9 @@ st submit                     # or: st submit --dry-run
 - `stacked` deliberately opens no pull requests. After `st submit`, open the PRs
   it prints (or create them on your host yourself).
 - **Partially implemented:** `st absorb --dry-run` maps staged hunks to the
-  stack commits that own their lines; bare `st absorb` applies only a
-  single-target plan with zero refusals (amends the owning branch tip, then
-  restacks its descendants; one `st undo` reverts both). Multi-target plans,
-  hunks spanning several commits, pure additions, lines owned by trunk, and
-  targets that are not a branch tip are refused with the reason.
+  stack commits that own their lines; bare `st absorb` applies any
+  zero-refusal plan — each owning branch tip is amended with its own hunks,
+  then one cascade restacks everything above (one `st undo` reverts it all).
+  Hunks spanning several commits, pure additions, lines owned by trunk,
+  non-tip targets, and binary/mode/rename records are refused with the
+  reason.
