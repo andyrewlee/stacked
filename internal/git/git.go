@@ -230,6 +230,61 @@ func MergedInto(ref string) (map[string]bool, error) {
 	return merged, nil
 }
 
+// ChangesContainedIn reports whether upstream's tree already contains every
+// content change branch makes relative to their merge base — the squash-merge
+// and fully-cherry-picked case that ancestry checks (MergedInto, `git cherry`)
+// cannot see: branch's tip is no ancestor of upstream, yet merging it would
+// add nothing.
+//
+// The check is exact tree-content equality, not a patch-id heuristic: P is the
+// path set of `git diff upstream...branch` (three-dot = merge-base to branch),
+// and branch is contained iff `git diff --quiet upstream branch -- P` finds no
+// disagreement on exactly those paths. Equivalently, the three-way merge of
+// branch into upstream would yield upstream's exact tree: at every contested
+// path ours==theirs, so no conflict is possible and upstream's other changes
+// are untouched. A branch whose squash-merge landed in a trunk that later
+// moved those same files forward is NOT contained — the conservative
+// direction, keeping the branch rather than guessing. An empty P (a branch
+// carrying no net change) is contained. Two spawns, no worktree, no index.
+func ChangesContainedIn(upstream, branch string) (bool, error) {
+	if err := validRefArg("ref", upstream); err != nil {
+		return false, err
+	}
+	if err := validRefArg("ref", branch); err != nil {
+		return false, err
+	}
+	up := localBranchRef(upstream)
+	br := localBranchRef(branch)
+	out, err := run("diff", "--name-only", "-z", up+"..."+br)
+	if err != nil {
+		return false, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return true, nil
+	}
+	args := append([]string{"diff", "--quiet", up, br, "--"}, paths...)
+	cmd := exec.Command("git", args...)
+	// Path names came from git itself; literal pathspecs keep a file named like
+	// pathspec magic (":(glob)" etc.) from being reinterpreted on the way back
+	// in.
+	cmd.Env = append(gitEnv(), "GIT_LITERAL_PATHSPECS=1")
+	err = cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git diff --quiet %s %s -- <changed paths>: %w", up, br, err)
+}
+
 // TipSubjectsFor returns the subject line of each named local branch's tip
 // commit, keyed by branch name, in a single exact-ref cat-file invocation.
 // Missing branches and non-commit objects are omitted.

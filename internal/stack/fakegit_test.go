@@ -14,6 +14,13 @@ type fakeCommit struct {
 	id      string
 	parent  string // parent commit id ("" for the root)
 	subject string
+	// content is the fake's stand-in for the commit's tree diff: a set of
+	// opaque tokens the commit introduces. The default is the commit's own id,
+	// so every commit carries something unique and a branch is "contained" in
+	// a ref only when a test lands those tokens on the ref's history — e.g.
+	// squashInto, which models a host-side squash-merge as one commit holding
+	// the union of the branch's tokens.
+	content map[string]bool
 }
 
 // fakeGit is an in-memory implementation of the Git port. It models a commit DAG
@@ -82,7 +89,7 @@ func newFakeGit() *fakeGit {
 		linkedWorktrees: map[string]string{},
 	}
 	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, subject: "init"}
+	f.commits[id] = &fakeCommit{id: id, subject: "init", content: map[string]bool{id: true}}
 	f.branches["main"] = id
 	f.head = "main"
 	return f
@@ -228,6 +235,66 @@ func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 	return merged, nil
 }
 
+// ChangesContainedIn models the shell's tree-content check over the token
+// sets: contained when every content token on the branch's commits between
+// merge-base and tip also appears in some commit reachable from upstream. The
+// default token is the commit's own id, so containment is only true when a
+// test explicitly lands the tokens on upstream — squashInto (a host
+// squash-merge) or an ancestry merge that makes the commits reachable.
+func (f *fakeGit) ChangesContainedIn(upstream, branch string) (bool, error) {
+	base, err := f.MergeBase(upstream, branch)
+	if err != nil {
+		return false, err
+	}
+	up, br := f.resolve(upstream), f.resolve(branch)
+	if up == "" || br == "" {
+		return false, fmt.Errorf("unknown revision in containment check %q..%q", upstream, branch)
+	}
+	upstreamTokens := map[string]bool{}
+	for cur := up; cur != ""; cur = f.commits[cur].parent {
+		for tok := range f.commits[cur].content {
+			upstreamTokens[tok] = true
+		}
+	}
+	for cur := br; cur != "" && cur != base; cur = f.commits[cur].parent {
+		for tok := range f.commits[cur].content {
+			if !upstreamTokens[tok] {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// squashTokens returns the union of the content tokens on every commit in
+// merge-base(upstream, branch)..branch — what a host-side squash-merge of
+// branch would land as one commit.
+func (f *fakeGit) squashTokens(t *testing.T, upstream, branch string) map[string]bool {
+	t.Helper()
+	base, err := f.MergeBase(upstream, branch)
+	if err != nil {
+		t.Fatalf("squashTokens: merge-base %q %q: %v", upstream, branch, err)
+	}
+	toks := map[string]bool{}
+	for cur := f.resolve(branch); cur != "" && cur != base; cur = f.commits[cur].parent {
+		for tok := range f.commits[cur].content {
+			toks[tok] = true
+		}
+	}
+	return toks
+}
+
+// squashInto lands branch's entire content on trunk as ONE new commit — the
+// host-side squash-merge: branch's tip is no ancestor of trunk, yet every
+// content token its commits carried is now reachable from trunk, so
+// MergedInto misses it while ChangesContainedIn catches it.
+func (f *fakeGit) squashInto(t *testing.T, trunk, branch string) {
+	t.Helper()
+	id := f.newID()
+	f.commits[id] = &fakeCommit{id: id, parent: f.branches[trunk], subject: "squash " + branch, content: f.squashTokens(t, trunk, branch)}
+	f.branches[trunk] = id
+}
+
 // DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
 func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error) {
 	return f.stagedHunks, f.stagedUnsupported, nil
@@ -256,7 +323,7 @@ func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
 	}
 	old := f.commits[tip]
 	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject}
+	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject, content: old.content}
 	f.branches[branch] = id
 	return id, nil
 }
@@ -497,7 +564,7 @@ func (f *fakeGit) RenameBranch(oldName, newName string) error {
 func (f *fakeGit) commit(subject string) {
 	head := f.headBranch("commit")
 	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, parent: f.branches[head], subject: subject}
+	f.commits[id] = &fakeCommit{id: id, parent: f.branches[head], subject: subject, content: map[string]bool{id: true}}
 	f.branches[head] = id
 }
 
@@ -518,7 +585,9 @@ func (f *fakeGit) amend(subject string) {
 	head := f.headBranch("amend")
 	old := f.commits[f.branches[head]]
 	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: subject}
+	// Amending rewrites the commit, not its content: keep the old token set so
+	// a branch amended after its squash-merge is still content-contained.
+	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: subject, content: old.content}
 	f.branches[head] = id
 }
 
@@ -621,7 +690,9 @@ func (f *fakeGit) replay(newBase, oldBase, branch string) error {
 	parent := newBaseID
 	for i := len(chain) - 1; i >= 0; i-- {
 		id := f.newID()
-		f.commits[id] = &fakeCommit{id: id, parent: parent, subject: chain[i].subject}
+		// Rebasing preserves each commit's diff: copy the content tokens so a
+		// branch rebased after its squash-merge is still content-contained.
+		f.commits[id] = &fakeCommit{id: id, parent: parent, subject: chain[i].subject, content: chain[i].content}
 		parent = id
 	}
 	f.branches[branch] = parent

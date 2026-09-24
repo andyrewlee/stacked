@@ -824,9 +824,9 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
-		mergedIntoTrunk, err := g.MergedInto(trunkRef)
+		mergedIntoTrunk, err := mergedBranches(g, s, trunkRef)
 		if err != nil {
-			return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
+			return nil, err
 		}
 		for _, name := range sortedBranchNames(planState) {
 			if mergedIntoTrunk[name] {
@@ -989,9 +989,10 @@ func restackAll(env Env, s *State) ([]string, error) {
 	return s.restackUpstack(env, s.Trunk)
 }
 
-// PruneMerged deletes tracked branches whose commits are already contained in
-// the trunk, re-parenting each deleted branch's children onto its parent. It
-// returns the deleted branch names in sorted order. The caller persists.
+// PruneMerged deletes tracked branches whose commits or content are already
+// contained in the trunk, re-parenting each deleted branch's children onto its
+// parent. It returns the deleted branch names in sorted order. The caller
+// persists.
 func PruneMerged(env Env, s *State) ([]string, error) {
 	g := env.Git
 	trunk := s.Trunk
@@ -1006,9 +1007,9 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 			return nil, fmt.Errorf("tracked branch %q does not exist", name)
 		}
 	}
-	merged, err := g.MergedInto(trunk)
+	merged, err := mergedBranches(g, s, trunk)
 	if err != nil {
-		return nil, fmt.Errorf("list branches merged into %q: %w", trunk, err)
+		return nil, err
 	}
 	for _, name := range names {
 		if _, ok := s.Get(name); !ok {
@@ -1034,6 +1035,35 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 		}
 	}
 	return deleted, nil
+}
+
+// mergedBranches returns the set of tracked branches trunkRef already
+// contains — the ones a sync prune may delete without losing anything. Two
+// detection layers: ancestry-merged tips, answered for every local branch by
+// one batched MergedInto scan; and content-equivalent branches — squash-merged
+// or fully cherry-picked, where the branch's whole diff relative to its merge
+// base is already in trunkRef's tree even though its tip is no ancestor —
+// answered per unmerged branch by ChangesContainedIn's exact tree comparison
+// (never a patch-id heuristic, so a branch carrying unique content is never
+// flagged). trunkRef may be the local trunk or a fetched remote-tracking ref.
+func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
+	merged, err := g.MergedInto(trunkRef)
+	if err != nil {
+		return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
+	}
+	for _, name := range sortedBranchNames(s) {
+		if merged[name] {
+			continue
+		}
+		contained, err := g.ChangesContainedIn(trunkRef, name)
+		if err != nil {
+			return nil, fmt.Errorf("check whether %q's changes are contained in %q: %w", name, trunkRef, err)
+		}
+		if contained {
+			merged[name] = true
+		}
+	}
+	return merged, nil
 }
 
 // TrackBranch starts tracking name — the current branch when name is empty.

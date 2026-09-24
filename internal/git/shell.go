@@ -23,6 +23,10 @@ func (Shell) TipsFor(names []string) (map[string]string, error) {
 func (Shell) MergedInto(ref string) (map[string]bool, error) {
 	return MergedInto(ref)
 }
+
+func (Shell) ChangesContainedIn(upstream, branch string) (bool, error) {
+	return ChangesContainedIn(upstream, branch)
+}
 func (Shell) Checkout(name string) error                  { return Checkout(name) }
 func (Shell) CheckoutDetach(ref string) error             { return CheckoutDetach(ref) }
 func (Shell) CreateBranch(name string) error              { return CreateBranch(name) }

@@ -288,11 +288,16 @@ deleted/restacked branches without changing anything.
 #### `st sync [--no-delete] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
 the trunk (re-parenting their children), restacks every remaining stack onto the
-updated trunk, and restores your original branch. Sync also works from inside a
-branch's linked worktree: the trunk fast-forward runs in the trunk's own worktree
-(a dirty trunk worktree blocks sync with an error naming its path). `--no-delete`
-keeps merged branches; `--dry-run` previews the prune/restack plan without
-fetching or changing anything.
+updated trunk, and restores your original branch. A branch counts as merged when
+its commits are ancestors of the trunk OR when its entire diff is already in the
+trunk's tree — so a PR that squash-merged on the host is detected from git data
+alone (no API), even though the branch's tip is no ancestor. The check is exact
+tree-content containment: a branch carrying any content the trunk lacks is never
+pruned. Sync also works from inside a branch's linked worktree: the trunk
+fast-forward runs in the trunk's own worktree (a dirty trunk worktree blocks
+sync with an error naming its path). `--no-delete` keeps merged branches;
+`--dry-run` previews the prune/restack plan without fetching or changing
+anything.
 
 #### `st submit [--remote <name>] [--dry-run]` (`ss`)
 Pushes every branch on the current stack — from the bottom branch up to the

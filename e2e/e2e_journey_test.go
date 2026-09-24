@@ -1707,6 +1707,69 @@ func TestSyncUndoRestoresPrunedBranchesAndTrunk(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestSyncPrunesSquashMerged exercises the content-containment prune: feat-a's
+// PR squash-merges "on the host" — its diff lands on the trunk as ONE commit
+// with no ancestry link, so `git branch --merged`/`git cherry` cannot see it —
+// and `st sync` prunes it anyway because every change it made is already in
+// the trunk's tree. feat-b (unique content) survives and re-parents onto main.
+func TestSyncPrunesSquashMerged(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a1.txt", "a1\n", "a1")
+	// A second commit on feat-a: the squash-merged PR is multi-commit, the
+	// case `git cherry`'s per-commit patch-id mapping provably cannot see.
+	r.writeFile("a2.txt", "a2\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "a2")
+	r.create("feat-b", "b.txt", "b\n", "b")
+
+	// Squash-merge feat-a on main, push it, then rewind local main so sync has
+	// a real fetch + fast-forward before it detects the landed content.
+	r.stOK("checkout", "main")
+	preTrunk := r.rev("main")
+	r.git("merge", "-q", "--squash", "feat-a")
+	r.git("commit", "-q", "-m", "squash feat-a")
+	r.git("push", "-q", "origin", "main")
+	r.git("reset", "-q", "--hard", preTrunk)
+
+	// Premise: feat-a's tip is not an ancestor of the remote trunk.
+	if r.isAncestor("feat-a", "origin/main") {
+		t.Fatal("test setup broken: squash-merged feat-a must not be an ancestor of origin/main")
+	}
+
+	res := r.stOK("sync")
+	wantStdoutContains(t, res, "sync complete")
+	wantStdoutContains(t, res, "deleted: feat-a")
+
+	if r.branchExists("feat-a") {
+		t.Fatal("squash-merged feat-a should be pruned after sync")
+	}
+	if !r.branchExists("feat-b") {
+		t.Fatal("feat-b carries unique content and must survive sync")
+	}
+	if !r.fileOnBranch("feat-b", "b.txt") {
+		t.Fatal("feat-b lost its content")
+	}
+
+	res = r.stOK("log", "--json")
+	var root logNode
+	if err := json.Unmarshal([]byte(res.stdout), &root); err != nil {
+		t.Fatalf("log --json invalid: %v", err)
+	}
+	b := findNode(&root, "feat-b")
+	if b == nil || b.Parent != "main" {
+		t.Fatalf("feat-b should be re-parented onto main after prune: %+v", b)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncFromLinkedWorktree proves the whole maintenance loop works from
 // inside a branch's own worktree: sync fast-forwards the trunk in the MAIN
 // worktree (its owner), prunes the landed branch, restacks the current branch,

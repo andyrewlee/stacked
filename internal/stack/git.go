@@ -21,6 +21,13 @@ type Git interface {
 	// MergedInto returns the local branches whose tips are ancestors of ref,
 	// equivalent to checking IsAncestor(branch, ref) for every local branch.
 	MergedInto(ref string) (map[string]bool, error)
+	// ChangesContainedIn reports whether every content change branch makes
+	// relative to its merge base with upstream is already present in
+	// upstream's tree — the squash-merge / fully-cherry-picked case that
+	// ancestry checks cannot see: branch's tip is no ancestor, yet merging it
+	// would add nothing. Exact content equality, never a heuristic: a branch
+	// carrying any content upstream lacks is not contained.
+	ChangesContainedIn(upstream, branch string) (bool, error)
 	Checkout(name string) error
 	CheckoutDetach(ref string) error
 	CreateBranch(name string) error

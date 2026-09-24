@@ -1025,6 +1025,109 @@ func TestMergedInto(t *testing.T) {
 	}
 }
 
+// TestChangesContainedIn pins the tree-content containment check: a
+// squash-merged branch's tip is no ancestor of the trunk (MergedInto/`git
+// cherry` miss it — verified inside the test), yet its whole diff is in the
+// trunk's tree. Unique content, and content the trunk has since moved past,
+// are both NOT contained.
+func TestChangesContainedIn(t *testing.T) {
+	newRepo(t)
+
+	// feat: two commits, squash-merged into main as ONE commit (the host
+	// squash-merge shape — no ancestry link).
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "a1.txt", "a1\n")
+	writeFile(t, "a2.txt", "a2\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "feat 1")
+	writeFile(t, "a3.txt", "a3\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "feat 2")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "merge", "-q", "--squash", "feat")
+	mustGit(t, "commit", "-q", "-m", "squash feat")
+	featSHA := mustGit(t, "rev-parse", "feat")
+	mainSHA := mustGit(t, "rev-parse", "main")
+
+	// git cherry cannot see it (per-commit patch-id mapping only) — that's the
+	// gap this function exists to close.
+	if out := mustGit(t, "cherry", "main", "feat"); !strings.Contains(out, "+") {
+		t.Fatalf("test premise broken: git cherry should mark squash-merged commits '+', got %q", out)
+	}
+	if merged, err := MergedInto("main"); err != nil || merged["feat"] {
+		t.Fatalf("test premise broken: squash-merged feat must not be ancestry-merged: %v %v", merged, err)
+	}
+
+	contained, err := ChangesContainedIn("main", "feat")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn: %v", err)
+	}
+	if !contained {
+		t.Fatal("squash-merged feat should be content-contained in main")
+	}
+	// A raw SHA upstream works too — SyncPlanAgainst probes remote tips.
+	contained, err = ChangesContainedIn(mainSHA, "feat")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn by SHA: %v", err)
+	}
+	if !contained {
+		t.Fatal("squash-merged feat should be contained in the main tip SHA")
+	}
+
+	// A branch with unique content is not contained.
+	mustGit(t, "checkout", "-q", "-b", "unique", featSHA)
+	writeFile(t, "unique.txt", "unique\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "unique")
+	mustGit(t, "checkout", "-q", "main")
+	contained, err = ChangesContainedIn("main", "unique")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn unique: %v", err)
+	}
+	if contained {
+		t.Fatal("unique must NOT be contained: it has content main lacks")
+	}
+
+	// A branch squash-merged and then given new work is not contained.
+	mustGit(t, "checkout", "-q", "-b", "continued", featSHA)
+	mustGit(t, "checkout", "-q", "main")
+	writeFile(t, "later.txt", "later\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "later")
+	contained, err = ChangesContainedIn("main", "continued")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn continued: %v", err)
+	}
+	if !contained {
+		t.Fatal("continued has no content of its own yet; it should still be contained")
+	}
+	mustGit(t, "checkout", "-q", "continued")
+	writeFile(t, "wip.txt", "wip\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "wip")
+	mustGit(t, "checkout", "-q", "main")
+	contained, err = ChangesContainedIn("main", "continued")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn continued+wip: %v", err)
+	}
+	if contained {
+		t.Fatal("continued gained content main lacks; must NOT be contained")
+	}
+
+	// The trunk moving the same files PAST the squash breaks containment: main
+	// no longer agrees with the branch's version at a path the branch changed.
+	writeFile(t, "a1.txt", "a1 evolved\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "evolve a1")
+	contained, err = ChangesContainedIn("main", "feat")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn evolved: %v", err)
+	}
+	if contained {
+		t.Fatal("main moved past feat's content; feat must NOT be contained")
+	}
+}
+
 func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
 	newRepo(t)
 	bare := t.TempDir()

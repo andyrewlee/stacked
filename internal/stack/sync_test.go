@@ -150,6 +150,120 @@ func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 	}
 }
 
+// TestSyncPrunesSquashMerged exercises the content-containment prune: feat-a's
+// PR squash-merged on the host, so its commits are NOT ancestors of main
+// (MergedInto misses it), but its whole diff landed as one trunk commit —
+// ChangesContainedIn catches it. feat-b is re-parented and feat-c, carrying
+// unique content, survives.
+func TestSyncPrunesSquashMerged(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	f.commit("a2") // second commit on feat-a: the squash is multi-commit
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	mkBranch(t, env, s, f, "main", "feat-c")
+
+	f.squashInto(t, "main", "feat-a")
+
+	// Sanity: feat-a's tip is genuinely not an ancestor of main — this prune
+	// can only come from content containment.
+	if mustFakeIsAncestor(t, f, "feat-a", "main") {
+		t.Fatal("test setup: feat-a should not be an ancestor of main after a squash-merge")
+	}
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got := res.Deleted; len(got) != 1 || got[0] != "feat-a" {
+		t.Fatalf("deleted = %v, want [feat-a]", got)
+	}
+	if s.IsTracked("feat-a") || f.BranchExists("feat-a") {
+		t.Fatal("squash-merged feat-a should have been pruned")
+	}
+	if b, _ := s.Get("feat-b"); b == nil || b.Parent != "main" {
+		t.Fatalf("feat-b should be re-parented onto main: %+v", b)
+	}
+	if !s.IsTracked("feat-c") || !f.BranchExists("feat-c") {
+		t.Fatal("feat-c has unique content and must survive the prune")
+	}
+}
+
+// TestSyncKeepsSquashMergedBranchWithNewContent is the false-positive guard: a
+// branch that was squash-merged but then gained a commit whose content is not
+// on the trunk is NOT contained and must be kept.
+func TestSyncKeepsSquashMergedBranchWithNewContent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	f.squashInto(t, "main", "feat-a")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("wip") // new work on top of the squash-merged commits
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(res.Deleted) != 0 {
+		t.Fatalf("deleted = %v, want none — feat-a has content main lacks", res.Deleted)
+	}
+	if !s.IsTracked("feat-a") || !f.BranchExists("feat-a") {
+		t.Fatal("feat-a must survive: it carries content the trunk does not have")
+	}
+}
+
+// TestSyncPlanPreviewsSquashMergedPrune pins the dry-run path to the same
+// detection the live sync runs: a squash-merged branch shows up in Deleted
+// without anything being mutated.
+func TestSyncPlanPreviewsSquashMergedPrune(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	f.squashInto(t, "main", "feat-a")
+
+	res, err := syncPlan(env, s, false)
+	if err != nil {
+		t.Fatalf("syncPlan: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("Deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if !s.IsTracked("feat-a") || !f.BranchExists("feat-a") {
+		t.Fatal("syncPlan must not prune feat-a")
+	}
+	if b, _ := s.Get("feat-b"); b.Parent != "feat-a" {
+		t.Fatalf("syncPlan mutated state parent to %q", b.Parent)
+	}
+}
+
+// TestSyncPlanAgainstSquashMergedOnRemoteTrunk runs the prune preview against
+// a remote-tracking tip (a bare SHA carrying the squash commit) — the
+// after-fetch dry-run shape — and confirms the squash-merge is still caught.
+func TestSyncPlanAgainstSquashMergedOnRemoteTrunk(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "main", "feat-b")
+
+	mainTip, err := f.RevParse("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The remote trunk gained one commit: the host-side squash of feat-a.
+	remoteTip := f.newID()
+	f.commits[remoteTip] = &fakeCommit{id: remoteTip, parent: mainTip, subject: "squash feat-a", content: f.squashTokens(t, "main", "feat-a")}
+
+	res, err := SyncPlanAgainst(env, s, false, remoteTip)
+	if err != nil {
+		t.Fatalf("SyncPlanAgainst: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("Deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if len(res.Restacked) != 1 || res.Restacked[0] != "feat-b" {
+		t.Fatalf("Restacked = %v, want [feat-b]", res.Restacked)
+	}
+}
+
 func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
