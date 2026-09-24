@@ -135,6 +135,13 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 		}
 	}
 
+	// Blame is memoized per FILE for the life of one plan: every hunk in the
+	// same file shares a single `git blame --porcelain` spawn because the
+	// answer cannot change while the plan runs — the staged diff, HEAD, and
+	// the index are frozen reads here (the apply half of st absorb runs under
+	// the advisory lock, and this pass performs no mutation). Keyed on file
+	// alone only because every lookup is at HEAD; if a future caller blames
+	// other revs or sub-ranges, key on (file, rev, range).
 	blameByFile := map[string]map[int]string{}
 	for _, h := range hunks {
 		lines := hunkLines(h)
@@ -228,17 +235,32 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 
 	// Pre-flight EVERY target's owner worktree before any mutation: absorb is
 	// all-or-nothing, so one dirty owner blocks the whole plan (a partial
-	// apply would fracture the one-undo-entry story).
-	ownerDirs := map[string]string{}
+	// apply would fracture the one-undo-entry story). cur needs no probe —
+	// it is checked out here by definition.
+	var foreignTargets []string
 	for _, target := range targets {
-		if target == cur {
-			continue
+		if target != cur {
+			foreignTargets = append(foreignTargets, target)
 		}
-		owner, elsewhere, err := s.ownerElsewhere(g, target)
+	}
+	ownerDirs := map[string]string{}
+	if len(foreignTargets) > 0 {
+		// ONE worktree snapshot answers every target's ownership check:
+		// ownership cannot change mid-apply in a way a single pre-flight must
+		// react to (the advisory lock serializes st mutations, and a racing
+		// `git worktree add` behind the lock races a per-target read just the
+		// same) — ownerElsewhere would spawn `git worktree list` per target
+		// for the same answer. IsCleanIn stays per-target below: each owner
+		// dir is a DIFFERENT worktree whose dirtiness cannot be shared.
+		wts, err := g.Worktrees()
 		if err != nil {
 			return nil, err
 		}
-		if elsewhere {
+		for _, target := range foreignTargets {
+			owner, elsewhere := ownerElsewhereFrom(wts, target, cur)
+			if !elsewhere {
+				continue
+			}
 			clean, err := g.IsCleanIn(owner.Path)
 			if err != nil {
 				return nil, fmt.Errorf("checking worktree %s: %w", owner.Path, err)
@@ -255,7 +277,9 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	// Amend ancestors first (deterministic; the amends are independent — each
 	// reads only its own tip tree, and targets' hunks are line-disjoint by the
 	// multi-owner refusal). If amend k fails, amends 1..k-1 persist and the
-	// undo entry reverts them.
+	// undo entry reverts them. DiffCachedPatchFor and AmendTipWithPatch stay
+	// per-target: each lands a DIFFERENT hunk set on a DIFFERENT ref, so no
+	// batching applies.
 	hunksByTarget := map[string][]git.Hunk{}
 	for _, a := range plan.Absorbed {
 		hunksByTarget[a.Branch] = append(hunksByTarget[a.Branch], a.hunk)

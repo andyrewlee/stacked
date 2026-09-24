@@ -195,6 +195,23 @@ func (s *State) ownerElsewhereWith(g Git, branch, curHint string) (git.Worktree,
 	return owner, true, nil
 }
 
+// ownerElsewhereFrom is the snapshot variant of ownerElsewhereWith: it answers
+// the same question against a worktree list the caller already fetched, so a
+// loop over many branches (absorb's pre-flight checks every target) pays ONE
+// `git worktree list` total instead of one per branch. cur must be the
+// caller's known current branch — passing "" treats every owned branch as
+// owned elsewhere, matching the detached-HEAD arm of ownerElsewhereWith.
+func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, bool) {
+	if !IsMultiWorktree(wts) {
+		return git.Worktree{}, false
+	}
+	owner, ok := OwnerOf(wts, branch)
+	if !ok || branch == cur {
+		return git.Worktree{}, false
+	}
+	return owner, true
+}
+
 // restackInWorktree rebases name onto parentTip inside its owning worktree
 // (git -C <path>), gated on that worktree being clean. A dirty owner is SKIPPED
 // (recorded in s.skippedWorktrees, never clobbered). A conflict during the

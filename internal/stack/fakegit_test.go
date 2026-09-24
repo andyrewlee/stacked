@@ -164,6 +164,8 @@ type tipReadSpyGit struct {
 	currentBranchCalls int
 	ancestorSetCalls   int
 	commitRangeCalls   int
+	blameCalls         int
+	worktreesCalls     int
 	tipsForNames       [][]string
 }
 
@@ -196,6 +198,16 @@ func (g *tipReadSpyGit) AncestorSet(ref string) (map[string]bool, error) {
 func (g *tipReadSpyGit) CommitRange(exclude, include string) (map[string]bool, error) {
 	g.commitRangeCalls++
 	return g.Git.CommitRange(exclude, include)
+}
+
+func (g *tipReadSpyGit) BlamePorcelain(file, rev string) (map[int]string, error) {
+	g.blameCalls++
+	return g.Git.BlamePorcelain(file, rev)
+}
+
+func (g *tipReadSpyGit) Worktrees() ([]git.Worktree, error) {
+	g.worktreesCalls++
+	return g.Git.Worktrees()
 }
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {

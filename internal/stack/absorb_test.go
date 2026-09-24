@@ -469,6 +469,75 @@ func TestAbsorbPlanSpawnDiet(t *testing.T) {
 	if spy.ancestorSetCalls != 0 || spy.commitRangeCalls != 1 {
 		t.Fatalf("ancestorSet/commitRange = %d/%d, want 0/1 (the bounded range walk)", spy.ancestorSetCalls, spy.commitRangeCalls)
 	}
+	if spy.tipsForCalls != 1 {
+		t.Fatalf("tipsForCalls = %d, want 1 (one bulk read for the attribution maps)", spy.tipsForCalls)
+	}
+}
+
+// TestAbsorbPlanBatchesBlamePerFile pins the blame memoization contract:
+// `git blame` spawns once per FILE, never per hunk — a staged diff with many
+// hunks in few files must not scale subprocesses with hunk count. Same
+// deliberate implementation-strategy ratchet as the spawn-diet test above.
+func TestAbsorbPlanBatchesBlamePerFile(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.stagedHunks = []git.Hunk{
+		{File: "a.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+		{File: "a.txt", OldStart: 7, OldN: 1, NewStart: 7, NewN: 1},
+		{File: "b.txt", OldStart: 3, OldN: 1, NewStart: 3, NewN: 1},
+		{File: "b.txt", OldStart: 9, OldN: 1, NewStart: 9, NewN: 1},
+	}
+	f.blame = map[string]map[int]string{
+		"a.txt": {2: tips["a"], 7: tips["a"]},
+		"b.txt": {3: tips["a"], 9: tips["a"]},
+	}
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+
+	res, err := AbsorbPlan(env, s)
+	if err != nil {
+		t.Fatalf("AbsorbPlan: %v", err)
+	}
+	if len(res.Absorbed) != 4 || len(res.Refused) != 0 {
+		t.Fatalf("result = %+v, want all four hunks absorbed", res)
+	}
+	if spy.blameCalls != 2 {
+		t.Fatalf("blameCalls = %d, want 2 — one blame per file, not per hunk", spy.blameCalls)
+	}
+}
+
+// TestAbsorbPreFlightReadsWorktreesOnce pins the hoisted owner snapshot: the
+// dirty-owner pre-flight costs ONE `git worktree list` for all targets (and
+// no extra CurrentBranch — cur is already resolved), not one read per
+// target. b's dirty worktree returns the plan unapplied BEFORE any amend, so
+// the spy counts isolate the pre-flight from the cascade's own worktree
+// reads.
+func TestAbsorbPreFlightReadsWorktreesOnce(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedPatch = []byte("fake patch")
+	f.stagedHunks = []git.Hunk{
+		{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+		{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
+	}
+	f.blame = map[string]map[int]string{"f.txt": {2: tips["a"], 5: tips["b"]}}
+	f.addWorktree("/wt/b", "b")
+	f.dirtyWT = map[string]bool{"b": true}
+	spy := &tipReadSpyGit{Git: f}
+	env.Git = spy
+
+	res, err := Absorb(env, s)
+	if err != nil {
+		t.Fatalf("Absorb: %v", err)
+	}
+	if !res.DryRun || !strings.HasPrefix(res.Summary, "not applied: a target's worktree is dirty") {
+		t.Fatalf("result = %+v, want the dirty-owner refusal", res)
+	}
+	if spy.worktreesCalls != 1 {
+		t.Fatalf("worktreesCalls = %d, want 1 — the pre-flight snapshots once for all targets", spy.worktreesCalls)
+	}
+	if spy.currentBranchCalls != 1 {
+		t.Fatalf("currentBranchCalls = %d, want 1 — currentTracked only; the pre-flight threads cur", spy.currentBranchCalls)
+	}
 }
 
 // TestAbsorbPlanGuards pins the absorb-local preconditions: nothing staged is
