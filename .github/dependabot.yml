@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Keep the SHA-pinned actions in .github/workflows/ current: Dependabot
+  # bumps the pinned commit and rewrites the trailing `# <tag>` comment.
+  # Go modules are deliberately absent — go.mod is stdlib-only (zero requires).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
