@@ -307,6 +307,47 @@ func TestBranchLifecycle(t *testing.T) {
 	}
 }
 
+func TestLocalBranchRef(t *testing.T) {
+	newRepo(t)
+	if err := CreateBranch("feat"); err != nil {
+		t.Fatalf("CreateBranch feat: %v", err)
+	}
+	if err := CreateBranch("feat2"); err != nil {
+		t.Fatalf("CreateBranch feat2: %v", err)
+	}
+
+	// Existing branches are qualified so rev-list/merge-base/… resolve them
+	// unambiguously — a tag or SHA of the same name can't shadow the branch.
+	if got := localBranchRef("feat"); got != "refs/heads/feat" {
+		t.Fatalf("localBranchRef(feat) = %q, want refs/heads/feat", got)
+	}
+	if got := localBranchRef("feat2"); got != "refs/heads/feat2" {
+		t.Fatalf("localBranchRef(feat2) = %q, want refs/heads/feat2", got)
+	}
+	// Missing names — including prefix-siblings of real branches — pass
+	// through unqualified: the lookup is an exact `show-ref --verify`, never
+	// a listing scan. (refs/heads/feat/sub is the nearest over-match shape,
+	// but git's D/F constraint forbids it while refs/heads/feat exists, so a
+	// sibling is the closest constructible case.)
+	if got := localBranchRef("fe"); got != "fe" {
+		t.Fatalf("localBranchRef(fe) = %q, want fe unchanged", got)
+	}
+	if got := localBranchRef("feat/missing"); got != "feat/missing" {
+		t.Fatalf("localBranchRef(feat/missing) = %q, want unchanged", got)
+	}
+	// HEAD, already-qualified refs, and raw SHAs pass through as-is.
+	if got := localBranchRef("HEAD"); got != "HEAD" {
+		t.Fatalf("localBranchRef(HEAD) = %q, want HEAD", got)
+	}
+	if got := localBranchRef("refs/heads/feat"); got != "refs/heads/feat" {
+		t.Fatalf("localBranchRef(refs/heads/feat) = %q, want unchanged", got)
+	}
+	sha := mustGit(t, "rev-parse", "HEAD")
+	if got := localBranchRef(sha); got != sha {
+		t.Fatalf("localBranchRef(%s) = %q, want the SHA unchanged", sha, got)
+	}
+}
+
 func TestFlagLikeRefNamesRejected(t *testing.T) {
 	tests := []struct {
 		name string

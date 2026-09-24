@@ -1004,6 +1004,15 @@ func RevParse(ref string) (string, error) {
 	return Run("rev-parse", ref)
 }
 
+// localBranchRef qualifies a bare local branch name to refs/heads/<name> so
+// callers resolve it unambiguously — a tag or SHA-shaped string of the same
+// name cannot shadow the branch. HEAD, already-qualified refs, and SHAs pass
+// through unchanged. The existence probe is BranchExists (`git show-ref
+// --verify`), an exact-ref read rather than a namespace listing, so each call
+// is O(1) in ref count. Do not "optimize" this to `for-each-ref
+// refs/heads/<name>`: that enumerates and formats matches (strictly more
+// work) and matches at slash boundaries, so it would need an exact-match
+// post-filter just to preserve today's semantics.
 func localBranchRef(ref string) string {
 	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") {
 		return ref
