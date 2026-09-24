@@ -360,6 +360,10 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 			name: "reset soft ref",
 			run:  func() error { return ResetSoft("--hard") },
 		},
+		{
+			name: "remote url",
+			run:  func() error { _, err := RemoteURL("--upload-pack=true"); return err },
+		},
 	}
 
 	for _, tt := range tests {
@@ -372,6 +376,13 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 				t.Fatalf("error = %q, want invalid ref name", err)
 			}
 		})
+	}
+
+	// RemoteExists is a predicate rather than an erroring call, so a flag-like
+	// remote name is simply "not configured" — and never reaches exec where git
+	// could parse it as an option.
+	if RemoteExists("--upload-pack=true") {
+		t.Error("RemoteExists(--upload-pack=true) = true, want false")
 	}
 }
 

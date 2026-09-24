@@ -1316,8 +1316,13 @@ func PushBranches(remote string, branches []string, force bool) error {
 	return err
 }
 
-// RemoteExists reports whether a remote with the given name is configured.
+// RemoteExists reports whether a remote with the given name is configured. A
+// flag-like name is simply "not configured": it is rejected before exec so git
+// can never parse it as an option.
 func RemoteExists(name string) bool {
+	if err := validRefArg("remote", name); err != nil {
+		return false
+	}
 	return ok("remote", "get-url", name)
 }
 
@@ -1556,6 +1561,9 @@ func UpdateRefs(updates map[string]string) error {
 
 // RemoteURL returns the configured fetch URL of the named remote.
 func RemoteURL(remote string) (string, error) {
+	if err := validRefArg("remote", remote); err != nil {
+		return "", err
+	}
 	return Run("remote", "get-url", remote)
 }
 

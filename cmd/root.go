@@ -436,7 +436,7 @@ func renderInternalError(r any, asJSON bool) {
 		})
 		return
 	}
-	fmt.Fprintln(os.Stderr, "st: "+msg)
+	fmt.Fprintln(os.Stderr, "st: "+sanitizeForTerminal(msg))
 	os.Stderr.Write(debug.Stack())
 }
 

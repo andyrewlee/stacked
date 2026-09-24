@@ -675,6 +675,48 @@ func TestExecuteRecoversFromPanic(t *testing.T) {
 	}
 }
 
+// A panic value carrying terminal control bytes (a hostile branch name or git
+// message is the realistic source) must be escaped in the text arm — no raw
+// ESC reaches the terminal — while the --json message keeps the raw bytes
+// (encoding/json escapes them on the wire).
+func TestExecutePanicSanitizesControlBytes(t *testing.T) {
+	register(&Command{
+		Name:    "panic-esc",
+		Summary: "test-only panicking command",
+		Usage:   "st panic-esc",
+		Run:     func([]string) error { panic("boom\x1b[31m") },
+	})
+	defer func() {
+		registry = registry[:len(registry)-1]
+		delete(byName, "panic-esc")
+	}()
+
+	var code int
+	var stdout string
+	errOut := executeCapturingOutput(t, []string{"panic-esc"}, &code, &stdout)
+	if code != exitInternal {
+		t.Fatalf("Execute(panic-esc) = %d, want %d", code, exitInternal)
+	}
+	if strings.Contains(errOut, "\x1b") {
+		t.Errorf("panic text output leaked a raw ESC byte:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, `boom\x1b[31m`) {
+		t.Errorf("panic text output missing escaped control bytes:\n%s", errOut)
+	}
+
+	code = 0
+	errOut = executeCapturingOutput(t, []string{"panic-esc", "--json"}, &code, &stdout)
+	var payload struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+		t.Fatalf("panic envelope not parseable: %v\n%s", err, errOut)
+	}
+	if payload.Error.Message != "internal error: boom\x1b[31m" {
+		t.Errorf("json panic message = %q, want raw control bytes preserved", payload.Error.Message)
+	}
+}
+
 func TestExecuteDispatchesSubcommand(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
