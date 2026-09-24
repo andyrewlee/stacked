@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -1216,6 +1217,90 @@ func TestStatusJSONSurfacesConflict(t *testing.T) {
 	}
 	if len(st.ConflictedFiles) == 0 {
 		t.Error("status should list the conflicted files during a conflict")
+	}
+}
+
+// TestContinueJSONAfterConflict resumes a paused restack through the JSON
+// path, which routes the engine through cachedQuietShell — so the rebase runs
+// via QuietShell.RebaseContinue and git's chatter cannot corrupt the payload.
+func TestContinueJSONAfterConflict(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	mustCreate(t, "feat-b", "f.txt", "A\nB\n", "b")
+	mustCheckout(t, "feat-a")
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatal("expected a conflict restacking feat-b onto the amended feat-a")
+	}
+
+	write(t, "f.txt", "X\nB\n")
+	mustRun(t, "git", "add", "f.txt")
+	out := captureStdout(t, func() {
+		if err := runContinue([]string{"--json"}); err != nil {
+			t.Fatalf("continue --json: %v", err)
+		}
+	})
+	var res stack.OpResult
+	decodeStrictJSON(t, "continue --json", out, &res)
+	if res.Summary != "continued restack" {
+		t.Fatalf("continue --json summary = %q, want %q", res.Summary, "continued restack")
+	}
+	if len(res.Notes) != 1 || res.Notes[0] != "completed: feat-b" {
+		t.Fatalf("continue --json notes = %v, want [completed: feat-b]", res.Notes)
+	}
+	if inProgress, _ := git.RebaseInProgress(); inProgress {
+		t.Fatal("rebase still in progress after continue --json")
+	}
+}
+
+// TestDeleteJSONRemovesOwnedWorktree deletes a branch that owns a clean linked
+// worktree through the JSON path: mutate routes the engine through
+// cachedQuietShell, so the worktree teardown runs through its WorktreeRemove
+// override (the text path takes cachedShell instead).
+func TestDeleteJSONRemovesOwnedWorktree(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetWorktreeCache() // the in-place checkout bypassed the cached port
+
+	var wt struct {
+		Branch  string   `json:"branch"`
+		Path    string   `json:"path"`
+		Copied  []string `json:"copied,omitempty"`
+		Summary string   `json:"summary"`
+	}
+	wtOut := captureStdout(t, func() {
+		if err := runWorktree([]string{"feat-a", "--json"}); err != nil {
+			t.Fatalf("worktree feat-a --json: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "worktree feat-a --json", wtOut, &wt)
+	if wt.Path == "" || wt.Branch != "feat-a" {
+		t.Fatalf("worktree feat-a --json = %s, want a path for feat-a", wtOut)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runDelete([]string{"feat-a", "--force", "--json"}); err != nil {
+			t.Fatalf("delete --json feat-a: %v", err)
+		}
+	})
+	var res stack.OpResult
+	decodeStrictJSON(t, "delete --json feat-a", out, &res)
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("delete --json deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
+		t.Fatalf("delete --json left owned worktree at %q: %v", wt.Path, err)
+	}
+	if stateT(t).IsTracked("feat-a") {
+		t.Fatal("delete --json left feat-a tracked")
+	}
+	list := mustRun(t, "git", "worktree", "list", "--porcelain")
+	if strings.Contains(list, "refs/heads/feat-a") {
+		t.Fatalf("delete --json left feat-a registered as a worktree:\n%s", list)
 	}
 }
 

@@ -870,6 +870,59 @@ func TestOntoAbortsWhenPendingReparentCannotPersist(t *testing.T) {
 	}
 }
 
+// When persisting the pending reparent fails AND the follow-up rebase abort
+// also fails, the rebase is still paused — so the error must keep ErrConflict
+// matchable (st continue/abort can still recover) while carrying BOTH failures.
+func TestOntoDoubleFaultKeepsConflictAndBothFailures(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.Get("b")
+	oldParent, oldParentSHA := b.Parent, b.ParentSHA
+	f.conflictOn("b")
+	saveErr := errors.New("disk full")
+	env.Save = func() error { return saveErr }
+	abortErr := errors.New("abort failed")
+	f.rebaseAbortErr = abortErr
+
+	_, err := Onto(env, s, "c")
+	if err == nil {
+		t.Fatal("Onto returned nil error on conflict + failed save + failed abort")
+	}
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto error = %v, want ErrConflict matchable (rebase still in progress)", err)
+	}
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Onto error = %v, want save failure %v matchable", err, saveErr)
+	}
+	if !errors.Is(err, abortErr) {
+		t.Fatalf("Onto error = %v, want abort failure %v matchable", err, abortErr)
+	}
+	for _, want := range []string{
+		`moving "b" onto "c"`,
+		"record pending reparent",
+		"abort the in-progress rebase",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Onto error = %v, want it to contain %q", err, want)
+		}
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("failed abort should leave the rebase in progress")
+	}
+	// The pending entry is dropped in memory to match the unpersisted disk.
+	if s.PendingReparent != nil {
+		t.Fatalf("PendingReparent = %+v, want nil (matches unpersisted disk)", s.PendingReparent)
+	}
+	if b.Parent != oldParent || b.ParentSHA != oldParentSHA {
+		t.Fatalf("b metadata = (%s, %s), want unchanged (%s, %s)", b.Parent, b.ParentSHA, oldParent, oldParentSHA)
+	}
+}
+
 // Continue must still promote a pending reparent (and restore HEAD) when git's
 // head-name file is unreadable: a paused onto rebase is unambiguous.
 func TestContinuePromotesPendingReparentWhenHeadNameEmpty(t *testing.T) {

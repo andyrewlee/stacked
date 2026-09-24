@@ -232,6 +232,36 @@ func TestUndoRejectsActiveRebase(t *testing.T) {
 	}
 }
 
+// An empty undo journal is a success-shaped refusal, not an error: the JSON
+// arm emits {"undone": false} (and the text arm prints "nothing to undo"),
+// both exiting 0.
+func TestUndoEmptyJournalJSONAndText(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--json"}); err != nil {
+			t.Fatalf("undo --json on an empty journal: %v", err)
+		}
+	})
+	var payload struct {
+		Undone bool `json:"undone"`
+	}
+	decodeStrictJSON(t, "undo --json (empty journal)", out, &payload)
+	if payload.Undone {
+		t.Fatalf("undo --json emitted %s, want {\"undone\": false}", strings.TrimSpace(out))
+	}
+
+	out = captureStdout(t, func() {
+		if err := runUndo(nil); err != nil {
+			t.Fatalf("undo on an empty journal: %v", err)
+		}
+	})
+	if !strings.Contains(out, "nothing to undo") {
+		t.Fatalf("undo on an empty journal = %q, want %q", out, "nothing to undo")
+	}
+}
+
 func TestContinueKeepsOriginalUndoEntry(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
