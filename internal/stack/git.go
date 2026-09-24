@@ -6,6 +6,10 @@ import "github.com/andyrewlee/stacked/internal/git"
 // repository. internal/git.Shell is the production implementation; tests use an
 // in-memory fake (see fakegit_test.go) so the engine can be exercised without
 // spawning git. The method set is intentionally the subset the engine needs.
+// Engine code must never exec git itself — every git interaction inside an
+// operation goes through this port so tests can intercept it. (Persistence-layer
+// environment probes that run before Env exists, e.g. locating the git dir for
+// the state file, are exempt; see stackedDir in store.go.)
 type Git interface {
 	RevParse(ref string) (string, error)
 	RebaseOnto(newBase, oldBase, branch string) error

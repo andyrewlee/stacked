@@ -25,6 +25,15 @@ const stateSchemaVersion = 1
 // stackedDir returns the absolute path of the per-repository stacked metadata
 // directory. It uses the common git dir so the stack is shared across all linked
 // worktrees of a repository rather than being per-worktree.
+//
+// Port-boundary note: this reaches git through the package-level helper
+// git.GitCommonDir, not Env.Git — deliberately. It is a persistence-layer
+// environment probe (where does the state file live) that runs before Env is
+// constructed: cmd locks and loads the state, then builds Env{Git, Save: s.Save}.
+// It is not part of any engine op, so no engine test needs to fake it — and a
+// port method could not serve it anyway: FakeGit has no repository to locate,
+// and threading Git into Load/Save/Lock would make s.Save depend on the Env it
+// belongs to.
 func stackedDir() (string, error) {
 	cwd, err := os.Getwd()
 	if err == nil {
