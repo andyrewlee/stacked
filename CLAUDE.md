@@ -39,9 +39,14 @@ internal/stack/
   git.go             the Git PORT interface + Env{Git, Save}
   stack.go           State/Branch types + topology helpers (Children/Descendants/…)
   restack.go         restack primitives (NeedsRestack/RestackBranch/RestackUpstack)
+                     + the restack dry-run planners (RestackPlan/RestackAllPlan)
+  plan.go            dry-run planners for the other mutating ops (FoldPlan/…)
   engine.go          the operations: Create/Modify/Restack/Fold/Squash/Onto/Delete/
-                     Track/Untrack/Rename/RestackAll/PruneMerged → return *OpResult
-  store.go undo.go lock_*.go   persistence, undo journal, flock
+                     Sync/Abort/Continue/TrackBranch/UntrackBranch/Rename → *OpResult
+  absorb.go          staged-hunk attribution + tip-amend apply (AbsorbPlan/Absorb)
+  repair.go          Repair + the problem kinds `st validate` reports
+  worktree*.go       worktree paths/ownership + .worktreeinclude validation
+  store.go undo*.go lock_*.go   persistence, undo journal + Undo op, flock
 cmd/                 thin adapters: parse flags → mutate(label, json, engineFn) → render
 cmd/st/main.go       package main → os.Exit(cmd.Execute())
 e2e/                 black-box tests driving the real binary as a subprocess
@@ -111,15 +116,18 @@ engine and these hold, the topology bookkeeping is sound.
   (`internal/stack/lock_unix.go`), an exclusive lock file with stale-owner
   reclamation elsewhere (`internal/stack/lock_other.go`, `lock_stale.go`).
 
-## Absorb is deliberately v1-sliced
+## Absorb refuses everything ambiguous
 
 `st absorb --dry-run` maps staged hunks to the stack commits that own their
-lines; bare `st absorb` applies any ZERO-REFUSAL plan — each target branch's
-tip is amended with only its own hunks via a temp-index (no checkout), then
-one cascade restack from the lowest target; one undo entry reverts all amends
-plus the cascade. Everything ambiguous is refused loudly: hunks spanning
-commits, pure additions, lines owned by trunk/history, non-tip targets, and
-unclassifiable staged records (binary/mode/rename/quoted paths) — splitting
-hunks or rewriting mid-branch commits is out of scope. The design rationale lives in the PR
-bodies of the two absorb slices (#155/#156) and the doc comments in
-`internal/stack/absorb.go`.
+lines; bare `st absorb` applies any ZERO-REFUSAL plan, which may span several
+target branches — each target branch's tip is amended with only its own hunks
+via a temp-index (no checkout), then one cascade restack from the lowest
+target; one undo entry reverts all amends plus the cascade. Attribution is
+restricted to the current stack's path (cur plus its ancestors): a commit
+tipped only by an off-path tracked branch is refused naming that branch, and
+a tip shared by several on-path branches goes to the lowest sharer. Everything
+ambiguous is refused loudly: hunks spanning commits, pure additions, lines
+owned by trunk/history, non-tip or off-path targets, and unclassifiable
+staged records (binary/mode/rename/quoted paths) — splitting hunks or
+rewriting mid-branch commits is out of scope. The decision table lives in the
+doc comments in `internal/stack/absorb.go`.

@@ -15,7 +15,7 @@ import (
 // newFlagSet.)
 
 // withDefaults gives a command's flag set a usage line plus its flag defaults,
-// the help body the five flag-rich commands print on -h.
+// the help body the flag-rich commands print on -h.
 func withDefaults(fs *flag.FlagSet, name string) *flag.FlagSet {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), usageLine(name))

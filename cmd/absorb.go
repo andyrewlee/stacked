@@ -15,9 +15,9 @@ func init() {
 }
 
 // runAbsorb drives absorb: --dry-run attributes the staged hunks with zero
-// mutation; the bare form applies a single-target plan (amend the owning tip,
-// cascade the descendants) through one mutateState call, so `st undo` reverts
-// the amend and the cascade as one entry.
+// mutation; the bare form applies a zero-refusal plan (amend each owning tip,
+// cascade the descendants of the lowest target) through one mutateState call,
+// so `st undo` reverts the amends and the cascade as one entry.
 func runAbsorb(args []string) error {
 	var o absorbOpts
 	fs := newAbsorbFlags(&o)
