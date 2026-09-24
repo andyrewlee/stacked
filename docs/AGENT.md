@@ -26,6 +26,7 @@ Branch on the exit code; do not parse messages.
 | 2 | rebase conflict in progress | resolve + `git add`, then `st continue` (or `st abort`) |
 | 3 | repo not initialized | run `st init` |
 | 4 | working tree is dirty | commit or stash, then retry |
+| 5 | another `st` command holds the repo lock | retry once it finishes |
 | 70 | internal error (a bug in `st`) | not self-recoverable; report it |
 
 ## JSON output
@@ -43,7 +44,7 @@ code above:
 ```
 
 `error.code` is one of: `error` (1), `conflict` (2), `not_initialized` (3),
-`dirty` (4), `internal` (70, a recovered panic). So an agent can read stdout for
+`dirty` (4), `locked` (5), `internal` (70, a recovered panic). So an agent can read stdout for
 the result, stderr for the error envelope, and the exit code for the category.
 On a `conflict` the envelope also carries `branch` (the branch whose rebase
 stopped) and `onto` (its parent), so you can re-orient without parsing the
@@ -152,7 +153,9 @@ message.
   touch the working tree.
 - Concurrent `st` processes in one repo are serialized by an advisory lock (a
   second one fails fast rather than corrupting state): flock on unix-like
-  platforms, an exclusive lock file elsewhere.
+  platforms, an exclusive lock file elsewhere. A contender exits 5
+  (`"code": "locked"`), so the retry idiom is
+  `until st restack; do [ $? -eq 5 ] || break; sleep 1; done`.
 
 ## Orchestrating parallel agents
 

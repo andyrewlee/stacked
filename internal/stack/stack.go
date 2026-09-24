@@ -22,6 +22,12 @@ var ErrNotInitialized = errors.New("stacked is not initialized in this repo (run
 // user to upgrade st).
 var ErrStateTooNew = errors.New("state file written by newer st")
 
+// ErrLocked is returned by Lock when another st process holds the repository
+// lock. It is ordinary contention, not a failure — the correct response is to
+// retry once the other command finishes — so it is a distinct sentinel that
+// callers can map to its own exit code rather than the generic error.
+var ErrLocked = errors.New("another st command is running in this repository")
+
 // Branch is a single tracked branch within a stack.
 type Branch struct {
 	// Name is the git branch name.

@@ -3,6 +3,7 @@
 package stack
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,9 +28,9 @@ func TestLockIsExclusive(t *testing.T) {
 	if _, err := Lock(); err == nil {
 		release()
 		t.Fatal("second Lock succeeded while the lock was held, want a contention error")
-	} else if !strings.Contains(err.Error(), "another st command is running") {
+	} else if !errors.Is(err, ErrLocked) {
 		release()
-		t.Fatalf("second Lock error = %v, want the contention message", err)
+		t.Fatalf("second Lock error = %v, want the ErrLocked sentinel", err)
 	}
 
 	release()

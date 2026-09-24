@@ -520,6 +520,40 @@ func TestExecuteCommandError(t *testing.T) {
 	}
 }
 
+func TestExecuteLockContention(t *testing.T) {
+	// While the repo lock is held, a mutating command fails with the dedicated
+	// exit code 5 and JSON code "locked" — contention is a first-class,
+	// scriptable signal, distinct from a generic failure (1).
+	newRepo(t)
+	mustInit(t)
+	release, err := stack.Lock()
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	defer release()
+
+	var code int
+	var stdout string
+	errOut := executeCapturingOutput(t, []string{"undo", "--json"}, &code, &stdout)
+	if code != 5 {
+		t.Fatalf("Execute(undo --json) under a held lock = %d, want 5 (locked)", code)
+	}
+	if stdout != "" {
+		t.Fatalf("locked command wrote stdout:\n%s", stdout)
+	}
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(errOut), &payload); err != nil {
+		t.Fatalf("locked stderr not parseable: %v\n%s", err, errOut)
+	}
+	if payload.Error.Code != "locked" {
+		t.Fatalf("error.code = %q, want %q", payload.Error.Code, "locked")
+	}
+}
+
 func TestExecuteJSONErrorIsParseable(t *testing.T) {
 	var code int
 	var stdout string
@@ -584,6 +618,7 @@ func TestExitCodeAndErrorCodeMapping(t *testing.T) {
 		{stack.ErrNotInitialized, 3, "not_initialized"},
 		{stack.ErrConflict, 2, "conflict"},
 		{stack.ErrDirty, 4, "dirty"},
+		{stack.ErrLocked, 5, "locked"},
 		{errors.New("boom"), 1, "error"},
 		{fmt.Errorf("wrapped: %w", stack.ErrConflict), 2, "conflict"},
 	}

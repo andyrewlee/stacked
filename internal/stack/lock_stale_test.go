@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,7 +16,7 @@ func isBusyLockErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	if strings.Contains(err.Error(), "another st command is running in this repository") {
+	if errors.Is(err, ErrLocked) {
 		return true
 	}
 	// Windows delete-pending race: CreateFile on a lock file another

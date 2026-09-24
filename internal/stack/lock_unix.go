@@ -30,7 +30,7 @@ func Lock() (func(), error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another st command is running in this repository")
+			return nil, ErrLocked
 		}
 		return nil, fmt.Errorf("lock stacked state: %w", err)
 	}

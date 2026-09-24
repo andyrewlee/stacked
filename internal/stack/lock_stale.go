@@ -160,7 +160,6 @@ func acquireReclaimGuard(dir string) (func(), error) {
 // race. It carries no build tag so the composed path is exercised by the unix
 // test suite, even though lock_other.go's Lock wrapper only ships off-flock.
 func acquireExclLock(dir string) (func(), error) {
-	busy := errors.New("another st command is running in this repository")
 	path := filepath.Join(dir, "lock.excl")
 	token := newLockToken()
 	contents := lockFileContent(os.Getpid(), time.Now(), token)
@@ -192,7 +191,7 @@ func acquireExclLock(dir string) (func(), error) {
 			return nil, fmt.Errorf("open lock file: %w", err)
 		}
 		if attempt > 0 {
-			return nil, busy
+			return nil, ErrLocked
 		}
 		gr, gerr := acquireReclaimGuard(dir)
 		if gr == nil {
@@ -203,7 +202,7 @@ func acquireExclLock(dir string) (func(), error) {
 			if gerr != nil && lockAccessDeniedErr(gerr) && lockOwnerGoneAt(path) {
 				return nil, fmt.Errorf("cannot reclaim stale lock %s (owner is gone): %w — check directory permissions", path, gerr)
 			}
-			return nil, busy
+			return nil, ErrLocked
 		}
 		guardRelease = gr
 		existing, readErr := os.ReadFile(path)
@@ -211,7 +210,7 @@ func acquireExclLock(dir string) (func(), error) {
 			continue
 		}
 		if !lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now()) {
-			return nil, busy
+			return nil, ErrLocked
 		}
 		if removed, rmErr := removeLockFileIfContentErr(path, string(existing)); !removed {
 			// The owner is gone but the stale file cannot be removed: surface a
@@ -221,10 +220,10 @@ func acquireExclLock(dir string) (func(), error) {
 			if rmErr != nil && lockAccessDeniedErr(rmErr) {
 				return nil, fmt.Errorf("cannot reclaim stale lock %s (owner is gone): %w — check directory permissions", path, rmErr)
 			}
-			return nil, busy
+			return nil, ErrLocked
 		}
 	}
-	return nil, busy
+	return nil, ErrLocked
 }
 
 // lockOwnerGoneAt reports whether the lock file at path records an owner that

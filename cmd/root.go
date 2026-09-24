@@ -63,7 +63,7 @@ func register(c *Command) {
 }
 
 // exitInternal is the exit code for a recovered panic (an internal bug). It is
-// deliberately outside the semantic range 1-4 so an agent never mistakes a crash
+// deliberately outside the semantic range 1-5 so an agent never mistakes a crash
 // for a resolvable condition — in particular not for a conflict (exit 2), which
 // is the code the Go runtime would otherwise use for an unrecovered panic.
 const exitInternal = 70
@@ -367,6 +367,7 @@ var errorClasses = []struct {
 	{stack.ErrConflict, 2, "conflict"},
 	{stack.ErrNotInitialized, 3, "not_initialized"},
 	{stack.ErrDirty, 4, "dirty"},
+	{stack.ErrLocked, 5, "locked"},
 }
 
 // exitCode maps an error to a stable exit status so agents can branch on the
