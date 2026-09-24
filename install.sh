@@ -88,7 +88,13 @@ fi
 VERSION_NUM="${VERSION#v}"
 
 FILENAME="${ARCHIVE}_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+
+# Release-asset base URL shared by the tarball, checksums, and signature
+# fetches below. ST_INSTALL_BASE exists only as a test seam so CI can run this
+# script end-to-end against local snapshot artifacts over file://; it must
+# never default anywhere other than the real GitHub release.
+BASE="${ST_INSTALL_BASE:-https://github.com/${REPO}/releases/download/${VERSION}}"
+DOWNLOAD_URL="${BASE}/${FILENAME}"
 
 echo "Installing ${BINARY} ${VERSION} (${OS}/${ARCH})..."
 
@@ -101,7 +107,7 @@ echo "Downloading ${DOWNLOAD_URL}..."
 curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${FILENAME}"
 
 # Verify checksum against the release's published checksums.txt
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+CHECKSUMS_URL="${BASE}/checksums.txt"
 echo "Fetching checksums..."
 curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/checksums.txt"
 
@@ -109,7 +115,7 @@ curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/checksums.txt"
 # checksum in it. The checksum below stays as a second layer; the signature is
 # what proves the checksums came from the release signing key rather than
 # from whoever controls the release assets.
-MINISIG_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt.minisig"
+MINISIG_URL="${BASE}/checksums.txt.minisig"
 echo "Fetching signature..."
 if ! curl -fsSL "$MINISIG_URL" -o "${TMP_DIR}/checksums.txt.minisig"; then
   skip_or_die "could not download release signature (checksums.txt.minisig)"
