@@ -38,12 +38,12 @@ func TestRestackCascadeRebasesOwnerWorktree(t *testing.T) {
 		t.Fatal("feat-a should need a restack after main moved")
 	}
 
-	did, err := s.RestackBranch(env, "feat-a")
+	did, err := s.restackBranch(env, "feat-a")
 	if err != nil {
-		t.Fatalf("RestackBranch (cross-worktree): %v", err)
+		t.Fatalf("restackBranch (cross-worktree): %v", err)
 	}
 	if !did {
-		t.Fatal("RestackBranch should have rebased feat-a in its worktree")
+		t.Fatal("restackBranch should have rebased feat-a in its worktree")
 	}
 	// The main worktree's HEAD must NOT have moved to feat-a (the rebase ran in
 	// the owner worktree, git -C <path>).
@@ -64,15 +64,15 @@ func TestRestackCascadeSkipsDirtyWorktree(t *testing.T) {
 	f, s, env := setupCascade(t)
 	f.markWorktreeDirty("feat-a")
 
-	did, err := s.RestackBranch(env, "feat-a")
+	did, err := s.restackBranch(env, "feat-a")
 	if err != nil {
-		t.Fatalf("RestackBranch with dirty owner: %v", err)
+		t.Fatalf("restackBranch with dirty owner: %v", err)
 	}
 	if did {
 		t.Fatal("a dirty owner worktree must be skipped, not rebased")
 	}
-	if skipped := s.SkippedWorktrees(); len(skipped) != 1 || skipped[0] != "feat-a" {
-		t.Fatalf("SkippedWorktrees = %v, want [feat-a]", skipped)
+	if skipped := s.drainSkippedWorktrees(); len(skipped) != 1 || skipped[0] != "feat-a" {
+		t.Fatalf("drainSkippedWorktrees = %v, want [feat-a]", skipped)
 	}
 	// feat-a is left needing a restack (never clobbered).
 	needs, _ := s.NeedsRestack(f, "feat-a")
@@ -85,7 +85,7 @@ func TestRestackCascadeConflictRollsBack(t *testing.T) {
 	f, s, env := setupCascade(t)
 	f.conflictOn("feat-a") // the owner-worktree rebase will conflict
 
-	_, err := s.RestackBranch(env, "feat-a")
+	_, err := s.restackBranch(env, "feat-a")
 	if err == nil {
 		t.Fatal("a cross-worktree conflict should surface an error")
 	}
@@ -100,7 +100,7 @@ func TestRestackCascadeConflictRollsBack(t *testing.T) {
 
 // TestRestackCascadeMultiLevelMixedOwnership builds main -> a -> b -> c with the
 // INTERMEDIATE branch b owned by another worktree and a, c local, advances main,
-// and runs the real Restack (NOT RestackBranch). It pins the depth-1 gap: the
+// and runs the real Restack (NOT restackBranch). It pins the depth-1 gap: the
 // whole stack must reconcile in topological order across the worktree boundary —
 // a rebases in place onto the new main, b rebases IN its worktree onto the rebased
 // a, c rebases in place onto the rebased b — and the main worktree's HEAD must end
@@ -303,9 +303,9 @@ func TestRestackInPlaceWhenBranchIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	did, err := s.RestackBranch(env, "feat-a")
+	did, err := s.restackBranch(env, "feat-a")
 	if err != nil {
-		t.Fatalf("in-place RestackBranch: %v", err)
+		t.Fatalf("in-place restackBranch: %v", err)
 	}
 	if !did {
 		t.Fatal("feat-a should rebase in place")

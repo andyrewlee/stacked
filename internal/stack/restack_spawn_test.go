@@ -20,7 +20,7 @@ func TestRestackBranchRestoresHEADAfterNonConflictFailure(t *testing.T) {
 	f.commit("advance main") // a now drifts
 	f.rebaseErr["a"] = errors.New("pre-rebase hook rejected")
 
-	if _, err := s.RestackBranch(env, "a"); err == nil {
+	if _, err := s.restackBranch(env, "a"); err == nil {
 		t.Fatal("expected the injected rebase failure to surface")
 	}
 	if f.head != "main" {

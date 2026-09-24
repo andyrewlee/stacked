@@ -151,7 +151,7 @@ func TestSyncPlanPreviewsPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := SyncPlan(env, s, false)
+	plan, err := syncPlan(env, s, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +697,7 @@ func assertSameError(t *testing.T, want string, preview func() error, actual fun
 
 // TestRestackPlanMatchesActual closes the one preview/execute pair without a
 // MatchesActual parity test: plain Restack vs RestackPlan are genuinely
-// different code paths (RestackBranch+RestackUpstack vs the plan
+// different code paths (restackBranch+restackUpstack vs the plan
 // accumulator), so drift between `st restack -n` and `st restack` needs a
 // test to fail. Covers both Restack scopes, with a dirty-linked-worktree
 // descendant so Notes parity is asserted too.

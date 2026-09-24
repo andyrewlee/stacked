@@ -57,12 +57,12 @@ func TestRecordUndoUsesLocalBranchRefs(t *testing.T) {
 		t.Fatalf("RecordUndo: %v", err)
 	}
 
-	entry, ok, err := PopUndo()
+	entry, ok, err := popUndo()
 	if err != nil {
-		t.Fatalf("PopUndo: %v", err)
+		t.Fatalf("popUndo: %v", err)
 	}
 	if !ok {
-		t.Fatal("PopUndo returned no undo entry")
+		t.Fatal("popUndo returned no undo entry")
 	}
 	if got := entry.Refs["feature"]; got != branchSHA {
 		t.Fatalf("undo ref for feature = %q, want branch tip %q", got, branchSHA)
@@ -83,9 +83,9 @@ func TestSnapshotUndoCapturesViaPort(t *testing.T) {
 	// A tracked branch whose git ref is gone must be omitted, not fatal.
 	s.Track("ghost", "main", "nope")
 
-	entry, err := s.SnapshotUndo(f, "test-op")
+	entry, err := s.snapshotUndo(f, "test-op")
 	if err != nil {
-		t.Fatalf("SnapshotUndo: %v", err)
+		t.Fatalf("snapshotUndo: %v", err)
 	}
 	if entry.Label != "test-op" {
 		t.Fatalf("label = %q, want test-op", entry.Label)
@@ -147,8 +147,8 @@ func TestSnapshotUndoSpawns(t *testing.T) {
 	}
 
 	counting := &countingSnapshotGit{Git: f}
-	if _, err := s.SnapshotUndo(counting, "test-op"); err != nil {
-		t.Fatalf("SnapshotUndo: %v", err)
+	if _, err := s.snapshotUndo(counting, "test-op"); err != nil {
+		t.Fatalf("snapshotUndo: %v", err)
 	}
 	if counting.revParseCalls != 0 {
 		t.Fatalf("RevParse calls = %d, want 0", counting.revParseCalls)
@@ -269,8 +269,8 @@ func TestSnapshotUndoFailsWhenTipsUnavailable(t *testing.T) {
 	boom := errors.New("git for-each-ref failed")
 	g := tipsErrGit{Git: f, err: boom}
 
-	if _, err := s.SnapshotUndo(g, "op"); !errors.Is(err, boom) {
-		t.Fatalf("SnapshotUndo with failing Tips = %v, want wrapped %v", err, boom)
+	if _, err := s.snapshotUndo(g, "op"); !errors.Is(err, boom) {
+		t.Fatalf("snapshotUndo with failing Tips = %v, want wrapped %v", err, boom)
 	}
 	if err := s.RecordUndo(g, "op"); !errors.Is(err, boom) {
 		t.Fatalf("RecordUndo with failing Tips = %v, want wrapped %v", err, boom)

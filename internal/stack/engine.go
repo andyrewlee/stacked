@@ -136,7 +136,7 @@ type upstackResult struct {
 // error it restores HEAD before returning; on a conflict it leaves the rebase in
 // progress for `st continue`.
 func finishUpstack(env Env, s *State, anchor string) (upstackResult, error) {
-	rebased, err := s.RestackUpstack(env, anchor)
+	rebased, err := s.restackUpstack(env, anchor)
 	if err != nil {
 		return upstackResult{}, restoreHEADAfterNonConflict(env, anchor, s.Trunk, err)
 	}
@@ -312,7 +312,7 @@ func Restack(env Env, s *State) (*OpResult, error) {
 
 	var rebased []string
 	if start != s.Trunk {
-		did, err := s.RestackBranch(env, start)
+		did, err := s.restackBranch(env, start)
 		if err != nil {
 			return nil, err
 		}
@@ -320,7 +320,7 @@ func Restack(env Env, s *State) (*OpResult, error) {
 			rebased = append(rebased, start)
 		}
 	}
-	up, err := s.RestackUpstack(env, start)
+	up, err := s.restackUpstack(env, start)
 	if err != nil {
 		err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 		return nil, err
@@ -358,7 +358,7 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	rebased, err := RestackAll(env, s)
+	rebased, err := restackAll(env, s)
 	if err != nil {
 		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 	}
@@ -369,7 +369,7 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 // worktree was dirty, turning each into a human-readable note. Empty when the
 // cascade skipped nothing (the common, single-tree case).
 func skippedWorktreeNotes(s *State) []string {
-	return skippedWorktreeNotesFrom(s.SkippedWorktrees())
+	return skippedWorktreeNotesFrom(s.drainSkippedWorktrees())
 }
 
 func skippedWorktreeNotesFrom(skipped []string) []string {
@@ -755,7 +755,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 		return nil, err
 	}
 
-	rebased, err := RestackAll(env, s)
+	rebased, err := restackAll(env, s)
 	if err != nil {
 		// Leaves a conflict's rebase in progress for `st continue`; restores HEAD
 		// otherwise. Same guard the other mutations use.
@@ -788,10 +788,10 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	}, nil
 }
 
-// SyncPlan previews what a sync would do: which merged branches it would prune
+// syncPlan previews what a sync would do: which merged branches it would prune
 // and which branches it would restack. It does not fetch, fast-forward, or
 // mutate anything.
-func SyncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
+func syncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
 	return SyncPlanAgainst(env, s, noDelete, branchTipRef(s.Trunk))
 }
 
@@ -920,7 +920,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	}
 	if err := g.RebaseContinue(); err != nil {
 		// Surface the branch the rebase re-stalled on as structured fields, like
-		// the other conflict paths (RestackBranch/Onto), so a `st continue --json`
+		// the other conflict paths (restackBranch/Onto), so a `st continue --json`
 		// that re-stalls carries branch/onto instead of only the prose message.
 		if conflicted != "" {
 			onto := ""
@@ -957,7 +957,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 		}
 	}
 
-	rebased, err := RestackAll(env, s)
+	rebased, err := restackAll(env, s)
 	if err != nil {
 		if conflicted != "" {
 			err = restoreHEADAfterNonConflict(env, conflicted, s.Trunk, err)
@@ -980,13 +980,13 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	return res, nil
 }
 
-// RestackAll restacks every stack rooted on the trunk, parents before children,
+// restackAll restacks every stack rooted on the trunk, parents before children,
 // reading live tips at each step. Used by sync and continue. The whole forest is
 // exactly the trunk's upstack (every tracked branch descends from the trunk), so
-// it delegates to the one canonical restack path — RestackUpstack — which
+// it delegates to the one canonical restack path — restackUpstack — which
 // Descendants(trunk) walks in the same sorted, parents-first order.
-func RestackAll(env Env, s *State) ([]string, error) {
-	return s.RestackUpstack(env, s.Trunk)
+func restackAll(env Env, s *State) ([]string, error) {
+	return s.restackUpstack(env, s.Trunk)
 }
 
 // PruneMerged deletes tracked branches whose commits are already contained in

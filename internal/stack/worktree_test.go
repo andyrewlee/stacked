@@ -172,9 +172,9 @@ func TestEncodeBranchSegment(t *testing.T) {
 
 func worktreePathParts(t *testing.T, path string) []string {
 	t.Helper()
-	root, err := WorktreesRoot()
+	root, err := worktreesRoot()
 	if err != nil {
-		t.Fatalf("WorktreesRoot: %v", err)
+		t.Fatalf("worktreesRoot: %v", err)
 	}
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

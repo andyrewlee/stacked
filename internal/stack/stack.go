@@ -64,9 +64,9 @@ type State struct {
 	skippedWorktrees []string `json:"-"`
 }
 
-// SkippedWorktrees returns the branches the last restack skipped because their
+// drainSkippedWorktrees returns the branches the last restack skipped because their
 // owning worktree was dirty, and clears the list.
-func (s *State) SkippedWorktrees() []string {
+func (s *State) drainSkippedWorktrees() []string {
 	skipped := s.skippedWorktrees
 	s.skippedWorktrees = nil
 	return skipped

@@ -258,7 +258,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 		}
 
 		// The undo oracle: snapshot, apply, undo, verify, re-apply.
-		entry, err := s.SnapshotUndo(f, label)
+		entry, err := s.snapshotUndo(f, label)
 		if err != nil {
 			t.Fatalf("step %d: snapshot before %s: %v", step, label, err)
 		}
@@ -386,7 +386,7 @@ func maybeReconcileWithWorktrees(t *testing.T, rng *rand.Rand, f *fakeGit, s *St
 //	(ii)  every branch whose owning worktree is CLEAN (or has none) is reconciled
 //	      (no longer NeedsRestack);
 //	(iii) a branch still needing a restack is exactly one whose owning worktree is
-//	      DIRTY, and it is reported in SkippedWorktrees;
+//	      DIRTY, and it is reported in drainSkippedWorktrees;
 //	(iv)  the main worktree's HEAD was never moved by the cascade.
 func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned, dirty map[string]bool) {
 	t.Helper()
@@ -397,9 +397,9 @@ func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned
 		t.Fatalf("step %d: main worktree HEAD = %q after cross-worktree restack, want main", step, cur)
 	}
 
-	// SkippedWorktrees is drained on read; snapshot it once.
+	// drainSkippedWorktrees is drained on read; snapshot it once.
 	skipped := map[string]bool{}
-	for _, name := range s.SkippedWorktrees() {
+	for _, name := range s.drainSkippedWorktrees() {
 		skipped[name] = true
 	}
 
@@ -439,7 +439,7 @@ func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned
 		case needs && dirty[name]:
 			// (iii) and it must be reported as skipped.
 			if !skipped[name] {
-				t.Fatalf("step %d: dirty owner %q needs a restack but was not reported in SkippedWorktrees", step, name)
+				t.Fatalf("step %d: dirty owner %q needs a restack but was not reported in drainSkippedWorktrees", step, name)
 			}
 		}
 	}

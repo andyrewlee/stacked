@@ -11,9 +11,9 @@ import (
 // disk).
 func mustSnapshot(t *testing.T, s *State, f *fakeGit, label string) *UndoEntry {
 	t.Helper()
-	entry, err := s.SnapshotUndo(f, label)
+	entry, err := s.snapshotUndo(f, label)
 	if err != nil {
-		t.Fatalf("SnapshotUndo(%s): %v", label, err)
+		t.Fatalf("snapshotUndo(%s): %v", label, err)
 	}
 	return entry
 }

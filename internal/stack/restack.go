@@ -67,7 +67,7 @@ func requireBranchTip(tips map[string]string, name string) error {
 // rebase-state probe failing is reported distinctly from the rebase failing
 // outright. action is the verb used in the messages ("rebasing"/"moving"). This
 // is the single definition of "did the rebase pause on a conflict?", shared by
-// RestackBranch and Onto so the two cannot drift.
+// restackBranch and Onto so the two cannot drift.
 func rebaseFailure(g Git, rebaseErr error, action, branch, onto string) (paused bool, nonConflictErr error) {
 	inProgress, progressErr := g.RebaseInProgress()
 	if progressErr == nil && inProgress {
@@ -79,13 +79,13 @@ func rebaseFailure(g Git, rebaseErr error, action, branch, onto string) (paused 
 	return false, fmt.Errorf("%s %q onto %q: %w", action, branch, onto, rebaseErr)
 }
 
-// RestackBranch rebases the named branch onto the current tip of its parent if
+// restackBranch rebases the named branch onto the current tip of its parent if
 // it is out of date; otherwise it is a no-op. It reports whether it actually
 // rebased, so callers need no NeedsRestack pre-check. On a successful rebase
 // the branch's ParentSHA is updated to the parent tip and the env is asked to
 // persist. If the rebase fails, a wrapped error explaining how to recover is
 // returned.
-func (s *State) RestackBranch(env Env, name string) (bool, error) {
+func (s *State) restackBranch(env Env, name string) (bool, error) {
 	b, err := s.tracked(name)
 	if err != nil {
 		return false, err
@@ -161,7 +161,7 @@ func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, ex
 // parent missing from the map means its git branch is missing; drift is
 // reported false for that branch (the missing branch itself is a problem the
 // consumers report separately). Mutation paths maintain a live tip map:
-// RestackUpstack seeds it from one Tips() read and refreshes each branch it
+// restackUpstack seeds it from one Tips() read and refreshes each branch it
 // actually rebases, so children observe parent tips moved earlier in the loop.
 func (s *State) DriftAgainst(tips map[string]string) map[string]bool {
 	drift := make(map[string]bool, len(s.Branches))
@@ -225,10 +225,10 @@ func RestackAllPlan(env Env, s *State) (*OpResult, error) {
 	return &OpResult{Summary: summary, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
 }
 
-// RestackUpstack restacks the descendants of name in topological order
+// restackUpstack restacks the descendants of name in topological order
 // (parents before children). The branch name itself is not restacked. It
 // returns the names of the branches that were actually rebased.
-func (s *State) RestackUpstack(env Env, name string) ([]string, error) {
+func (s *State) restackUpstack(env Env, name string) ([]string, error) {
 	return s.restackForest(env, s.childNames(name))
 }
 
@@ -247,7 +247,7 @@ func (s *State) childNames(name string) []string {
 
 // restackForest restacks each start branch and its descendants, in order,
 // against one shared live tips map — the multi-root generalization of
-// RestackUpstack (same seed-once, refresh-rebased-tips scheme). Returns the
+// restackUpstack (same seed-once, refresh-rebased-tips scheme). Returns the
 // rebased branch names in walk order.
 func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 	tips, err := env.Git.Tips()

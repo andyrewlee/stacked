@@ -108,12 +108,12 @@ func TestRestackBranchReturnsNonConflictRebaseErrors(t *testing.T) {
 	errBoom := errors.New("pre-rebase hook rejected")
 	f.rebaseErr["feat-b"] = errBoom
 
-	_, err := s.RestackBranch(env, "feat-b")
+	_, err := s.restackBranch(env, "feat-b")
 	if !errors.Is(err, errBoom) {
-		t.Fatalf("RestackBranch error = %v, want %v", err, errBoom)
+		t.Fatalf("restackBranch error = %v, want %v", err, errBoom)
 	}
 	if errors.Is(err, ErrConflict) {
-		t.Fatalf("RestackBranch returned ErrConflict for non-started rebase: %v", err)
+		t.Fatalf("restackBranch returned ErrConflict for non-started rebase: %v", err)
 	}
 	if f.head != "feat-a" {
 		t.Fatalf("HEAD = %q, want feat-a restored", f.head)
@@ -251,9 +251,9 @@ func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := SyncPlan(env, s, false)
+	res, err := syncPlan(env, s, false)
 	if err != nil {
-		t.Fatalf("SyncPlan: %v", err)
+		t.Fatalf("syncPlan: %v", err)
 	}
 	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
 		t.Fatalf("Deleted = %v, want [feat-a]", res.Deleted)
@@ -262,7 +262,7 @@ func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
 		t.Fatalf("Restacked = %v, want empty after simulated prune", res.Restacked)
 	}
 	if b, _ := s.Get("feat-b"); b.Parent != "feat-a" {
-		t.Fatalf("SyncPlan mutated state parent to %q", b.Parent)
+		t.Fatalf("syncPlan mutated state parent to %q", b.Parent)
 	}
 }
 
@@ -285,18 +285,18 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 
 	f, s, env := setup(t)
 	before := cloneState(s)
-	_, planErr := SyncPlan(env, s, false)
+	_, planErr := syncPlan(env, s, false)
 	if planErr == nil {
-		t.Fatal("SyncPlan must refuse a merged branch with a dirty linked worktree")
+		t.Fatal("syncPlan must refuse a merged branch with a dirty linked worktree")
 	}
 	if !strings.Contains(planErr.Error(), "uncommitted changes in its worktree") {
-		t.Fatalf("SyncPlan error = %v, want dirty worktree validation", planErr)
+		t.Fatalf("syncPlan error = %v, want dirty worktree validation", planErr)
 	}
 	if after := cloneState(s); !reflect.DeepEqual(after, before) {
-		t.Fatalf("SyncPlan mutated state: before=%+v after=%+v", before, after)
+		t.Fatalf("syncPlan mutated state: before=%+v after=%+v", before, after)
 	}
 	if !f.BranchExists("feat-a") || !s.IsTracked("feat-a") {
-		t.Fatal("SyncPlan must not delete or untrack feat-a")
+		t.Fatal("syncPlan must not delete or untrack feat-a")
 	}
 
 	_, liveS, liveEnv := setup(t)
@@ -305,7 +305,7 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 		t.Fatal("live Sync must refuse the same dirty linked worktree")
 	}
 	if planErr.Error() != liveErr.Error() {
-		t.Fatalf("SyncPlan error = %q, live Sync error = %q", planErr.Error(), liveErr.Error())
+		t.Fatalf("syncPlan error = %q, live Sync error = %q", planErr.Error(), liveErr.Error())
 	}
 }
 
@@ -320,15 +320,15 @@ func TestSyncPlanRejectsPrunedMainWorktreeOwnerFromLinkedWorktree(t *testing.T) 
 	env.Git = mainOwnerFromLinkedGit(f, "feat-a", "feat-b")
 
 	before := cloneState(s)
-	_, err := SyncPlan(env, s, false)
+	_, err := syncPlan(env, s, false)
 	if err == nil {
-		t.Fatal("SyncPlan pruning a branch checked out in the main worktree returned nil error")
+		t.Fatal("syncPlan pruning a branch checked out in the main worktree returned nil error")
 	}
 	if !strings.Contains(err.Error(), "main worktree") {
-		t.Fatalf("SyncPlan error = %v, want main worktree context", err)
+		t.Fatalf("syncPlan error = %v, want main worktree context", err)
 	}
 	if after := cloneState(s); !reflect.DeepEqual(after, before) {
-		t.Fatalf("SyncPlan mutated state: before=%+v after=%+v", before, after)
+		t.Fatalf("syncPlan mutated state: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -338,11 +338,11 @@ func TestSyncPlanErrorsWhenTrackedBranchTipIsMissing(t *testing.T) {
 	delete(f.branches, "feat-a")
 
 	before := cloneState(s)
-	if _, err := SyncPlan(env, s, false); err == nil {
-		t.Fatal("SyncPlan with a missing tracked branch returned nil error")
+	if _, err := syncPlan(env, s, false); err == nil {
+		t.Fatal("syncPlan with a missing tracked branch returned nil error")
 	}
 	if after := cloneState(s); !reflect.DeepEqual(after, before) {
-		t.Fatalf("SyncPlan mutated state: before=%+v after=%+v", before, after)
+		t.Fatalf("syncPlan mutated state: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -350,9 +350,9 @@ func TestSyncPlanAgainstRemoteTrunkRestacks(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 
-	local, err := SyncPlan(env, s, false)
+	local, err := syncPlan(env, s, false)
 	if err != nil {
-		t.Fatalf("SyncPlan: %v", err)
+		t.Fatalf("syncPlan: %v", err)
 	}
 	if len(local.Restacked) != 0 {
 		t.Fatalf("local Restacked = %v, want none", local.Restacked)

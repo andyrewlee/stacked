@@ -173,7 +173,7 @@ func TestRepairBreaksCycle(t *testing.T) {
 	if len(res.Notes) == 0 {
 		t.Fatal("Repair reported no fixes for a cycle")
 	}
-	if p := CyclePath(s, "a"); p != "" {
+	if p := cyclePath(s, "a"); p != "" {
 		t.Errorf("cycle remains at a after repair: %q", p)
 	}
 	reconcileAndCheck(t, f, s, env)

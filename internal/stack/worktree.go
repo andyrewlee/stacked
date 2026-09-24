@@ -12,11 +12,11 @@ import (
 
 const repoKeyHashBytes = 6
 
-// WorktreesRoot is the central per-repo directory under the user's home where
+// worktreesRoot is the central per-repo directory under the user's home where
 // lazily-materialized worktrees live: ~/.stacked/worktrees. This mirrors the
 // existing .git/stacked/ naming and keeps linked worktrees OUT of the repo tree
 // so test runners, linters, and watchers never walk into them.
-func WorktreesRoot() (string, error) {
+func worktreesRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -58,7 +58,7 @@ func StableRepoBase(repoRoot, commonDir string) string {
 // path computation — the worktree need not exist. repo is sanitized into one
 // path segment, while branch is losslessly encoded into one path segment.
 func WorktreePath(repo, branch string) (string, error) {
-	root, err := WorktreesRoot()
+	root, err := worktreesRoot()
 	if err != nil {
 		return "", err
 	}

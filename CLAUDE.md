@@ -38,7 +38,7 @@ internal/git/        the git wrapper + git.Shell (the production port impl)
 internal/stack/
   git.go             the Git PORT interface + Env{Git, Save}
   stack.go           State/Branch types + topology helpers (Children/Descendants/…)
-  restack.go         restack primitives (NeedsRestack/RestackBranch/RestackUpstack)
+  restack.go         restack primitives (NeedsRestack/restackBranch/restackUpstack)
                      + the restack dry-run planners (RestackPlan/RestackAllPlan)
   plan.go            dry-run planners for the other mutating ops (FoldPlan/…)
   engine.go          the operations: Create/Modify/Restack/Fold/Squash/Onto/Delete/

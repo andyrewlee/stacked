@@ -70,14 +70,14 @@ func writeUndo(entries []UndoEntry) error {
 	return atomicWriteFile(path, append(data, '\n'))
 }
 
-// SnapshotUndo captures, through the Git port, everything needed to revert the
+// snapshotUndo captures, through the Git port, everything needed to revert the
 // operation about to run: the encoded state, the tips of the trunk and all
 // tracked branches, the local branch list, and the current branch. It reads
 // only — nothing is written to the journal. A failure to read branch tips fails
 // the whole snapshot: an entry without them would yield an `st undo` that
 // silently restored no refs, so the caller (RecordUndo) aborts the mutation
 // before anything changes rather than recording an un-revertible entry.
-func (s *State) SnapshotUndo(g Git, label string) (*UndoEntry, error) {
+func (s *State) snapshotUndo(g Git, label string) (*UndoEntry, error) {
 	stateBytes, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode state for undo: %w", err)
@@ -110,11 +110,11 @@ func (s *State) SnapshotUndo(g Git, label string) (*UndoEntry, error) {
 	}, nil
 }
 
-// RecordUndo snapshots the current state via SnapshotUndo and appends the
+// RecordUndo snapshots the current state via snapshotUndo and appends the
 // entry to the undo journal, so the operation about to run can be reverted
-// with PopUndo.
+// with popUndo.
 func (s *State) RecordUndo(g Git, label string) error {
-	entry, err := s.SnapshotUndo(g, label)
+	entry, err := s.snapshotUndo(g, label)
 	if err != nil {
 		return err
 	}
@@ -126,10 +126,10 @@ func (s *State) RecordUndo(g Git, label string) error {
 	return writeUndo(entries)
 }
 
-// TrimUndo bounds the undo log to the most recent entries. Callers run this
+// trimUndo bounds the undo log to the most recent entries. Callers run this
 // only after a command has produced a real undoable change; failed no-op
 // commands can drop their tentative entry first without evicting older history.
-func TrimUndo() error {
+func trimUndo() error {
 	entries, err := loadUndo()
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func SetLastUndoCreatedWorktrees(paths map[string]string) error {
 // branch set all unchanged), and otherwise kept, trimming the journal.
 func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if entry == nil {
-		return TrimUndo()
+		return trimUndo()
 	}
 	tips, tipsOK := readUndoTips(g)
 	created := createdBranchesSinceTips(entry, tips, tipsOK)
@@ -214,12 +214,12 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 		return err
 	}
 	if !unchanged {
-		return TrimUndo()
+		return trimUndo()
 	}
 	if refsUnchangedAgainstTips(entry, tips, tipsOK) {
 		return DropUndo()
 	}
-	return TrimUndo()
+	return trimUndo()
 }
 
 // CleanupUndoOnError completes the undo protocol after a failed mutation: the
@@ -238,7 +238,7 @@ func CleanupUndoOnError(g Git, s *State, opErr error) error {
 			return err
 		}
 	}
-	return TrimUndo()
+	return trimUndo()
 }
 
 // dropNoopUndo drops the tentative entry when the operation changed nothing:
@@ -345,9 +345,9 @@ func sameState(s *State, raw []byte) (bool, error) {
 	return true, nil
 }
 
-// PopUndo removes and returns the most recent undo entry. The boolean is false
+// popUndo removes and returns the most recent undo entry. The boolean is false
 // when the journal is empty.
-func PopUndo() (*UndoEntry, bool, error) {
+func popUndo() (*UndoEntry, bool, error) {
 	last, ok, err := PeekUndo()
 	if err != nil || !ok {
 		return last, ok, err

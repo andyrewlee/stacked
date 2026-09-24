@@ -5,14 +5,14 @@ import (
 	"strings"
 )
 
-// ProblemKind classifies a single inconsistency between the recorded stack state
+// problemKind classifies a single inconsistency between the recorded stack state
 // and the repository. ParentUntracked and ParentMissing are kept distinct because
 // validate reports them with different messages, even though Repair fixes both
 // the same way (re-parent onto the trunk).
-type ProblemKind int
+type problemKind int
 
 const (
-	TrunkMissing    ProblemKind = iota // the trunk branch's git ref is gone
+	TrunkMissing    problemKind = iota // the trunk branch's git ref is gone
 	BranchMissing                      // a tracked branch's git ref is gone
 	ParentUntracked                    // parent is neither the trunk nor a tracked branch
 	ParentMissing                      // parent is tracked but its git ref is gone
@@ -22,7 +22,7 @@ const (
 // Problem is one inconsistency found by Inconsistencies. Detail carries the
 // parent name (for the parent kinds) or the human-readable cycle path.
 type Problem struct {
-	Kind   ProblemKind
+	Kind   problemKind
 	Branch string
 	Detail string
 }
@@ -47,7 +47,7 @@ func (s *State) branchProblems(tips map[string]string, name string) []Problem {
 			ps = append(ps, Problem{Kind: ParentMissing, Branch: name, Detail: b.Parent})
 		}
 	}
-	if path := CyclePath(s, name); path != "" {
+	if path := cyclePath(s, name); path != "" {
 		ps = append(ps, Problem{Kind: ParentCycle, Branch: name, Detail: path})
 	}
 	return ps
@@ -145,11 +145,11 @@ func repairedParentSHA(g Git, trunk, branch, fallback string) string {
 	return fallback
 }
 
-// CyclePath walks the parent chain from name and returns a human-readable path
+// cyclePath walks the parent chain from name and returns a human-readable path
 // (e.g. "a -> b -> a") if a cycle is reached before the trunk, or "" if the
 // chain is sound or ends at an untracked parent (reported separately). It is the
 // single cycle detector shared by validate and Repair.
-func CyclePath(s *State, name string) string {
+func cyclePath(s *State, name string) string {
 	seen := map[string]bool{name: true}
 	path := []string{name}
 	cur := name

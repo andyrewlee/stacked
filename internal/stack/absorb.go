@@ -15,16 +15,16 @@ import (
 // DryRun marks an attribution-only pass.
 type AbsorbResult struct {
 	Summary   string         `json:"summary"`
-	Absorbed  []AbsorbedHunk `json:"absorbed"`
-	Refused   []RefusedHunk  `json:"refused"`
+	Absorbed  []absorbedHunk `json:"absorbed"`
+	Refused   []refusedHunk  `json:"refused"`
 	Restacked []string       `json:"restacked,omitempty"`
 	Notes     []string       `json:"notes,omitempty"`
 	DryRun    bool           `json:"dryRun,omitempty"`
 }
 
-// AbsorbedHunk is one staged hunk attributed to the stack commit that owns
+// absorbedHunk is one staged hunk attributed to the stack commit that owns
 // every one of its pre-image lines.
-type AbsorbedHunk struct {
+type absorbedHunk struct {
 	File   string `json:"file"`
 	Lines  string `json:"lines"` // pre-image range, e.g. "2" or "3-4"
 	Branch string `json:"branch"`
@@ -35,8 +35,8 @@ type AbsorbedHunk struct {
 	hunk git.Hunk
 }
 
-// RefusedHunk is one staged hunk absorb will not touch, with the reason.
-type RefusedHunk struct {
+// refusedHunk is one staged hunk absorb will not touch, with the reason.
+type refusedHunk struct {
 	File   string `json:"file"`
 	Lines  string `json:"lines"`
 	Reason string `json:"reason"`
@@ -81,12 +81,12 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("reading staged hunks: %w", err)
 	}
-	res := &AbsorbResult{Absorbed: []AbsorbedHunk{}, Refused: []RefusedHunk{}, DryRun: true}
+	res := &AbsorbResult{Absorbed: []absorbedHunk{}, Refused: []refusedHunk{}, DryRun: true}
 	// Every staged section the parser could not classify as text hunks is a
 	// refusal — the zero-refusal apply gate must cover the WHOLE staged diff,
 	// because the apply replays the full patch, not just the hunks.
 	for _, u := range unsupported {
-		res.Refused = append(res.Refused, RefusedHunk{File: u.File, Lines: "-", Reason: u.Reason + "; absorb handles plain text hunks only"})
+		res.Refused = append(res.Refused, refusedHunk{File: u.File, Lines: "-", Reason: u.Reason + "; absorb handles plain text hunks only"})
 	}
 	if len(hunks) == 0 && len(res.Refused) == 0 {
 		res.Summary = "nothing to absorb"
@@ -148,7 +148,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 		if h.OldN == 0 {
 			// The design spike's prototype showed nearest-context attribution
 			// of a pure addition silently targets the trunk; refuse it.
-			res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "pure addition; use st modify"})
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "pure addition; use st modify"})
 			continue
 		}
 		blame, ok := blameByFile[h.File]
@@ -176,16 +176,16 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 		}
 		switch {
 		case missing:
-			res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "cannot attribute (untracked, renamed, or binary file)"})
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "cannot attribute (untracked, renamed, or binary file)"})
 		case outside:
-			res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "touches lines owned by trunk or history below the stack"})
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "touches lines owned by trunk or history below the stack"})
 		case len(owners) > 1:
 			names := make([]string, 0, len(owners))
 			for sha := range owners {
 				names = append(names, shortSHA(sha))
 			}
 			sort.Strings(names)
-			res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: fmt.Sprintf("spans %d stack commits (%s)", len(names), joinComma(names))})
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: fmt.Sprintf("spans %d stack commits (%s)", len(names), joinComma(names))})
 		default:
 			var target string
 			for sha := range owners {
@@ -197,10 +197,10 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 				if offPath, ok := tipToBranchAll[target]; ok {
 					reason = fmt.Sprintf("line is owned by a commit that tips %q, which is not on the current stack's path", offPath)
 				}
-				res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: reason})
+				res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: reason})
 				continue
 			}
-			res.Absorbed = append(res.Absorbed, AbsorbedHunk{File: h.File, Lines: lines, Branch: branch, Commit: target, hunk: h})
+			res.Absorbed = append(res.Absorbed, absorbedHunk{File: h.File, Lines: lines, Branch: branch, Commit: target, hunk: h})
 		}
 	}
 	res.Summary = fmt.Sprintf("would absorb %d hunk(s); refused %d", len(res.Absorbed), len(res.Refused))
@@ -321,7 +321,7 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 
 	plan.DryRun = false
 	lowest := targets[0]
-	rebased, err := s.RestackUpstack(env, lowest)
+	rebased, err := s.restackUpstack(env, lowest)
 	if err != nil {
 		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
 		// On a hard (non-conflict) cascade failure the staged copies are

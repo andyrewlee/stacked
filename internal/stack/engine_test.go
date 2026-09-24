@@ -339,9 +339,9 @@ func TestRestackUpstackUsesSingleTipsReadWhenClean(t *testing.T) {
 
 	counting := &countingSnapshotGit{Git: f}
 	env.Git = counting
-	rebased, err := s.RestackUpstack(env, "main")
+	rebased, err := s.restackUpstack(env, "main")
 	if err != nil {
-		t.Fatalf("RestackUpstack: %v", err)
+		t.Fatalf("restackUpstack: %v", err)
 	}
 	if len(rebased) != 0 {
 		t.Fatalf("rebased = %v, want none", rebased)
@@ -366,9 +366,9 @@ func TestRestackUpstackRefreshesMovedParentTips(t *testing.T) {
 
 	counting := &countingSnapshotGit{Git: f}
 	env.Git = counting
-	rebased, err := s.RestackUpstack(env, "a")
+	rebased, err := s.restackUpstack(env, "a")
 	if err != nil {
-		t.Fatalf("RestackUpstack: %v", err)
+		t.Fatalf("restackUpstack: %v", err)
 	}
 	if len(rebased) != 2 || rebased[0] != "b" || rebased[1] != "c" {
 		t.Fatalf("rebased = %v, want [b c]", rebased)
@@ -459,12 +459,12 @@ func TestCrossWorktreeConflictAbortFailureSurfaces(t *testing.T) {
 	abortErr := errors.New("abort failed")
 	f.rebaseAbortErr = abortErr
 
-	_, err := s.RestackBranch(env, "feat-a")
+	_, err := s.restackBranch(env, "feat-a")
 	if err == nil {
 		t.Fatal("cross-worktree conflict with abort failure returned nil error")
 	}
 	if !errors.Is(err, abortErr) {
-		t.Fatalf("RestackBranch error = %v, want abort failure matchable", err)
+		t.Fatalf("restackBranch error = %v, want abort failure matchable", err)
 	}
 	for _, want := range []string{
 		`rebasing "feat-a" in its worktree "/wt/feat-a"`,
@@ -473,7 +473,7 @@ func TestCrossWorktreeConflictAbortFailureSurfaces(t *testing.T) {
 		"abort failed",
 	} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("RestackBranch error = %v, want it to contain %q", err, want)
+			t.Fatalf("restackBranch error = %v, want it to contain %q", err, want)
 		}
 	}
 	if inProgress, _ := f.RebaseInProgress(); !inProgress {
@@ -486,12 +486,12 @@ func TestCrossWorktreeEarlyRebaseFailureDoesNotReportAbort(t *testing.T) {
 	rebaseErr := errors.New("pre-rebase hook rejected")
 	f.rebaseErr["feat-a"] = rebaseErr
 
-	_, err := s.RestackBranch(env, "feat-a")
+	_, err := s.restackBranch(env, "feat-a")
 	if err == nil {
 		t.Fatal("cross-worktree early rebase failure returned nil error")
 	}
 	if !errors.Is(err, rebaseErr) {
-		t.Fatalf("RestackBranch error = %v, want original rebase failure matchable", err)
+		t.Fatalf("restackBranch error = %v, want original rebase failure matchable", err)
 	}
 	if strings.Contains(err.Error(), "still in progress") {
 		t.Fatalf("early rebase failure reported a paused rebase: %v", err)
