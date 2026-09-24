@@ -187,9 +187,26 @@ func newRepo(t *testing.T) *repo {
 // callers assert on the exit code explicitly.
 func (r *repo) st(args ...string) result {
 	r.t.Helper()
+	return r.stIn(r.dir, args...)
+}
+
+// stIn runs the st binary with the given args in dir — e.g. a linked worktree
+// rather than the repo's main working tree — with the repo's hermetic env.
+// New worktree e2e tests should use this (or stInEnv / stInOK) instead of
+// hand-rolling exec.Command with cmd.Dir/cmd.Env. Like st, it never fails the
+// test on a non-zero exit; callers assert on result.exitCode.
+func (r *repo) stIn(dir string, args ...string) result {
+	r.t.Helper()
+	return r.stInEnv(dir, nil, args...)
+}
+
+// stInEnv is stIn with extra environment variables appended to the hermetic
+// env — e.g. "ST_CD_FILE=..." for the cd-shim tests.
+func (r *repo) stInEnv(dir string, extraEnv []string, args ...string) result {
+	r.t.Helper()
 	cmd := exec.Command(stBin, args...)
-	cmd.Dir = r.dir
-	cmd.Env = cleanEnv(r.home)
+	cmd.Dir = dir
+	cmd.Env = append(cleanEnv(r.home), extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -210,7 +227,13 @@ func (r *repo) st(args ...string) result {
 // stOK runs st and fails the test if the command exits non-zero.
 func (r *repo) stOK(args ...string) result {
 	r.t.Helper()
-	res := r.st(args...)
+	return r.stInOK(r.dir, args...)
+}
+
+// stInOK runs st in dir and fails the test if the command exits non-zero.
+func (r *repo) stInOK(dir string, args ...string) result {
+	r.t.Helper()
+	res := r.stIn(dir, args...)
 	if res.exitCode != 0 {
 		r.t.Fatalf("st %v exited %d\nstdout:\n%s\nstderr:\n%s",
 			args, res.exitCode, res.stdout, res.stderr)

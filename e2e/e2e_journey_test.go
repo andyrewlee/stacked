@@ -1,9 +1,7 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,15 +26,9 @@ func TestWorktreeSharesStackState(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "wt")
 	r.git("worktree", "add", "-q", wt, "feat-a")
 
-	cmd := exec.Command(stBin, "log", "--json")
-	cmd.Dir = wt
-	cmd.Env = cleanEnv(r.home)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st log in worktree: %v\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "feat-a") {
-		t.Fatalf("worktree st did not see the shared stack state:\n%s", out)
+	res := r.stInOK(wt, "log", "--json")
+	if !strings.Contains(res.stdout, "feat-a") {
+		t.Fatalf("worktree st did not see the shared stack state:\n%s", res.stdout)
 	}
 }
 
@@ -83,15 +75,9 @@ func TestWorktreeAnnotationsInLog(t *testing.T) {
 	}
 
 	// status from inside the worktree reports its own path.
-	cmd := exec.Command(stBin, "status", "--json")
-	cmd.Dir = wt
-	cmd.Env = cleanEnv(r.home)
-	sOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st status in worktree: %v\n%s", err, sOut)
-	}
+	sOut := r.stInOK(wt, "status", "--json").stdout
 	var st statusJSON
-	if err := json.Unmarshal(sOut, &st); err != nil {
+	if err := json.Unmarshal([]byte(sOut), &st); err != nil {
 		t.Fatalf("decode status json: %v\n%s", err, sOut)
 	}
 	if st.Branch != "feat-a" || st.Worktree == "" {
@@ -237,11 +223,10 @@ func TestUndoCreateWorktreeFromCreatedWorktreeWithShim(t *testing.T) {
 		t.Fatalf("decode create --worktree json: %v\n%s", err, out)
 	}
 	directive := filepath.Join(t.TempDir(), "cd")
-	cmd := exec.Command(stBin, "undo")
-	cmd.Dir = created.Worktree
-	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
-	if undoOut, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("st undo from created worktree: %v\n%s", err, undoOut)
+	res := r.stInEnv(created.Worktree, []string{"ST_CD_FILE=" + directive}, "undo")
+	if res.exitCode != 0 {
+		t.Fatalf("st undo from created worktree: exit %d\nstdout:\n%s\nstderr:\n%s",
+			res.exitCode, res.stdout, res.stderr)
 	}
 	got, err := os.ReadFile(directive)
 	if err != nil {
@@ -278,11 +263,10 @@ func TestFailedUndoFromDirtyCreatedWorktreeDoesNotWriteShimDirective(t *testing.
 	}
 
 	directive := filepath.Join(t.TempDir(), "cd")
-	cmd := exec.Command(stBin, "undo")
-	cmd.Dir = created.Worktree
-	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
-	if undoOut, err := cmd.CombinedOutput(); err == nil {
-		t.Fatalf("st undo from dirty created worktree succeeded; want failure\n%s", undoOut)
+	res := r.stInEnv(created.Worktree, []string{"ST_CD_FILE=" + directive}, "undo")
+	if res.exitCode == 0 {
+		t.Fatalf("st undo from dirty created worktree succeeded; want failure\nstdout:\n%s\nstderr:\n%s",
+			res.stdout, res.stderr)
 	}
 	if b, err := os.ReadFile(directive); err == nil && len(b) > 0 {
 		t.Fatalf("failed undo wrote cd directive %q", b)
@@ -347,26 +331,25 @@ func TestUndoCreateWorktreeChildOfLinkedParentWithShim(t *testing.T) {
 	}
 
 	createDirective := filepath.Join(t.TempDir(), "create-cd")
-	createCmd := exec.Command(stBin, "create", "feat-b", "--worktree", "--json")
-	createCmd.Dir = parent.Path
-	createCmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+createDirective)
-	childOut, err := createCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st create feat-b --worktree from parent worktree: %v\n%s", err, childOut)
+	createRes := r.stInEnv(parent.Path, []string{"ST_CD_FILE=" + createDirective},
+		"create", "feat-b", "--worktree", "--json")
+	if createRes.exitCode != 0 {
+		t.Fatalf("st create feat-b --worktree from parent worktree: exit %d\nstdout:\n%s\nstderr:\n%s",
+			createRes.exitCode, createRes.stdout, createRes.stderr)
 	}
+	childOut := createRes.stdout
 	var child struct {
 		Worktree string `json:"worktree"`
 	}
-	if err := json.Unmarshal(childOut, &child); err != nil {
+	if err := json.Unmarshal([]byte(childOut), &child); err != nil {
 		t.Fatalf("decode child worktree json: %v\n%s", err, childOut)
 	}
 
 	undoDirective := filepath.Join(t.TempDir(), "undo-cd")
-	undoCmd := exec.Command(stBin, "undo")
-	undoCmd.Dir = child.Worktree
-	undoCmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+undoDirective)
-	if undoOut, err := undoCmd.CombinedOutput(); err != nil {
-		t.Fatalf("st undo from child worktree: %v\n%s", err, undoOut)
+	undoRes := r.stInEnv(child.Worktree, []string{"ST_CD_FILE=" + undoDirective}, "undo")
+	if undoRes.exitCode != 0 {
+		t.Fatalf("st undo from child worktree: exit %d\nstdout:\n%s\nstderr:\n%s",
+			undoRes.exitCode, undoRes.stdout, undoRes.stderr)
 	}
 	got, err := os.ReadFile(undoDirective)
 	if err != nil {
@@ -412,17 +395,11 @@ func TestWorktreeCommandFromLinkedWorktreeUsesMainRepoNamespace(t *testing.T) {
 
 	linked := filepath.Join(t.TempDir(), "linked")
 	r.git("worktree", "add", "-q", linked, "feat-a")
-	cmd := exec.Command(stBin, "worktree", "feat-c", "--json")
-	cmd.Dir = linked
-	cmd.Env = cleanEnv(r.home)
-	linkedOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st worktree from linked worktree: %v\n%s", err, linkedOut)
-	}
+	linkedOut := r.stInOK(linked, "worktree", "feat-c", "--json").stdout
 	var linkedCreated struct {
 		Path string `json:"path"`
 	}
-	if err := json.Unmarshal(linkedOut, &linkedCreated); err != nil {
+	if err := json.Unmarshal([]byte(linkedOut), &linkedCreated); err != nil {
 		t.Fatalf("decode linked worktree create: %v\n%s", err, linkedOut)
 	}
 	linkedParts := generatedWorktreePathParts(t, r.home, linkedCreated.Path)
@@ -537,11 +514,10 @@ func TestCheckoutTeleportsToWorktree(t *testing.T) {
 
 	// With the directive file set (as the shim does), checkout writes the path.
 	directive := filepath.Join(t.TempDir(), "cd")
-	cmd := exec.Command(stBin, "checkout", "feat-a")
-	cmd.Dir = r.dir
-	cmd.Env = append(cleanEnv(r.home), "ST_CD_FILE="+directive)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("st checkout feat-a: %v\n%s", err, out)
+	res := r.stInEnv(r.dir, []string{"ST_CD_FILE=" + directive}, "checkout", "feat-a")
+	if res.exitCode != 0 {
+		t.Fatalf("st checkout feat-a: exit %d\nstdout:\n%s\nstderr:\n%s",
+			res.exitCode, res.stdout, res.stderr)
 	}
 	got, err := os.ReadFile(directive)
 	if err != nil {
@@ -1663,14 +1639,8 @@ func TestSyncFromLinkedWorktree(t *testing.T) {
 		t.Fatalf("decode worktree json: %v\n%s", err, out)
 	}
 
-	cmd := exec.Command(stBin, "sync")
-	cmd.Dir = wt.Path
-	cmd.Env = cleanEnv(r.home)
-	syncOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st sync from linked worktree: %v\n%s", err, syncOut)
-	}
-	if !strings.Contains(string(syncOut), "sync complete") {
+	syncOut := r.stInOK(wt.Path, "sync").stdout
+	if !strings.Contains(syncOut, "sync complete") {
 		t.Fatalf("sync output missing completion:\n%s", syncOut)
 	}
 
@@ -1731,14 +1701,9 @@ func TestSyncFromMergedLinkedWorktreeKeepsWorktree(t *testing.T) {
 	// --json on purpose: it drives the quiet git port, so the JSON-mode
 	// CheckoutDetach invalidation override is exercised too (the text-mode
 	// twin is covered by TestSyncFromLinkedWorktree).
-	cmd := exec.Command(stBin, "sync", "--json")
-	cmd.Dir = wt.Path // run from INSIDE feat-a's own worktree
-	cmd.Env = cleanEnv(r.home)
-	syncOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st sync from a merged branch's own worktree: %v\n%s", err, syncOut)
-	}
-	if !strings.Contains(string(syncOut), "sync complete") {
+	// run from INSIDE feat-a's own worktree
+	syncOut := r.stInOK(wt.Path, "sync", "--json").stdout
+	if !strings.Contains(syncOut, "sync complete") {
 		t.Fatalf("sync output missing completion:\n%s", syncOut)
 	}
 	if r.branchExists("feat-a") {
@@ -1781,13 +1746,7 @@ func TestRestackAllFromLinkedWorktree(t *testing.T) {
 		t.Fatalf("decode worktree json: %v\n%s", err, out)
 	}
 
-	cmd := exec.Command(stBin, "restack", "--all")
-	cmd.Dir = wt.Path
-	cmd.Env = cleanEnv(r.home)
-	allOut, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("st restack --all from linked worktree: %v\n%s", err, allOut)
-	}
+	allRes := r.stInOK(wt.Path, "restack", "--all")
 
 	var root logNode
 	if err := json.Unmarshal([]byte(r.stOK("log", "--json").stdout), &root); err != nil {
@@ -1799,7 +1758,7 @@ func TestRestackAllFromLinkedWorktree(t *testing.T) {
 			t.Fatalf("%s missing from log", name)
 		}
 		if node.NeedsRestack {
-			t.Fatalf("%s still needs restack after restack --all:\n%s", name, allOut)
+			t.Fatalf("%s still needs restack after restack --all:\n%s\n%s", name, allRes.stdout, allRes.stderr)
 		}
 	}
 	if cur := r.currentBranch(); cur != "main" {
@@ -2106,20 +2065,6 @@ func assertTips(t *testing.T, r *repo, want map[string]string) {
 	}
 }
 
-// exitCodeOf unwraps a raw exec.Command error into its exit code.
-func exitCodeOf(t *testing.T, err error) int {
-	t.Helper()
-	if err == nil {
-		return 0
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		return ee.ExitCode()
-	}
-	t.Fatalf("command failed without an exit code: %v", err)
-	return -1
-}
-
 // worktreePath materializes branch's linked worktree via `st worktree <branch>
 // --json` and returns its path.
 func worktreePath(t *testing.T, r *repo, branch string) string {
@@ -2153,18 +2098,12 @@ func TestSyncConflictContinueFromLinkedWorktree(t *testing.T) {
 
 	wt := worktreePath(t, r, "feat-a")
 
-	sync := exec.Command(stBin, "sync")
-	sync.Dir = wt
-	sync.Env = cleanEnv(r.home)
-	var syncOut, syncErr bytes.Buffer
-	sync.Stdout = &syncOut
-	sync.Stderr = &syncErr
-	code := exitCodeOf(t, sync.Run())
-	if code != 2 {
-		t.Fatalf("sync from linked worktree: exit %d, want 2 (conflict)\nstdout:%s\nstderr:%s", code, syncOut.String(), syncErr.String())
+	res := r.stIn(wt, "sync")
+	if res.exitCode != 2 {
+		t.Fatalf("sync from linked worktree: exit %d, want 2 (conflict)\nstdout:%s\nstderr:%s", res.exitCode, res.stdout, res.stderr)
 	}
-	if !strings.Contains(syncErr.String()+syncOut.String(), "st continue") {
-		t.Fatalf("conflict output missing the continue hint:\n%s\n%s", syncOut.String(), syncErr.String())
+	if !strings.Contains(res.stderr+res.stdout, "st continue") {
+		t.Fatalf("conflict output missing the continue hint:\n%s\n%s", res.stdout, res.stderr)
 	}
 
 	// The paused rebase lives under the WORKTREE's git dir, not the main .git.
@@ -2178,12 +2117,7 @@ func TestSyncConflictContinueFromLinkedWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.gitIn(wt, "add", "f.txt")
-	cont := exec.Command(stBin, "continue")
-	cont.Dir = wt
-	cont.Env = cleanEnv(r.home)
-	if outB, err := cont.CombinedOutput(); err != nil {
-		t.Fatalf("st continue from linked worktree: %v\n%s", err, outB)
-	}
+	r.stInOK(wt, "continue")
 
 	if !r.isAncestor("main", "feat-a") {
 		t.Fatal("feat-a was not restacked onto the advanced main after continue")
@@ -2215,18 +2149,12 @@ func TestRestackSiblingWorktreeConflictRollsBackFromLinkedWorktree(t *testing.T)
 	w1 := worktreePath(t, r, "feat-a")
 	w2 := worktreePath(t, r, "feat-x")
 
-	cmd := exec.Command(stBin, "restack", "--all")
-	cmd.Dir = w1
-	cmd.Env = cleanEnv(r.home)
-	var so, se bytes.Buffer
-	cmd.Stdout = &so
-	cmd.Stderr = &se
-	code := exitCodeOf(t, cmd.Run())
-	if code == 0 || code == 2 {
-		t.Fatalf("restack --all with a sibling-worktree conflict: exit %d, want non-zero non-conflict (1)\nstdout:%s\nstderr:%s", code, so.String(), se.String())
+	res := r.stIn(w1, "restack", "--all")
+	if res.exitCode == 0 || res.exitCode == 2 {
+		t.Fatalf("restack --all with a sibling-worktree conflict: exit %d, want non-zero non-conflict (1)\nstdout:%s\nstderr:%s", res.exitCode, res.stdout, res.stderr)
 	}
-	if !strings.Contains(se.String()+so.String(), "feat-x") {
-		t.Fatalf("error should name the conflicting sibling feat-x:\n%s\n%s", so.String(), se.String())
+	if !strings.Contains(res.stderr+res.stdout, "feat-x") {
+		t.Fatalf("error should name the conflicting sibling feat-x:\n%s\n%s", res.stdout, res.stderr)
 	}
 
 	if !r.isAncestor("main", "feat-a") {
