@@ -3,6 +3,8 @@
 package stack
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,5 +83,29 @@ func TestLockConcurrentAcquirers(t *testing.T) {
 	close(errCh)
 	for msg := range errCh {
 		t.Error(msg)
+	}
+}
+
+// TestLockFileIsDirectory pins the flock path's open failure: .git/stacked/lock
+// existing as a directory makes Lock() fail with a clean open error, not the
+// busy sentinel. Off-flock platforms never open this path (they create
+// lock.excl instead) — the equivalent check there is
+// TestAcquireExclLockPathIsDirectory.
+func TestLockFileIsDirectory(t *testing.T) {
+	dir := initGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "stacked", "lock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := Lock()
+	if err == nil {
+		release()
+		t.Fatal("Lock succeeded with .git/stacked/lock as a directory")
+	}
+	if isBusyLockErr(err) {
+		t.Fatalf("lock-file-is-dir reported as contention: %v", err)
+	}
+	if !strings.Contains(err.Error(), "open lock file") {
+		t.Fatalf("err = %v, want the open lock file failure", err)
 	}
 }
