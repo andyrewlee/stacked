@@ -28,7 +28,7 @@ func absorbEnv(t *testing.T) (*fakeGit, *State, Env, map[string]string) {
 	return f, s, env, tips
 }
 
-// The five v1 attribution cases from the absorb design spike, driven through
+// The five attribution cases from the absorb design spike, driven through
 // the fake git with canned hunks + blame. Refusals must never be errors.
 func TestAbsorbPlanAttribution(t *testing.T) {
 	t.Run("single target absorbs into the owning branch tip", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 	})
 }
 
-// TestAbsorbApply drives the v1 apply slice over the fake git: a single-target
+// TestAbsorbApply drives the apply slice over the fake git: a single-target
 // plan amends the owning tip in place, cascades the descendants, drops the
 // staged copy from the current worktree, and returns HEAD to where it started.
 func TestAbsorbApply(t *testing.T) {
@@ -501,5 +501,100 @@ func TestAbsorbPlanGuards(t *testing.T) {
 	}
 	if len(res.Absorbed) != 1 {
 		t.Fatalf("result = %+v, want the staged hunk absorbed", res)
+	}
+}
+
+// TestAbsorbPlanRefusesOffPathSiblingTip is the regression test for the
+// dropped-hunks bug: a tracked branch OFF the current stack's path can tip at
+// the very commit that owns a staged hunk (here a mid-stack commit a grew
+// past), but absorb must never land the hunk there — the staged copy in THIS
+// worktree is consumed either way, so off-path attribution silently drops the
+// user's work into a different stack. It is refused, naming the off-path
+// branch.
+func TestAbsorbPlanRefusesOffPathSiblingTip(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	// Advance a past b's recorded base so its old tip is a mid-stack commit no
+	// on-path branch tips, then point a separately tracked side stack at it.
+	oldATip := tips["a"]
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a grows past b's base")
+	if err := f.Checkout("c"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranchAt("side", oldATip); err != nil {
+		t.Fatal(err)
+	}
+	s.Track("side", "main", tips["main"])
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]string{"f.txt": {2: oldATip}}
+
+	res, err := AbsorbPlan(env, s)
+	if err != nil {
+		t.Fatalf("AbsorbPlan: %v", err)
+	}
+	if len(res.Absorbed) != 0 || len(res.Refused) != 1 {
+		t.Fatalf("result = %+v, want one refusal and nothing absorbed", res)
+	}
+	if !strings.Contains(res.Refused[0].Reason, "side") ||
+		!strings.Contains(res.Refused[0].Reason, "not on the current stack's path") {
+		t.Fatalf("reason = %q, want it to name the off-path tip owner", res.Refused[0].Reason)
+	}
+}
+
+// TestAbsorbPlanOffPathSharedTipStaysOnPath covers the other half of the same
+// bug: when an off-path tracked branch shares the owning commit's SHA with an
+// on-path branch, attribution must choose the on-path one — every time, not
+// whichever name map iteration happened to write last.
+func TestAbsorbPlanOffPathSharedTipStaysOnPath(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	// side is a second tracked stack rooted at the trunk, pointing at b's tip.
+	if err := f.CreateBranchAt("side", tips["b"]); err != nil {
+		t.Fatal(err)
+	}
+	s.Track("side", "main", tips["main"])
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]string{"f.txt": {2: tips["b"]}}
+
+	for i := 0; i < 20; i++ {
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("run %d: AbsorbPlan: %v", i, err)
+		}
+		if len(res.Absorbed) != 1 || res.Absorbed[0].Branch != "b" || len(res.Refused) != 0 {
+			t.Fatalf("run %d: result = %+v, want the hunk on on-path b, never off-path side", i, res)
+		}
+	}
+}
+
+// TestAbsorbPlanSharedTipDeterministic pins the shared-tip tie-break among
+// ON-PATH branches: two of them can tip at the same commit (a no-commit child
+// is exactly that — `st create` without -m leaves the new branch on its
+// parent's tip). The LOWEST sharer wins: its restack covers every deeper
+// sharer, so amending it keeps the whole run consistent. The choice must be
+// identical on every call — map iteration order never decides.
+func TestAbsorbPlanSharedTipDeterministic(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	// mark is a no-commit child of b sharing b's tip; HEAD lands on it, so
+	// both b and mark are on the current path.
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("mark"); err != nil {
+		t.Fatal(err)
+	}
+	s.Track("mark", "b", tips["b"])
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]string{"f.txt": {2: tips["b"]}}
+
+	for i := 0; i < 20; i++ {
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("run %d: AbsorbPlan: %v", i, err)
+		}
+		if len(res.Absorbed) != 1 || res.Absorbed[0].Branch != "b" || len(res.Refused) != 0 {
+			t.Fatalf("run %d: result = %+v, want the hunk on b (the lowest sharer) every run", i, res)
+		}
 	}
 }

@@ -44,8 +44,7 @@ type RefusedHunk struct {
 
 // requireNoUnstaged is absorb's working-tree guard: absorb's INPUT is the
 // staged content, so unlike requireClean it permits a staged index but
-// refuses unstaged changes (they would make the later apply — the absorb v1
-// slice 2 — ambiguous).
+// refuses unstaged changes (they would make the later apply ambiguous).
 func requireNoUnstaged(g Git) error {
 	unstaged, err := g.HasUnstagedChanges()
 	if err != nil {
@@ -58,10 +57,10 @@ func requireNoUnstaged(g Git) error {
 }
 
 // AbsorbPlan attributes every staged hunk to the stack commit that owns its
-// pre-image lines, with zero mutation: reads only. The v1 decision table
+// pre-image lines, with zero mutation: reads only. The decision table
 // (from the absorb design spike) refuses everything ambiguous — multi-commit
 // hunks, lines owned by trunk/history, pure additions, and targets that are
-// not a tracked branch's tip.
+// not the tip of a tracked branch on the current stack's path.
 func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	res, _, err := absorbPlan(env, s)
 	return res, err
@@ -87,7 +86,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	// refusal — the zero-refusal apply gate must cover the WHOLE staged diff,
 	// because the apply replays the full patch, not just the hunks.
 	for _, u := range unsupported {
-		res.Refused = append(res.Refused, RefusedHunk{File: u.File, Lines: "-", Reason: u.Reason + "; absorb v1 handles plain text hunks only"})
+		res.Refused = append(res.Refused, RefusedHunk{File: u.File, Lines: "-", Reason: u.Reason + "; absorb handles plain text hunks only"})
 	}
 	if len(hunks) == 0 && len(res.Refused) == 0 {
 		res.Summary = "nothing to absorb"
@@ -107,9 +106,31 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("read branch tips: %w", err)
 	}
+	// The owning commit maps to a branch only when it is the tip of a tracked
+	// branch ON THE CURRENT STACK'S PATH (cur plus its ancestors): absorb never
+	// writes into non-tip stack commits, and never into a different stack — a
+	// tracked branch off the path can share the owning SHA (a side stack, a
+	// sibling pointing at a mid-stack commit), but amending ITS tip would land
+	// the hunk in the other stack while this worktree's staged copy is still
+	// consumed. tipToBranchAll keeps the best tracked candidate per tip so the
+	// refusal can name the off-path owner. When several branches share one
+	// tip, the LOWEST on-path one wins — its restack covers every deeper
+	// sharer — with the name as the deterministic tie-break, so map iteration
+	// order never decides attribution.
+	onPath := map[string]bool{cur: true}
+	for _, name := range s.Ancestors(cur) {
+		onPath[name] = true
+	}
 	tipToBranch := make(map[string]string, len(tips))
+	tipToBranchAll := make(map[string]string, len(tips))
 	for name, tip := range tips {
-		if s.IsTracked(name) {
+		if !s.IsTracked(name) {
+			continue
+		}
+		if lowerTipBranch(s, name, tipToBranchAll[tip]) {
+			tipToBranchAll[tip] = name
+		}
+		if onPath[name] && lowerTipBranch(s, name, tipToBranch[tip]) {
 			tipToBranch[tip] = name
 		}
 	}
@@ -119,7 +140,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 		lines := hunkLines(h)
 		if h.OldN == 0 {
 			// The design spike's prototype showed nearest-context attribution
-			// of a pure addition silently targets the trunk; refuse in v1.
+			// of a pure addition silently targets the trunk; refuse it.
 			res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "pure addition; use st modify"})
 			continue
 		}
@@ -165,7 +186,11 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 			}
 			branch, isTip := tipToBranch[target]
 			if !isTip {
-				res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: "target is not a branch tip; squash the branch or absorb manually"})
+				reason := "target is not a branch tip; squash the branch or absorb manually"
+				if offPath, ok := tipToBranchAll[target]; ok {
+					reason = fmt.Sprintf("line is owned by a commit that tips %q, which is not on the current stack's path", offPath)
+				}
+				res.Refused = append(res.Refused, RefusedHunk{File: h.File, Lines: lines, Reason: reason})
 				continue
 			}
 			res.Absorbed = append(res.Absorbed, AbsorbedHunk{File: h.File, Lines: lines, Branch: branch, Commit: target, hunk: h})
@@ -181,11 +206,11 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 // touches no worktree, so the user's edits are safely in commits before any
 // destructive step — then ONE upstack cascade from the lowest amended target
 // restacks everything above it and HEAD returns to the starting branch. All
-// targets lie on the current branch's ancestor path (the stack set is
-// trunk..cur), so the lowest target's upstack covers every other target. Any
-// refusal, or a dirty owner worktree for any target, returns the plan as
-// data, unapplied — never an error; one undo entry reverts all amends plus
-// the cascade.
+// targets lie on the current branch's ancestor path (attribution is
+// restricted to it), so the lowest target's upstack covers every other
+// target. Any refusal, or a dirty owner worktree for any target, returns the
+// plan as data, unapplied — never an error; one undo entry reverts all
+// amends plus the cascade.
 func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	g := env.Git
 	plan, cur, err := absorbPlan(env, s)
@@ -330,6 +355,20 @@ func targetsOf(s *State, plan *AbsorbResult) []string {
 		return targets[i] < targets[j]
 	})
 	return targets
+}
+
+// lowerTipBranch reports whether name is a better absorb target for a shared
+// tip than the current pick ("" = none yet): the branch nearer the trunk wins —
+// its upstack restack covers every deeper sharer, so amending it keeps the
+// whole run consistent — with the branch name as the deterministic tie-break.
+func lowerTipBranch(s *State, name, current string) bool {
+	if current == "" {
+		return true
+	}
+	if dn, dc := len(s.Ancestors(name)), len(s.Ancestors(current)); dn != dc {
+		return dn < dc
+	}
+	return name < current
 }
 
 // hunkLines renders a hunk's pre-image range for humans: "2" or "3-4"; a pure

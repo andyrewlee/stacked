@@ -309,6 +309,80 @@ func TestAbsorbMultiHunkSingleTarget(t *testing.T) {
 	}
 }
 
+// TestAbsorbOffPathSiblingTip proves the on-path attribution guard end to
+// end: a second tracked stack whose tip SHARES the owning commit must never
+// receive the hunk — attribution stays on the current stack's path, the apply
+// amends the on-path tip and restacks the current chain, and the side stack
+// is left untouched.
+func TestAbsorbOffPathSiblingTip(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.writeFile("shared.txt", "A0\np\nq\nB0\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "seed")
+	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
+	r.create("feat-b", "shared.txt", "A1\np\nq\nB1\n", "b")
+
+	// side is a second tracked stack rooted at the trunk, pointing at the
+	// SAME commit as feat-a — the off-path sibling sharing the owning tip.
+	r.git("checkout", "-q", "-b", "side", "feat-a")
+	r.stOK("track", "--parent", "main")
+	r.git("checkout", "-q", "feat-b")
+	sideTip := r.rev("side")
+
+	// Stage an edit to line 1, owned by feat-a's tip (= side's tip).
+	r.writeFile("shared.txt", "A2\np\nq\nB1\n")
+	r.git("add", "shared.txt")
+
+	// The dry run must attribute on-path — never to side.
+	out := r.stOK("absorb", "--dry-run", "--json").stdout
+	var plan struct {
+		Absorbed []struct {
+			Branch string `json:"branch"`
+		} `json:"absorbed"`
+		Refused []struct {
+			Reason string `json:"reason"`
+		} `json:"refused"`
+	}
+	if err := json.Unmarshal([]byte(out), &plan); err != nil {
+		t.Fatalf("decode absorb --dry-run json: %v\n%s", err, out)
+	}
+	if len(plan.Absorbed) != 1 || plan.Absorbed[0].Branch != "feat-a" || len(plan.Refused) != 0 {
+		t.Fatalf("plan = %+v, want one hunk into on-path feat-a, none refused", plan)
+	}
+
+	out = r.stOK("absorb", "--json").stdout
+	var res struct {
+		Absorbed []struct {
+			Branch string `json:"branch"`
+		} `json:"absorbed"`
+		Restacked []string `json:"restacked"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode absorb json: %v\n%s", err, out)
+	}
+	if len(res.Absorbed) != 1 || res.Absorbed[0].Branch != "feat-a" {
+		t.Fatalf("absorbed = %+v, want the hunk in feat-a", res.Absorbed)
+	}
+	if len(res.Restacked) != 1 || res.Restacked[0] != "feat-b" {
+		t.Fatalf("restacked = %v, want [feat-b]", res.Restacked)
+	}
+	if r.rev("side") != sideTip {
+		t.Fatal("side's tip moved; the hunk must never land off the current stack's path")
+	}
+	if got := r.git("show", "feat-b:shared.txt"); got != "A2\np\nq\nB1" {
+		t.Fatalf("feat-b:shared.txt = %q, want the absorbed edit restacked in", got)
+	}
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("status = %q, want clean", got)
+	}
+	if got := r.currentBranch(); got != "feat-b" {
+		t.Fatalf("HEAD = %q, want feat-b", got)
+	}
+	r.stOK("validate")
+}
+
 // TestAbsorbRefusesModeRideAlong pins the classify-or-refuse gate end to end:
 // a cleanly absorbable text hunk co-staged with a chmod on another file must
 // come back unapplied (the mode bit would otherwise silently ride the applied
