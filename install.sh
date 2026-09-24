@@ -13,10 +13,11 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Minisign public key used to verify the detached signature over checksums.txt
 # before any checksum is trusted.
-# PLACEHOLDER: the operator fills in the real base64 public key when the
-# release signing keypair is provisioned (see the release runbook); it must
-# be provisioned alongside the release workflow signing key. While empty, signature
-# verification cannot run and this script fails closed (see below).
+# PLACEHOLDER: the operator fills in the real base64 public key (the "RW…" line
+# of the provisioned stacked.pub) when the release signing keypair is created —
+# see the signing runbook in CONTRIBUTING.md's Releasing section. It must match
+# the MINISIGN_KEY secret the release workflow signs with. While empty,
+# signature verification cannot run and this script fails closed (see below).
 MINISIGN_PUBKEY=""
 
 # ST_ALLOW_UNVERIFIED=1 lets the install proceed on checksum-only

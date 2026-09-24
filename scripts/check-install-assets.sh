@@ -4,24 +4,28 @@
 # what goreleaser actually produces.
 #
 # install.sh reconstructs release asset URLs client-side:
-# stacked_<version>_<os>_<arch>.tar.gz + checksums.txt from the GitHub release.
-# A .goreleaser.yaml archives.name_template change would silently break every
-# curl-install. This script:
+# stacked_<version>_<os>_<arch>.tar.gz + checksums.txt + checksums.txt.minisig
+# from the GitHub release. A .goreleaser.yaml archives.name_template or
+# signs.signature change would silently break every curl-install. This script:
 #
 #   1. sh -n install.sh                        (syntax gate)
-#   2. goreleaser build --snapshot --clean     (local artifacts only; nothing
-#      is published — output lands in dist/)
+#   2. goreleaser release --snapshot --clean   (full artifact pipeline — nothing
+#      is published on a snapshot. `goreleaser build` would emit binaries only;
+#      archives, checksums, and the sign pipe run under `release` only)
 #   3. for each shipped os/arch: the tarball exists under the expected name,
 #      checksums.txt lists it, and the tarball has `st` at its root
-#   4. pins install.sh's side of the contract (ARCHIVE/BINARY/FILENAME
-#      template/checksums.txt)
+#   4. pins install.sh's + .goreleaser.yaml's sides of the contract (ARCHIVE/
+#      BINARY/FILENAME template/checksums.txt/checksums.txt.minisig/signs)
 #   5. smoke: runs install.sh end-to-end against the snapshot artifacts over
 #      ST_INSTALL_BASE=file://<dist> into a temp INSTALL_DIR
 #
+# Signing runs only when MINISIGN_KEY_FILE points at a key and minisign is
+# installed (a release rehearsal): then the snapshot really signs checksums.txt
+# and the script asserts dist/checksums.txt.minisig below. Otherwise
+# --skip=sign keeps the pipeline faithful — CI legs never hold the release key.
+#
 # Skips cleanly when goreleaser isn't installed — CI installs it via
 # goreleaser-action on the ubuntu leg; a local dev box may not have it.
-#
-# TODO(signing): once release signing lands, also assert dist/checksums.txt.minisig.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -33,8 +37,16 @@ if ! command -v goreleaser >/dev/null 2>&1; then
 	exit 0
 fi
 
-echo "==> goreleaser build --snapshot --clean"
-goreleaser build --snapshot --clean
+args=(--snapshot --clean)
+if [ -n "${MINISIGN_KEY_FILE:-}" ]; then
+	command -v minisign >/dev/null 2>&1 ||
+		{ echo "FAIL: MINISIGN_KEY_FILE is set but minisign is not installed" >&2; exit 1; }
+	echo "==> goreleaser release --snapshot --clean (signing via MINISIGN_KEY_FILE)"
+else
+	args+=(--skip=sign)
+	echo "==> goreleaser release --snapshot --clean --skip=sign"
+fi
+goreleaser release "${args[@]}"
 
 meta=dist/metadata.json
 if [ ! -f "$meta" ]; then
@@ -58,6 +70,14 @@ if [ ! -f "$sums" ]; then
 	exit 1
 fi
 
+# When signing ran (MINISIGN_KEY_FILE set — a release rehearsal), the detached
+# signature must exist under the exact name install.sh fetches. CI snapshot
+# legs run --skip=sign and hold no release key, so the assert is conditional.
+if [ -n "${MINISIGN_KEY_FILE:-}" ] && [ ! -f dist/checksums.txt.minisig ]; then
+	echo "FAIL: dist/checksums.txt.minisig missing though signing was configured" >&2
+	exit 1
+fi
+
 fail=0
 for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
 	name="stacked_${version}_${target}.tar.gz"
@@ -71,7 +91,7 @@ for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
 		echo "FAIL: checksums.txt has no ' ${name}' line (install.sh greps for it)" >&2
 		fail=1
 	fi
-	if ! tar -tzf "dist/$name" | grep -qE '^\./?st$'; then
+	if ! tar -tzf "dist/$name" | grep -qE '^(\./)?st$'; then
 		echo "FAIL: $name has no st binary at archive root; contents:" >&2
 		tar -tzf "dist/$name" | sed 's/^/      /' >&2
 		fail=1
@@ -93,11 +113,24 @@ grep -q 'ARCHIVE}_\${VERSION_NUM}_\${OS}_\${ARCH}\.tar\.gz' install.sh ||
 	{ echo 'FAIL: install.sh FILENAME template changed' >&2; exit 1; }
 grep -q 'checksums\.txt' install.sh ||
 	{ echo 'FAIL: install.sh no longer fetches checksums.txt' >&2; exit 1; }
+grep -q 'checksums\.txt\.minisig' install.sh ||
+	{ echo 'FAIL: install.sh no longer fetches checksums.txt.minisig' >&2; exit 1; }
+
+# Signing side of the contract: the release pipeline must keep producing the
+# detached minisign signature over checksums.txt under the name install.sh
+# fetches.
+grep -q 'cmd: minisign' .goreleaser.yaml ||
+	{ echo 'FAIL: .goreleaser.yaml no longer signs with minisign' >&2; exit 1; }
+grep -q 'artifacts: checksum' .goreleaser.yaml ||
+	{ echo 'FAIL: .goreleaser.yaml signing no longer targets the checksum artifact' >&2; exit 1; }
+grep -qF '${artifact}.minisig' .goreleaser.yaml ||
+	{ echo 'FAIL: .goreleaser.yaml signature name no longer <artifact>.minisig' >&2; exit 1; }
 
 # End-to-end smoke: install.sh against the snapshot artifacts over file://.
-# No checksums.txt.minisig exists in a snapshot build, so signature
-# verification cannot run — ST_ALLOW_UNVERIFIED=1 exercises the checksum-only
-# path; the fail-closed default itself is untouched.
+# Signature verification cannot run here — the snapshot .minisig is absent under
+# --skip=sign, and install.sh's embedded MINISIGN_PUBKEY is empty regardless —
+# so ST_ALLOW_UNVERIFIED=1 exercises the checksum-only path; the fail-closed
+# default itself is untouched.
 bin="$(mktemp -d)"
 trap 'rm -rf "$bin"' EXIT
 echo "==> smoke: install.sh against file://$PWD/dist"

@@ -106,7 +106,47 @@ heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
 `make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (the release
 workflow enforces it too). `make release`/`make snapshot` need the external
 `goreleaser` binary — match the version pinned in
-`.github/workflows/release.yml` (currently `v2.17.0`; `brew install goreleaser`
+`.github/workflows/ci.yml` (currently `v2.17.0`; `brew install goreleaser`
 tracks latest, so check `goreleaser --version`, or pin exactly with
 `go install github.com/goreleaser/goreleaser/v2@v2.17.0`). It is not a Go
 dependency.
+
+### Signing runbook (minisign)
+
+Every release signs `checksums.txt` with minisign (the `signs:` pipe in
+`.goreleaser.yaml`), producing `checksums.txt.minisig` as a release asset.
+`install.sh` downloads that signature and verifies it against the public key
+embedded in the script (`MINISIGN_PUBKEY`), **failing closed** when it cannot
+verify — so a release must never go out unsigned, and the release job hard-fails
+when the `MINISIGN_KEY` secret is absent rather than skipping the signature.
+
+**One-time provisioning (operator; the key is never committed):**
+
+```sh
+# Unencrypted key: CI cannot answer a password prompt (the signs pipe passes -W).
+minisign -G -W -p stacked.pub -s stacked.key
+
+# GitHub secret = base64 of the whole key file (a single line that pastes
+# cleanly into the web UI too):
+base64 < stacked.key | gh secret set MINISIGN_KEY
+
+# Embed the public key: copy the "RW…" line from stacked.pub into install.sh's
+# MINISIGN_PUBKEY and commit. Optionally commit stacked.pub itself so the key
+# can be cross-checked out-of-band.
+rm -f stacked.key   # the secret now lives only in GitHub
+```
+
+The release job decodes the secret to a `0600` file under `$RUNNER_TEMP` and
+exports its path as `MINISIGN_KEY_FILE`, which `.goreleaser.yaml` passes to
+`minisign -s`. To publish from a clone (`make release`), install minisign and
+point `MINISIGN_KEY_FILE` at a local copy of the key; `make snapshot`
+(`goreleaser build`) never reaches the sign pipe, so it needs neither.
+
+**Rotation:** generate a new pair, update the `MINISIGN_KEY` secret, update
+`MINISIGN_PUBKEY` (and `stacked.pub` if committed) in the same commit, then cut
+a new release. Caveat: `install.sh` always embeds the *current* public key, so
+after rotation it can no longer verify signatures of releases signed with the
+old key — rotate only alongside a new release, and note it in the changelog.
+
+`ST_ALLOW_UNVERIFIED=1` remains the escape hatch — post-signing it is for
+snapshot/dev installs only, and it never bypasses an actual signature mismatch.

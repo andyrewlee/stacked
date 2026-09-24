@@ -203,6 +203,42 @@ jobs:
       - name: Tag matches compiled-in defaultVersion
         run: make check-release-version RELEASE_TAG="${GITHUB_REF_NAME}"
 
+      # minisign signs checksums.txt (the `signs:` pipe in .goreleaser.yaml);
+      # install.sh verifies checksums.txt.minisig fail-closed. The package
+      # lives in Ubuntu universe — present on ubuntu-latest (24.04+), absent on
+      # jammy; if a future ubuntu-latest drops it, fetch the upstream binary
+      # with a pinned SHA256 instead.
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      # MINISIGN_KEY is the base64-encoded minisign secret key file
+      # (provisioning: CONTRIBUTING.md's Releasing section). It is decoded to a
+      # 0600 temp file that .goreleaser.yaml's signs pipe reads via
+      # {{ .Env.MINISIGN_KEY_FILE }}. Missing secret = hard failure, on purpose:
+      # an unsigned release would break every curl-install (install.sh verifies
+      # the .minisig fail-closed), so the publish must not proceed.
+      - name: Materialize minisign secret key
+        env:
+          MINISIGN_KEY_B64: ${{ secrets.MINISIGN_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_KEY_B64}" ]; then
+            echo "::error::MINISIGN_KEY secret is not set — provision the release signing keypair first (CONTRIBUTING.md, Releasing section)"
+            exit 1
+          fi
+          umask 077
+          key="$(mktemp "${RUNNER_TEMP}/minisign-key.XXXXXX")"
+          printf '%s' "${MINISIGN_KEY_B64}" | base64 -d > "${key}"
+          if ! grep -q 'secret key' "${key}"; then
+            echo "::error::MINISIGN_KEY decoded but does not look like a minisign secret key file"
+            rm -f "${key}"
+            exit 1
+          fi
+          chmod 600 "${key}"
+          echo "MINISIGN_KEY_FILE=${key}" >> "${GITHUB_ENV}"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -211,3 +247,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Defense in depth: the key lives under RUNNER_TEMP (outside the checkout,
+      # wiped with the job), but remove it explicitly even on failure.
+      - name: Remove minisign secret key
+        if: always()
+        run: '[ -n "${MINISIGN_KEY_FILE:-}" ] && rm -f "${MINISIGN_KEY_FILE}" || true'
