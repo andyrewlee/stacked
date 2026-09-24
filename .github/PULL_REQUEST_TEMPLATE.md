@@ -4,6 +4,6 @@
 
 ## Checklist
 
-- [ ] `PATH=/opt/homebrew/bin:$PATH make ci` green locally (or explain)
+- [ ] `make ci` green locally (or explain)
 - [ ] `CHANGELOG.md` `[Unreleased]` updated — or N/A (tests/refactor/docs-only)
 - [ ] `docs/AGENT.md` updated if any `--json` result shape changed

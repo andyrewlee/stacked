@@ -147,7 +147,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
 | `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
 | `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
-| `st restack [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--dry-run` previews). |
+| `st restack [--all] [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--all` restacks the whole forest; `--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
 | `st abort` | | Abort an in-progress restack/rebase. |
 | `st fold [--dry-run]` | | Fold the current branch into its parent (parent absorbs its commits; `--dry-run` previews). |
@@ -160,7 +160,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st undo` | | Undo the last stack-mutating command. |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
-| `st worktree <branch> \| --all \| ls \| rm <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
+| `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
 | `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |
@@ -179,7 +179,8 @@ st init --trunk main
 
 #### `st create <name> [-m <msg>] [-a|--all] [--worktree]`
 Creates `<name>` off the current branch, switches to it, and tracks it. `-a`
-stages all changes first; `-m` commits the staged changes onto the new branch.
+stages all changes first; `-m` commits the staged changes onto the new branch
+(`-a` requires `-m` — there is nothing to commit without a message).
 
 With `--worktree`, the branch is created and tracked and its own linked
 worktree is materialized in one command — the main worktree's HEAD does not
@@ -214,7 +215,7 @@ own worktree (see `st worktree`), checkout *teleports* there instead of switchin
 in place — with the shell shim installed your shell `cd`s into the worktree; without
 it the path is printed.
 
-#### `st worktree <branch> | --all | ls | rm <branch> | rm --all` (`wt`)
+#### `st worktree <branch> | --all | ls|list | rm|remove <branch> | rm --all` (`wt`)
 Make a branch a "place you can be" on its own — useful for running multiple agents
 on different branches of one stack in parallel. To create a *new* branch straight
 into its own worktree, use `st create <name> --worktree`; `st worktree <branch>`
@@ -260,9 +261,10 @@ Amends the current branch's tip (or, with `--commit`, adds a new commit), then
 restacks every descendant so the rest of the stack rebases onto the new tip. A
 bare `st modify` stages all changes and amends without editing the message.
 
-#### `st restack` (`r`)
+#### `st restack [--all] [--dry-run]` (`r`)
 Rebases the current branch onto its parent's current tip, then restacks its entire
-upstack in topological order. From the trunk, restacks every tracked branch. Your
+upstack in topological order. From the trunk — or with `--all` from anywhere —
+restacks every tracked branch in the forest. Your
 original branch is restored when done. Requires a clean working tree (commit or
 stash first). If a rebase hits a conflict, resolve it, stage the files with
 `git add`, then run `st continue`. When a dependent branch lives in its own
@@ -295,9 +297,10 @@ fetching or changing anything.
 Pushes every branch on the current stack — from the bottom branch up to the
 currently checked-out branch — using `--force-with-lease`, setting each branch's
 upstream (`-u`). It is login-free and never opens PRs; it prints your repository's
-URL so you can open pull requests on your host by hand. For github.com and
-gitlab.com remotes it also prints one compare URL per pushed branch
-(`head -> base`), so each stacked PR can be opened against its correct base;
+URL so you can open pull requests on your host by hand. For github.com,
+gitlab.com, and self-hosted remotes whose hostname carries a `github`/`gitlab`
+label (GitHub Enterprise, self-managed GitLab) it also prints one compare URL
+per pushed branch (`head -> base`), so each stacked PR can be opened against its correct base;
 `--json` carries the same data as `prHints` (see docs/AGENT.md).
 `--dry-run` prints the plan without pushing. Most stack-mutating commands also accept
 `--json` for machine-readable output.
@@ -409,10 +412,11 @@ st submit                     # or: st submit --dry-run
   does not modify your working tree.
 - `stacked` deliberately opens no pull requests. After `st submit`, open the PRs
   it prints (or create them on your host yourself).
-- **Partially implemented:** `st absorb --dry-run` maps staged hunks to the
-  stack commits that own their lines; bare `st absorb` applies any
+- `st absorb` is deliberately strict. `st absorb --dry-run` maps staged hunks
+  to the stack commits that own their lines; bare `st absorb` applies any
   zero-refusal plan — each owning branch tip is amended with its own hunks,
   then one cascade restacks everything above (one `st undo` reverts it all).
-  Hunks spanning several commits, pure additions, lines owned by trunk,
-  non-tip targets, and binary/mode/rename records are refused with the
-  reason.
+  Anything ambiguous is refused with the reason rather than guessed: hunks
+  spanning several commits, pure additions, lines owned by trunk/history or by
+  a commit tipped only by an off-path branch, non-tip targets, and
+  binary/mode/rename records. Any refusal leaves the whole plan unapplied.

@@ -73,7 +73,10 @@ message.
   ```
   `restacked`, `notes`, and `dryRun` are `omitempty`. `--dry-run` maps staged
   hunks to the stack commits owning their lines with zero mutation
-  (`"dryRun": true`). Bare `absorb` applies any plan with ZERO refusals — multi-target
+  (`"dryRun": true`). Targets are restricted to branches on the current
+  stack's path (the current branch plus its ancestors): a hunk owned by a
+  commit tipped only by an off-path tracked branch is refused, naming that
+  branch. Bare `absorb` applies any plan with ZERO refusals — multi-target
   plans amend each owning tip with its own hunks and run one cascade; any
   refusal (or a dirty target worktree) comes back unapplied with the summary
   prefixed `"not applied: ..."` and exit 0 (refusals are data, not errors).
@@ -124,7 +127,9 @@ message.
 - **operational** — each emits a small fixed object:
   - `abort --json` → `{ "aborted": true, "summary" }`.
   - `undo --json` → `{ "undone": true, "label", "restored": [] }` (`label` names the
-    reverted command; `restored` lists branches whose tips were moved back).
+    reverted command; `restored` lists branches whose tips were moved back). An
+    empty journal is still a success: `{ "undone": false }` on stdout, exit 0
+    (text mode prints `nothing to undo`).
   - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
     `fixes` is non-empty; both are present on every run).
 
@@ -190,4 +195,13 @@ One stack, N agents, one worktree per branch:
   Each `flags` entry is `{ "name", "type": "bool"|"string", "default", "summary" }`
   and lists *declared* flags, so `-m`, `--message`, and `--json` each appear
   separately; positionals remain described only by the prose `usage`.
-- `st guide` (or `st guide --json`) prints the recommended end-to-end workflow.
+- `st version --json` emits `{ "version", "commit", "built", "go" }` —
+  `version` is the release version (an ldflags stamp wins, then the module
+  version a `go install` recorded, then the compiled-in default); `commit` is
+  the VCS revision (≤12 chars, with a ` (dirty)` suffix when the tree was
+  dirty), `built` the VCS commit time, and `go` the toolchain version — all
+  three `omitempty`, absent when the build carries no VCS metadata.
+- `st guide` (or `st guide --json`) prints the recommended end-to-end
+  workflow; `--json` emits `{ "steps": [ "…", … ], "docs": "…" }` where `steps`
+  is the same annotated command list text mode prints and `docs` points at
+  `st help <command>` for per-command usage.

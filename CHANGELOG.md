@@ -14,6 +14,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   All-or-nothing: any refusal or dirty target worktree leaves the whole plan
   unapplied.
 
+### Fixed
+- **`st absorb` only attributes hunks to on-path tips.** A hunk whose owning
+  commit is tipped only by a tracked branch *off* the current stack's path is
+  now refused, naming that branch — previously it could be attributed to the
+  off-path tip, silently landing the staged change in a different stack.
+- **0.0.1 notes clarifications.** The `[0.0.1]` absorb entry describes the
+  initial single-target slice; the multi-target apply is under `Added` above.
+  `st restack --all` (whole-forest restack from anywhere) and `st worktree
+  --all` (materialize every tracked branch's worktree) also shipped in 0.0.1
+  but were omitted from its notes.
+
 
 ## [0.0.1] - 2026-07-12
 

@@ -15,6 +15,10 @@ make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 `vet` + `build` + race tests + black-box e2e + a merged-coverage gate (≥75%). If
 it's green, you can commit.
 
+The Makefile, `scripts/cover.sh`, and the git hooks assume a POSIX shell — on
+Windows run them under git-bash or WSL (the engine and tests themselves are
+cross-platform; CI covers `windows-latest`).
+
 The coverage gate also enforces a **per-function floor** (default 50%,
 `COVERAGE_FUNC_MIN` to override): a new function below the floor fails the
 build and is listed as `<path>	<func>`. Either add tests, or — only for
@@ -90,10 +94,11 @@ A historical manual-QA snapshot lives at `docs/qa/FEATURE_STORIES.csv`
 Releases are cut from a tag:
 
 ```sh
-git tag vX.Y.Z          # must match defaultVersion in cmd/root.go
-make release          # build and publish the release (needs a publish token)
-# or dry-run locally:
-make snapshot         # build the release artifacts without publishing
+git tag vX.Y.Z            # must match defaultVersion in cmd/root.go
+git push origin vX.Y.Z    # pushing the tag runs the release workflow (GoReleaser)
+# or publish / dry-run locally:
+make release              # build and publish the release (needs a publish token)
+make snapshot             # build the release artifacts without publishing
 ```
 
 Before tagging: fold `CHANGELOG.md`'s `[Unreleased]` into the new `[x.y.z]`
