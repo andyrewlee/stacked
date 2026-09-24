@@ -142,6 +142,7 @@ type crashShapeBranch struct {
 }
 
 type crashShapeState struct {
+	Version  int                          `json:"version"`
 	Trunk    string                       `json:"trunk"`
 	Branches map[string]*crashShapeBranch `json:"branches"`
 	Pending  map[string]string            `json:"pendingReparent,omitempty"`

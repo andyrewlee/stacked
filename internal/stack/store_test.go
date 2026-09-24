@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -159,6 +160,134 @@ func TestLoadCorruptState(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotInitialized) {
 		t.Fatalf("Load corrupt state error = %v, want generic error not ErrNotInitialized", err)
+	}
+}
+
+// A state file written by a NEWER st must fail loudly: loading it would
+// silently drop fields this binary does not know about — the classic
+// upgrade-then-downgrade corruption this sentinel exists to prevent.
+func TestLoadStateVersionTooNew(t *testing.T) {
+	initGitRepo(t)
+	if _, err := Init("main"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	path, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{\"version\": 99, \"trunk\": \"main\", \"branches\": {}}\n"), 0o644); err != nil {
+		t.Fatalf("write future-version state: %v", err)
+	}
+
+	_, err = Load()
+	if !errors.Is(err, ErrStateTooNew) {
+		t.Fatalf("Load future-version state = %v, want ErrStateTooNew", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "v99") || !strings.Contains(msg, "v1") {
+		t.Fatalf("ErrStateTooNew message = %q, want both schema versions", msg)
+	}
+	if !strings.Contains(msg, "upgrade") {
+		t.Fatalf("ErrStateTooNew message = %q, want an upgrade hint", msg)
+	}
+	if errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Load future-version state = %v, want ErrStateTooNew not ErrNotInitialized", err)
+	}
+}
+
+// A state file written before schema versioning (no "version" field) must
+// still load — the back-compat invariant that keeps existing repos working.
+func TestLoadStateNoVersion(t *testing.T) {
+	initGitRepo(t)
+	if _, err := Init("main"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	path, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath: %v", err)
+	}
+	raw := `{"trunk":"main","branches":{"feat-a":{"name":"feat-a","parent":"main","parentSHA":"deadbeef"}}}` + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write pre-version state: %v", err)
+	}
+
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load pre-version state: %v", err)
+	}
+	if s.Trunk != "main" {
+		t.Errorf("trunk = %q, want main", s.Trunk)
+	}
+	b, ok := s.Get("feat-a")
+	if !ok || b.Parent != "main" || b.ParentSHA != "deadbeef" {
+		t.Errorf("feat-a = %+v (ok=%v), want {main deadbeef}", b, ok)
+	}
+	if s.Version != 0 {
+		t.Errorf("loaded version = %d, want 0 for a pre-version file", s.Version)
+	}
+}
+
+// Save stamps the schema version so a future (or older) st can tell which
+// schema wrote the file, and the field survives a load round-trip.
+func TestSaveStateWritesVersion(t *testing.T) {
+	dir := initGitRepo(t)
+	s, err := Init("main")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	s.Track("feat-a", "main", "deadbeef")
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "stacked", "state.json"))
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("state file is not JSON: %v\n%s", err, data)
+	}
+	if got := raw["version"]; got != float64(stateSchemaVersion) {
+		t.Fatalf("state file version = %v, want %d", got, stateSchemaVersion)
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Version != stateSchemaVersion {
+		t.Errorf("loaded version = %d, want %d", loaded.Version, stateSchemaVersion)
+	}
+	if _, ok := loaded.Get("feat-a"); !ok {
+		t.Error("feat-a missing after round-trip")
+	}
+}
+
+// A "version" of the wrong JSON type takes the standard unmarshal error path —
+// a parse error, not a panic and not a misclassified ErrStateTooNew.
+func TestLoadStateVersionGarbage(t *testing.T) {
+	initGitRepo(t)
+	if _, err := Init("main"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	path, err := statePath()
+	if err != nil {
+		t.Fatalf("statePath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{\"version\": \"abc\", \"trunk\": \"main\", \"branches\": {}}\n"), 0o644); err != nil {
+		t.Fatalf("write garbage-version state: %v", err)
+	}
+
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load garbage-version state succeeded, want a parse error")
+	}
+	if errors.Is(err, ErrStateTooNew) {
+		t.Fatalf("Load garbage-version state = %v, want a parse error not ErrStateTooNew", err)
+	}
+	if !strings.Contains(err.Error(), "parse state file") {
+		t.Fatalf("Load garbage-version state = %q, want the parse state file error", err)
 	}
 }
 

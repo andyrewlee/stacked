@@ -853,7 +853,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 }
 
 func cloneState(s *State) *State {
-	cp := &State{Trunk: s.Trunk, Branches: make(map[string]*Branch, len(s.Branches))}
+	cp := &State{Version: s.Version, Trunk: s.Trunk, Branches: make(map[string]*Branch, len(s.Branches))}
 	for name, branch := range s.Branches {
 		b := *branch
 		cp.Branches[name] = &b

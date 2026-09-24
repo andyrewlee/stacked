@@ -13,6 +13,15 @@ import (
 
 var stackedDirCache sync.Map // cwd -> dir
 
+// stateSchemaVersion is the version of the state.json schema this binary
+// writes and understands. Save stamps it into every file; Load refuses a file
+// with a higher version (see ErrStateTooNew) so that downgrading st cannot
+// silently drop fields a newer st wrote. History: v1 is the original schema;
+// files written before versioning existed carry no version field and load as
+// v0, which is v1-compatible. When the schema changes, bump this and give Load
+// a migrate-or-refuse path for each older version.
+const stateSchemaVersion = 1
+
 // stackedDir returns the absolute path of the per-repository stacked metadata
 // directory. It uses the common git dir so the stack is shared across all linked
 // worktrees of a repository rather than being per-worktree.
@@ -87,6 +96,9 @@ func Load() (*State, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse state file %s (fix or delete it and re-run st init): %w", path, err)
 	}
+	if s.Version > stateSchemaVersion {
+		return nil, fmt.Errorf("%w (schema v%d; this st understands v%d) — upgrade st or check for a downgrade", ErrStateTooNew, s.Version, stateSchemaVersion)
+	}
 	if s.Branches == nil {
 		s.Branches = make(map[string]*Branch)
 	}
@@ -94,12 +106,14 @@ func Load() (*State, error) {
 }
 
 // Save atomically writes the state to disk as pretty-printed JSON with a
-// trailing newline.
+// trailing newline. The schema version is stamped on every write so a future
+// (or older) st can tell which schema produced the file.
 func (s *State) Save() error {
 	path, err := statePath()
 	if err != nil {
 		return err
 	}
+	s.Version = stateSchemaVersion
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)

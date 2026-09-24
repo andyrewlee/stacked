@@ -15,6 +15,13 @@ import (
 // current repository (no state file exists).
 var ErrNotInitialized = errors.New("stacked is not initialized in this repo (run: st init)")
 
+// ErrStateTooNew is returned by Load when the state file's schema version is
+// newer than this binary understands — the file was written by a newer st, so
+// loading it would silently drop fields this binary does not know about. It is
+// a distinct sentinel so callers can special-case the downgrade (e.g. tell the
+// user to upgrade st).
+var ErrStateTooNew = errors.New("state file written by newer st")
+
 // Branch is a single tracked branch within a stack.
 type Branch struct {
 	// Name is the git branch name.
@@ -38,6 +45,12 @@ type PendingReparent struct {
 // State is the complete stacked metadata for a repository: the trunk branch
 // name and the set of tracked branches keyed by branch name.
 type State struct {
+	// Version is the state.json schema version, stamped by Save. Load refuses
+	// a file whose version is newer than stateSchemaVersion (see
+	// ErrStateTooNew); a file with no version field — written before schema
+	// versioning existed — loads as version 0, which is treated as
+	// v1-compatible.
+	Version int `json:"version"`
 	// Trunk is the name of the trunk branch (e.g. "main").
 	Trunk string `json:"trunk"`
 	// Branches maps a branch name to its tracked metadata.
