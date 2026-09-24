@@ -13,14 +13,14 @@ GOLANGCI_VERSION := v2.12.2
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-release-version golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-golangci check-goreleaser-version check-release-version golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
 # Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
 # wrong golangci-lint never hides a compile/vet failure; lint still precedes the
 # slow `cover` step. `cover` runs the whole suite once (race + combined
 # in-process/e2e coverage), so ci does not run the tests three times.
-ci: check-deps check-lint-version check-go-version fmt-check vet vet-cross build lint cover
+ci: check-deps check-lint-version check-go-version check-goreleaser-version fmt-check vet vet-cross build lint cover
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -28,16 +28,18 @@ build:
 install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/st
 
-fmt:
-	gofmt -w .
+# Formatting runs through golangci-lint's `fmt` so `make fmt` and
+# `make fmt-check` apply exactly the formatters CI enforces (.golangci.yml:
+# gofumpt with this module path). Plain gofmt would be a weaker, different
+# gate: a file can be gofmt-clean but gofumpt-dirty.
+fmt: check-golangci
+	golangci-lint fmt
 
-fmt-check:
-	@out=$$(gofmt -l .); \
-	if [ -n "$$out" ]; then \
-		echo "gofmt needs to be run on:"; \
-		echo "$$out"; \
+fmt-check: check-golangci
+	@golangci-lint fmt --diff || { \
+		echo "gofumpt needs to be run (make fmt)"; \
 		exit 1; \
-	fi
+	}
 
 vet:
 	go vet ./...
@@ -106,21 +108,61 @@ check-go-version:
 	[ $$ok -eq 1 ] || exit 1; \
 	echo "go pin: $$want consistent across go.mod, ci.yml, README, CONTRIBUTING"
 
+# The goreleaser-action steps pin the GoReleaser tool version (unlike
+# golangci-lint there is no Makefile variable — the action IS the installer).
+# Every workflow that uses the action must pin the same version, and the pin's
+# major must match the .goreleaser.yaml config schema `version:` (v2 config
+# needs a v2 tool). Greps all workflow files so the check still works if the
+# release job later moves into ci.yml.
+check-goreleaser-version:
+	@pins=$$(for f in .github/workflows/*.yml .github/workflows/*.yaml; do \
+		[ -f "$$f" ] || continue; \
+		grep -A5 'goreleaser/goreleaser-action' "$$f"; \
+	done | sed -nE 's/.*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p' | sort -u); \
+	n=$$(printf '%s\n' "$$pins" | grep -c .); \
+	if [ "$$n" -eq 0 ]; then \
+		echo "no goreleaser-action version pin found in .github/workflows/"; \
+		exit 1; \
+	fi; \
+	if [ "$$n" -gt 1 ]; then \
+		echo "goreleaser-action version pins disagree across .github/workflows/:"; \
+		printf '%s\n' "$$pins"; \
+		exit 1; \
+	fi; \
+	major=$${pins#v}; major=$${major%%.*}; \
+	cfg=$$(sed -nE 's/^version:[[:space:]]*([0-9]+).*/\1/p' .goreleaser.yaml | head -1); \
+	if [ "$$cfg" != "$$major" ]; then \
+		echo ".goreleaser.yaml declares config version '$${cfg:-<none>}' but workflows pin goreleaser $$pins"; \
+		exit 1; \
+	fi; \
+	echo "goreleaser pin: $$pins consistent across workflows; .goreleaser.yaml schema v$$cfg matches"
+
 # Regenerate golden test fixtures after an intended, reviewed output change.
 golden:
 	go test ./cmd -run Golden -update
 
-lint:
+# The lint binary must be exactly $(GOLANGCI_VERSION) — the version CI pins.
+# A different golangci-lint release ships a different bundled gofumpt and
+# different linter diagnostics, so "any v2" could format or lint differently
+# than the gate. This preflight is a shared prerequisite of fmt, fmt-check,
+# and lint (make runs it once per invocation).
+check-golangci:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "golangci-lint not found on PATH."; \
 		echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
 		exit 1; \
 	}
-	@golangci-lint version 2>&1 | grep -qE '(version |v)2\.' || { \
-		echo "golangci-lint v2 required (have: $$(golangci-lint version 2>&1 | head -1))."; \
-		echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
+	@have=$$(golangci-lint version --short 2>/dev/null); \
+	if [ -z "$$have" ]; then \
+		have=$$(golangci-lint version 2>&1 | sed -nE 's/.*version (v?[0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1); \
+	fi; \
+	if [ "v$${have#v}" != "$(GOLANGCI_VERSION)" ]; then \
+		echo "expected golangci-lint $(GOLANGCI_VERSION), got '$${have:-<unknown>}'; install per CONTRIBUTING.md:"; \
+		echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
 		exit 1; \
-	}
+	fi
+
+lint: check-golangci
 	golangci-lint run ./...
 
 # Fast inner loop for engine work: the stack engine package (fake-git model tests

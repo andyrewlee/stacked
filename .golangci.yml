@@ -95,13 +95,15 @@ linters:
           - errcheck
 
 formatters:
+  # gofumpt is a strict superset of gofmt, so it alone covers both checks;
+  # `golangci-lint fmt`/`fmt --diff` are what `make fmt`/`make fmt-check` run.
   enable:
     - gofumpt
-    - gofmt
   settings:
     gofumpt:
-      # Tell gofumpt our module path so it groups local "stacked/..." imports
-      # the same way the standalone gofumpt binary does (a separate block,
-      # blank-line-separated). Without this the bundled gofumpt collapses them
-      # and disagrees with `gofumpt -w .`.
-      module-path: stacked
+      # Tell gofumpt our module path so it groups local
+      # "github.com/andyrewlee/stacked/..." imports the same way the standalone
+      # gofumpt binary does (a separate block, blank-line-separated). Without
+      # this the bundled gofumpt collapses them and disagrees with
+      # `gofumpt -w .`.
+      module-path: github.com/andyrewlee/stacked

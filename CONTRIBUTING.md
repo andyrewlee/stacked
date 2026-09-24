@@ -105,4 +105,8 @@ Before tagging: fold `CHANGELOG.md`'s `[Unreleased]` into the new `[x.y.z]`
 heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
 `make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (the release
 workflow enforces it too). `make release`/`make snapshot` need the external
-`goreleaser` binary (`brew install goreleaser`); it is not a Go dependency.
+`goreleaser` binary — match the version pinned in
+`.github/workflows/release.yml` (currently `v2.17.0`; `brew install goreleaser`
+tracks latest, so check `goreleaser --version`, or pin exactly with
+`go install github.com/goreleaser/goreleaser/v2@v2.17.0`). It is not a Go
+dependency.
