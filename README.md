@@ -157,7 +157,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
 | `st sync [--no-delete] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--dry-run` previews). |
 | `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs). |
-| `st undo` | | Undo the last stack-mutating command. |
+| `st undo [--list]` | | Undo the last stack-mutating command (`--list` previews the journal without reverting). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
 | `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
@@ -334,11 +334,15 @@ Renames a branch (the current one by default) with `git branch -m` and updates t
 stack metadata: the branch's record, the trunk name if applicable, and every
 child's parent pointer.
 
-#### `st undo`
+#### `st undo [--list]`
 Reverts the last stack-mutating command: the metadata is rolled back and each
 recorded branch is reset to its prior tip. It does **not** touch your working
 tree, so uncommitted changes are preserved (run `git status` to review). The
 journal keeps the last several operations.
+
+`st undo --list` previews the journal without reverting anything: entries are
+listed newest-first as `1: create (created feat-a; on main)`, where index 1 is
+what a bare `st undo` would revert.
 
 #### `st repair`
 Fixes the drift `st validate` reports: untracks branches whose git branch was

@@ -1400,6 +1400,75 @@ func TestUndo(t *testing.T) {
 	t.Fatalf("expected the undo journal to drain to 'nothing to undo'")
 }
 
+// TestUndoList asserts `st undo --list` previews the journal without reverting:
+// newest entry first with index 1 naming what bare undo would revert, an empty
+// journal matching bare undo's "nothing to undo", and the journal untouched —
+// a bare undo still works after listing.
+func TestUndoList(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	// Empty journal: same notice as bare undo, and an empty entries list in
+	// JSON, both exit 0.
+	res := r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "nothing to undo")
+	res = r.stOK("undo", "--list", "--json")
+	var empty struct {
+		Entries []struct {
+			Index           int      `json:"index"`
+			Label           string   `json:"label"`
+			CurrentBranch   string   `json:"currentBranch"`
+			CreatedBranches []string `json:"createdBranches"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &empty); err != nil {
+		t.Fatalf("undo --list --json not parseable: %v\n%s", err, res.stdout)
+	}
+	if len(empty.Entries) != 0 {
+		t.Fatalf("empty journal listed %d entries, want 0:\n%s", len(empty.Entries), res.stdout)
+	}
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+
+	res = r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "1: create")
+	wantStdoutContains(t, res, "created feat-b")
+	wantStdoutContains(t, res, "2: create")
+	wantStdoutContains(t, res, "created feat-a")
+
+	res = r.stOK("undo", "--list", "--json")
+	var listed struct {
+		Entries []struct {
+			Index           int      `json:"index"`
+			Label           string   `json:"label"`
+			CurrentBranch   string   `json:"currentBranch"`
+			CreatedBranches []string `json:"createdBranches"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &listed); err != nil {
+		t.Fatalf("undo --list --json not parseable: %v\n%s", err, res.stdout)
+	}
+	if len(listed.Entries) != 2 || listed.Entries[0].Index != 1 ||
+		listed.Entries[0].Label != "create" || listed.Entries[0].CurrentBranch != "feat-a" ||
+		len(listed.Entries[0].CreatedBranches) != 1 || listed.Entries[0].CreatedBranches[0] != "feat-b" {
+		t.Fatalf("undo --list --json = %+v, want index-1 create entry for feat-b", listed.Entries)
+	}
+
+	// --list did not consume the journal: bare undo still reverts the create.
+	r.stOK("undo")
+	if r.branchExists("feat-b") {
+		t.Fatal("undo after --list left created branch feat-b behind")
+	}
+	res = r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "1: create")
+	wantStdoutContains(t, res, "created feat-a")
+	if strings.Contains(res.stdout, "2:") {
+		t.Fatalf("undo --list after one undo shows a stale second entry:\n%s", res.stdout)
+	}
+}
+
 // TestTrackUntrack covers tracking a plain git branch, the guard errors
 // (track the trunk, double-track, untrack the trunk / an untracked branch), and
 // untracking with child re-parenting.

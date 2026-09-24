@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -10,21 +12,31 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "undo",
-		Summary: "Undo the last stack-mutating command",
-		Usage:   "st undo [--json]",
-		Run:     runUndo,
+		Name:       "undo",
+		Summary:    "Undo the last stack-mutating command",
+		Usage:      "st undo [--list] [--json]",
+		Run:        runUndo,
+		NewFlagSet: undoFlagSet,
 	})
 }
 
 // runUndo reverts the most recent mutating command by handing its recorded
 // snapshot to the engine (stack.Undo): the stack metadata is rolled back and
 // every recorded branch is reset to its prior tip. It does not touch the
-// working tree, so uncommitted changes are preserved.
+// working tree, so uncommitted changes are preserved. With --list it only
+// prints the journal — a pure read, so it runs without the repo lock (like
+// the other read commands) and is allowed while a rebase is in progress.
 func runUndo(args []string) error {
-	asJSON, err := parsePlain("undo", args)
-	if err != nil {
+	var o undoOpts
+	fs := newUndoFlags(&o)
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
+	}
+	if err := rejectArgs("undo", fs.Args()); err != nil {
+		return err
+	}
+	if o.list {
+		return runUndoList(o.asJSON)
 	}
 
 	release, err := acquireLock()
@@ -44,7 +56,7 @@ func runUndo(args []string) error {
 		return err
 	}
 	if !ok {
-		return emit(asJSON, struct {
+		return emit(o.asJSON, struct {
 			Undone bool `json:"undone"`
 		}{false}, func() { out("nothing to undo\n") })
 	}
@@ -85,7 +97,7 @@ func runUndo(args []string) error {
 		Label    string   `json:"label"`
 		Restored []string `json:"restored"`
 	}{true, entry.Label, restored}
-	return emit(asJSON, payload, func() {
+	return emit(o.asJSON, payload, func() {
 		out("undid: %s\n", sanitizeForTerminal(entry.Label))
 		if len(restored) > 0 {
 			out("restored branches: %s\n", joinTerminalNames(restored))
@@ -139,4 +151,77 @@ func undoEntryCreatedWorktree(entry *stack.UndoEntry, name string) bool {
 		return false
 	}
 	return entry.CreatedWorktrees[name] != ""
+}
+
+// undoListEntry is the --list projection of a journal entry: the fields a user
+// needs to decide whether undoing is safe — what the op was (label), which
+// branches it created and undo would delete (createdBranches, with their
+// createdWorktrees), where HEAD would land (currentBranch), and which tips
+// would move back (refs). The state snapshot and the captured local-branch
+// list are restore plumbing, not display data, so they stay out. index counts
+// down from the newest entry: 1 is what a bare `st undo` reverts, so a future
+// multi-step undo can reference positions the list already numbers.
+type undoListEntry struct {
+	Index            int               `json:"index"`
+	Label            string            `json:"label"`
+	CurrentBranch    string            `json:"currentBranch,omitempty"`
+	CreatedBranches  []string          `json:"createdBranches,omitempty"`
+	CreatedWorktrees map[string]string `json:"createdWorktrees,omitempty"`
+	Refs             map[string]string `json:"refs"`
+}
+
+// runUndoList prints the undo journal newest-first without touching it. The
+// empty journal matches bare undo's empty case: "nothing to undo" in text,
+// {"entries": []} in JSON, exit 0 either way.
+func runUndoList(asJSON bool) error {
+	entries, err := stack.ListUndo()
+	if err != nil {
+		return err
+	}
+	payload := struct {
+		Entries []undoListEntry `json:"entries"`
+	}{Entries: []undoListEntry{}}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		refs := e.Refs
+		if refs == nil {
+			refs = map[string]string{}
+		}
+		payload.Entries = append(payload.Entries, undoListEntry{
+			Index:            len(entries) - i,
+			Label:            e.Label,
+			CurrentBranch:    e.CurrentBranch,
+			CreatedBranches:  e.CreatedBranches,
+			CreatedWorktrees: e.CreatedWorktrees,
+			Refs:             refs,
+		})
+	}
+	return emit(asJSON, payload, func() {
+		if len(payload.Entries) == 0 {
+			out("nothing to undo\n")
+			return
+		}
+		for _, e := range payload.Entries {
+			line := fmt.Sprintf("%d: %s", e.Index, sanitizeForTerminal(e.Label))
+			var bits []string
+			if len(e.CreatedBranches) > 0 {
+				bits = append(bits, "created "+joinTerminalNames(e.CreatedBranches))
+			}
+			if len(e.CreatedWorktrees) > 0 {
+				names := make([]string, 0, len(e.CreatedWorktrees))
+				for name := range e.CreatedWorktrees {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				bits = append(bits, "worktrees "+joinTerminalNames(names))
+			}
+			if e.CurrentBranch != "" {
+				bits = append(bits, "on "+sanitizeForTerminal(e.CurrentBranch))
+			}
+			if len(bits) > 0 {
+				line += " (" + strings.Join(bits, "; ") + ")"
+			}
+			out("%s\n", line)
+		}
+	})
 }

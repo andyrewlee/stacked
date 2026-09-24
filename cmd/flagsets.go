@@ -56,6 +56,19 @@ func newAbsorbFlags(o *absorbOpts) *flag.FlagSet {
 
 func absorbFlagSet() *flag.FlagSet { return newAbsorbFlags(&absorbOpts{}) }
 
+type undoOpts struct {
+	asJSON bool
+	list   bool
+}
+
+func newUndoFlags(o *undoOpts) *flag.FlagSet {
+	fs := newFlagSet("undo", &o.asJSON)
+	fs.BoolVar(&o.list, "list", false, "show the undo journal without reverting anything")
+	return withDefaults(fs, "undo")
+}
+
+func undoFlagSet() *flag.FlagSet { return newUndoFlags(&undoOpts{}) }
+
 type worktreeOpts struct {
 	asJSON bool
 	all    bool

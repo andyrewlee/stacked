@@ -140,6 +140,12 @@ func trimUndo() error {
 	return writeUndo(entries[len(entries)-maxUndoEntries:])
 }
 
+// ListUndo returns every journal entry in record order (oldest first) without
+// modifying the journal — the read half of PeekUndo, for `st undo --list`.
+func ListUndo() ([]UndoEntry, error) {
+	return loadUndo()
+}
+
 // PeekUndo returns the most recent undo entry without removing it. The boolean
 // is false when the journal is empty.
 func PeekUndo() (*UndoEntry, bool, error) {

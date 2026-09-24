@@ -299,6 +299,102 @@ func TestUndoEmptyJournalJSONAndText(t *testing.T) {
 	}
 }
 
+// `st undo --list` is a pure read of the journal: newest first, index 1 naming
+// what bare undo would revert, and the journal itself untouched — a bare undo
+// must still work after listing.
+func TestUndoList(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	// Empty journal mirrors bare undo's empty case in both modes.
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--list"}); err != nil {
+			t.Fatalf("undo --list on an empty journal: %v", err)
+		}
+	})
+	if !strings.Contains(out, "nothing to undo") {
+		t.Fatalf("undo --list on an empty journal = %q, want %q", out, "nothing to undo")
+	}
+	type listEntry struct {
+		Index            int               `json:"index"`
+		Label            string            `json:"label"`
+		CurrentBranch    string            `json:"currentBranch"`
+		CreatedBranches  []string          `json:"createdBranches"`
+		CreatedWorktrees map[string]string `json:"createdWorktrees"`
+		Refs             map[string]string `json:"refs"`
+	}
+	var empty struct {
+		Entries []listEntry `json:"entries"`
+	}
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--list", "--json"}); err != nil {
+			t.Fatalf("undo --list --json on an empty journal: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "undo --list --json (empty journal)", out, &empty)
+	if len(empty.Entries) != 0 {
+		t.Fatalf("undo --list --json on an empty journal = %+v, want no entries", empty.Entries)
+	}
+
+	// Two mutations list newest-first; index 1 is the next undo target.
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--list"}); err != nil {
+			t.Fatalf("undo --list: %v", err)
+		}
+	})
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("undo --list = %q, want 2 entries", out)
+	}
+	if !strings.HasPrefix(lines[0], "1: create") ||
+		!strings.Contains(lines[0], "created feat-b") ||
+		!strings.Contains(lines[0], "on feat-a") {
+		t.Fatalf("undo --list newest line = %q, want '1: create' for feat-b taken from feat-a", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "2: create") ||
+		!strings.Contains(lines[1], "created feat-a") ||
+		!strings.Contains(lines[1], "on main") {
+		t.Fatalf("undo --list oldest line = %q, want '2: create' for feat-a taken from main", lines[1])
+	}
+
+	var listed struct {
+		Entries []listEntry `json:"entries"`
+	}
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--list", "--json"}); err != nil {
+			t.Fatalf("undo --list --json: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "undo --list --json", out, &listed)
+	if len(listed.Entries) != 2 {
+		t.Fatalf("undo --list --json entries = %+v, want 2", listed.Entries)
+	}
+	top := listed.Entries[0]
+	if top.Index != 1 || top.Label != "create" || top.CurrentBranch != "feat-a" ||
+		len(top.CreatedBranches) != 1 || top.CreatedBranches[0] != "feat-b" {
+		t.Fatalf("undo --list --json newest entry = %+v, want index 1 create feat-b on feat-a", top)
+	}
+	// refs are the PRE-op tips the entry would restore: feat-b did not exist
+	// when the second create was snapshotted, so it must be absent.
+	if _, ok := top.Refs["main"]; !ok {
+		t.Fatalf("undo --list --json refs = %v, want main's recorded tip", top.Refs)
+	}
+	if _, ok := top.Refs["feat-b"]; ok {
+		t.Fatalf("undo --list --json refs = %v, want no feat-b (created by this entry)", top.Refs)
+	}
+
+	// --list did not consume the journal: bare undo still reverts the create.
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after --list: %v", err)
+	}
+	if _, ok := stateT(t).Branches["feat-b"]; ok {
+		t.Fatal("undo after --list left feat-b tracked")
+	}
+}
+
 func TestContinueKeepsOriginalUndoEntry(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

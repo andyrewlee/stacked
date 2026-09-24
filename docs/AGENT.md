@@ -131,6 +131,14 @@ message.
     reverted command; `restored` lists branches whose tips were moved back). An
     empty journal is still a success: `{ "undone": false }` on stdout, exit 0
     (text mode prints `nothing to undo`).
+  - `undo --list --json` previews the journal without reverting:
+    `{ "entries": [ { "index", "label", "currentBranch", "createdBranches": [],
+      "createdWorktrees": {}, "refs": {} } ] }`, newest first — `index` 1 is
+    what a bare `undo` reverts. `refs` maps each recorded branch to the tip it
+    would be reset to; `createdBranches`/`createdWorktrees` name what the op
+    created and undo would remove (both `omitempty`, as is `currentBranch`);
+    the internal state snapshot is never emitted. An empty journal emits
+    `{ "entries": [] }` (exit 0; text prints `nothing to undo`).
   - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
     `fixes` is non-empty; both are present on every run).
 
