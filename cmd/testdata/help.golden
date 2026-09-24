@@ -27,7 +27,7 @@ commands:
   submit (ss)        Push every branch in the current stack to the remote (no PRs — login-free)
   sync (s)           Fetch trunk, fast-forward it, restack everything, and prune merged branches
   top (t)            Jump to the top of the current stack
-  track              Start tracking the current git branch in the stack
+  track              Start tracking a git branch in the stack
   undo               Undo the last stack-mutating command
   untrack            Stop tracking a branch (re-parents its children)
   up (u)             Move up the stack to a child branch

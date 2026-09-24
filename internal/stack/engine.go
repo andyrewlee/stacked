@@ -1036,23 +1036,30 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 	return deleted, nil
 }
 
-// TrackBranch starts tracking the current branch. parent is used when non-empty
-// (it must be the trunk or a tracked branch); otherwise it is inferred from the
-// commit graph as the closest tracked ancestor.
-func TrackBranch(env Env, s *State, parent string) (*OpResult, error) {
+// TrackBranch starts tracking name — the current branch when name is empty.
+// parent is used when non-empty (it must be the trunk or a tracked branch);
+// otherwise it is inferred from the commit graph as the closest tracked
+// ancestor, exactly as the current-branch path does. HEAD never moves.
+func TrackBranch(env Env, s *State, name, parent string) (*OpResult, error) {
 	g := env.Git
-	cur, err := g.CurrentBranch()
-	if err != nil {
-		return nil, err
+	if name == "" {
+		cur, err := g.CurrentBranch()
+		if err != nil {
+			return nil, err
+		}
+		name = cur
 	}
-	if cur == s.Trunk {
-		return nil, fmt.Errorf("cannot track the trunk branch %q", cur)
+	if name == s.Trunk {
+		return nil, fmt.Errorf("cannot track the trunk branch %q", name)
 	}
-	if s.IsTracked(cur) {
-		return nil, fmt.Errorf("branch %q is already tracked", cur)
+	if s.IsTracked(name) {
+		return nil, fmt.Errorf("branch %q is already tracked", name)
+	}
+	if !g.BranchExists(name) {
+		return nil, fmt.Errorf("branch %q does not exist", name)
 	}
 	if parent != "" {
-		if parent == cur {
+		if parent == name {
 			return nil, errors.New("a branch cannot be its own parent")
 		}
 		if parent != s.Trunk && !s.IsTracked(parent) {
@@ -1060,32 +1067,33 @@ func TrackBranch(env Env, s *State, parent string) (*OpResult, error) {
 		}
 	} else {
 		var err error
-		parent, err = inferParent(g, s, cur)
+		parent, err = inferParent(g, s, name)
 		if err != nil {
 			return nil, err
 		}
 	}
-	parentSHA, err := g.MergeBase(parent, cur)
+	parentSHA, err := g.MergeBase(parent, name)
 	if err != nil {
-		return nil, fmt.Errorf("computing merge base of %q and %q: %w", parent, cur, err)
+		return nil, fmt.Errorf("computing merge base of %q and %q: %w", parent, name, err)
 	}
-	s.Track(cur, parent, parentSHA)
+	s.Track(name, parent, parentSHA)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: fmt.Sprintf("Tracking %s (parent: %s)", cur, parent), Branch: cur}, nil
+	return &OpResult{Summary: fmt.Sprintf("Tracking %s (parent: %s)", name, parent), Branch: name}, nil
 }
 
-// inferParent picks the closest tracked ancestor (or the trunk) of cur. The two
-// per-candidate ancestry questions ("is c an ancestor of cur?" and "is c merged
-// into trunk?") are answered from precomputed reachability sets — one rev-list
-// for cur and one for the trunk — instead of a `merge-base --is-ancestor` spawn
-// per candidate. Only the closest-ancestor tie-break still spawns, and just for
-// the few candidates that are actual ancestors of cur.
-func inferParent(g Git, s *State, cur string) (string, error) {
-	curAncestors, err := g.AncestorSet(cur)
+// inferParent picks the closest tracked ancestor (or the trunk) of name — the
+// branch being adopted, current or not. The two per-candidate ancestry
+// questions ("is c an ancestor of name?" and "is c merged into trunk?") are
+// answered from precomputed reachability sets — one rev-list for name and one
+// for the trunk — instead of a `merge-base --is-ancestor` spawn per candidate.
+// Only the closest-ancestor tie-break still spawns, and just for the few
+// candidates that are actual ancestors of name.
+func inferParent(g Git, s *State, name string) (string, error) {
+	ancestors, err := g.AncestorSet(name)
 	if err != nil {
-		return "", fmt.Errorf("list ancestors of %q: %w", cur, err)
+		return "", fmt.Errorf("list ancestors of %q: %w", name, err)
 	}
 	trunkAncestors, err := g.AncestorSet(s.Trunk)
 	if err != nil {
@@ -1098,9 +1106,9 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 
 	best := s.Trunk
 	candidates := []string{s.Trunk}
-	for name := range s.Branches {
-		if name != cur {
-			candidates = append(candidates, name)
+	for n := range s.Branches {
+		if n != name {
+			candidates = append(candidates, n)
 		}
 	}
 	// Iterate in a fixed order so the choice between incomparable ancestors (two
@@ -1108,15 +1116,15 @@ func inferParent(g Git, s *State, cur string) (string, error) {
 	// merge) is deterministic rather than dependent on map iteration order.
 	sort.Strings(candidates)
 	for _, c := range candidates {
-		if c == cur || c == best {
+		if c == name || c == best {
 			continue
 		}
 		tip, ok := tips[c]
 		if !ok {
 			continue // candidate's git branch is gone; it cannot be a parent
 		}
-		if !curAncestors[tip] {
-			continue // not an ancestor of cur
+		if !ancestors[tip] {
+			continue // not an ancestor of name
 		}
 		if trunkAncestors[tip] {
 			continue // already merged into the trunk

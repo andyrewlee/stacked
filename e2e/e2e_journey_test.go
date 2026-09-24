@@ -1442,6 +1442,38 @@ func TestTrackUntrack(t *testing.T) {
 	wantStdoutContains(t, res, "Untracked plain")
 }
 
+// TestTrackNamedBranch covers `st track <name>`: a branch is adopted without
+// being checked out, its parent inferred from the commit graph exactly as the
+// current-branch path does, and bad names are refused.
+func TestTrackNamedBranch(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	// A plain git branch forked off feat-a, created without checking it out.
+	r.git("branch", "feat-b", "feat-a")
+	r.git("checkout", "-q", "main")
+
+	res := r.stOK("track", "feat-b")
+	wantStdoutContains(t, res, "Tracking feat-b (parent: feat-a)")
+	if cur := r.currentBranch(); cur != "main" {
+		t.Fatalf("track moved HEAD to %q", cur)
+	}
+
+	// The adopted branch shows up in the log under its inferred parent.
+	res = r.stOK("log")
+	wantStdoutContains(t, res, "feat-b")
+
+	// Unknown and already-tracked names are refused.
+	res = r.st("track", "ghost")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "does not exist")
+	res = r.st("track", "feat-b")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "already tracked")
+}
+
 // TestRestackGuards covers the dirty-tree guard and the untracked checkout guard.
 func TestRestackGuards(t *testing.T) {
 	t.Parallel()

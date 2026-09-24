@@ -122,7 +122,7 @@ func TestTrackBranchInferParentUsesScopedTipsForStateBranches(t *testing.T) {
 
 	spy := &tipReadSpyGit{Git: f}
 	env.Git = spy
-	if _, err := TrackBranch(env, s, ""); err != nil {
+	if _, err := TrackBranch(env, s, "", ""); err != nil {
 		t.Fatalf("TrackBranch: %v", err)
 	}
 	if spy.tipsCalls != 0 {

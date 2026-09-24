@@ -95,6 +95,43 @@ func TestTrackGuards(t *testing.T) {
 	}
 }
 
+func TestTrackNamedArg(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	// A plain git branch forked off feat-a, created without switching to it.
+	mustRun(t, "git", "branch", "feat-b", "feat-a")
+	mustCheckout(t, "main")
+
+	if err := runTrack([]string{"feat-b"}); err != nil {
+		t.Fatalf("track feat-b: %v", err)
+	}
+	if b, _ := stateT(t).Get("feat-b"); b == nil || b.Parent != "feat-a" {
+		t.Fatalf("feat-b not tracked with parent feat-a: %+v", b)
+	}
+	if cur := curBranch(t); cur != "main" {
+		t.Fatalf("track moved HEAD to %q", cur)
+	}
+
+	// A flag after the positional still parses.
+	mustRun(t, "git", "branch", "feat-c", "main")
+	if err := runTrack([]string{"feat-c", "--parent", "main"}); err != nil {
+		t.Fatalf("track feat-c --parent main: %v", err)
+	}
+	if c, _ := stateT(t).Get("feat-c"); c == nil || c.Parent != "main" {
+		t.Fatalf("feat-c not tracked with parent main: %+v", c)
+	}
+
+	// Refusals: unknown branch and too many positionals.
+	if err := runTrack([]string{"ghost"}); err == nil {
+		t.Fatalf("expected error tracking an unknown branch")
+	}
+	if err := runTrack([]string{"a", "b"}); err == nil {
+		t.Fatalf("expected error for too many args")
+	}
+}
+
 func TestUntrackGuards(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

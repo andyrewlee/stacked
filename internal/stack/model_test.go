@@ -252,7 +252,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 					return err
 				}
 				f.commit("subj")
-				_, err := TrackBranch(env, s, "")
+				_, err := TrackBranch(env, s, "", "")
 				return err
 			}
 		}

@@ -143,7 +143,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st down [n]` | `d` | Move down the stack toward trunk. |
 | `st top` | `t` | Jump to the top (leaf) of the current stack. |
 | `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
-| `st track [--parent <branch>]` | | Start tracking the current git branch. |
+| `st track [name] [--parent <branch>]` | | Start tracking a git branch (the current one when no name is given). |
 | `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
 | `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
 | `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
@@ -251,10 +251,11 @@ Walk `n` levels up (toward leaves) or down (toward trunk) and check out the resu
 Jump to the leaf of the current stack (`top`) or to the bottom branch just above
 trunk (`bottom`).
 
-#### `st track [--parent <branch>]` / `st untrack [name]`
-`track` starts managing an existing git branch; the parent is inferred from the
-commit graph or set with `--parent`. `untrack` stops managing a branch and
-re-parents its children onto that branch's parent (the git branch is not deleted).
+#### `st track [name] [--parent <branch>]` / `st untrack [name]`
+`track` starts managing an existing git branch — the current one, or the one
+named — with the parent inferred from the commit graph or set with `--parent`.
+`untrack` stops managing a branch and re-parents its children onto that
+branch's parent (the git branch is not deleted).
 
 #### `st modify [-m <msg>] [-a|--all] [--commit]` (`amend`, `m`)
 Amends the current branch's tip (or, with `--commit`, adds a new commit), then

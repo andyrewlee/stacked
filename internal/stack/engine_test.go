@@ -535,7 +535,7 @@ func TestEngineTrackUntrackRename(t *testing.T) {
 	}
 	f.commit("m1")
 
-	if _, err := TrackBranch(env, s, ""); err != nil {
+	if _, err := TrackBranch(env, s, "", ""); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	if mb, _ := s.Get("manual"); mb.Parent != "a" {
@@ -570,7 +570,7 @@ func TestTrackBranchInfersStaleTrackedAncestorAfterTrunkAdvances(t *testing.T) {
 	}
 	f.commit("manual")
 
-	if _, err := TrackBranch(env, s, ""); err != nil {
+	if _, err := TrackBranch(env, s, "", ""); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	if mb, _ := s.Get("manual"); mb.Parent != "a" {
@@ -593,7 +593,7 @@ func TestTrackBranchKeepsTrunkParentWhenTrackedAncestorAlreadyMerged(t *testing.
 	}
 	f.commit("manual")
 
-	if _, err := TrackBranch(env, s, ""); err != nil {
+	if _, err := TrackBranch(env, s, "", ""); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	if mb, _ := s.Get("manual"); mb.Parent != "main" {
@@ -620,11 +620,75 @@ func TestTrackBranchKeepsTrunkParentWhenMergedAncestorAndTrunkAdvanced(t *testin
 	}
 	f.commit("manual")
 
-	if _, err := TrackBranch(env, s, ""); err != nil {
+	if _, err := TrackBranch(env, s, "", ""); err != nil {
 		t.Fatalf("track: %v", err)
 	}
 	if mb, _ := s.Get("manual"); mb.Parent != "main" {
 		t.Fatalf("manual parent=%q, want main", mb.Parent)
+	}
+}
+
+// TestTrackNamedBranch covers tracking a branch other than the checked-out
+// one: inference roots at the named branch's tip (same result as
+// checkout-then-track), HEAD does not move, and the refusals mirror the
+// current-branch path.
+func TestTrackNamedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	// An untracked branch forked off a, then HEAD returns to the trunk.
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("manual"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("m1")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := TrackBranch(env, s, "manual", "")
+	if err != nil {
+		t.Fatalf("track named: %v", err)
+	}
+	if res.Branch != "manual" {
+		t.Fatalf("result branch=%q, want manual", res.Branch)
+	}
+	if mb, _ := s.Get("manual"); mb.Parent != "a" {
+		t.Fatalf("manual parent=%q, want inferred a", mb.Parent)
+	}
+	if cur, _ := f.CurrentBranch(); cur != "main" {
+		t.Fatalf("track moved HEAD to %q", cur)
+	}
+
+	// Refusals mirror the current-branch path: trunk, already-tracked, and a
+	// branch that does not exist.
+	for _, tc := range []struct{ name, want string }{
+		{"main", "cannot track the trunk"},
+		{"manual", "already tracked"},
+		{"ghost", "does not exist"},
+	} {
+		if _, err := TrackBranch(env, s, tc.name, ""); err == nil ||
+			!strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("TrackBranch(%q) err=%v, want %q", tc.name, err, tc.want)
+		}
+	}
+
+	// An explicit parent is honored for a named branch, and a named branch
+	// cannot be its own parent.
+	if err := f.CreateBranchAt("selfie", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TrackBranch(env, s, "selfie", "selfie"); err == nil ||
+		!strings.Contains(err.Error(), "own parent") {
+		t.Fatalf("self-parent err=%v, want own-parent refusal", err)
+	}
+	if _, err := TrackBranch(env, s, "selfie", "manual"); err != nil {
+		t.Fatalf("track selfie --parent manual: %v", err)
+	}
+	if sb, _ := s.Get("selfie"); sb.Parent != "manual" {
+		t.Fatalf("selfie parent=%q, want manual", sb.Parent)
 	}
 }
 
