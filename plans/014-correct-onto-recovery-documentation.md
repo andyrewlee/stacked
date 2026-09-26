@@ -14,7 +14,16 @@
 - **Category:** docs
 - **Audit item:** 14
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/014-correct-onto-recovery-documentation` (stacked on `advisor/013`).
+
+- Step 1 confirmation: `internal/stack/engine.go` still stores `s.PendingReparent` on a paused conflict (`Onto`, ~line 569) and publishes `b.Parent`/`b.ParentSHA` only after a successful rebase; `Continue` promotes the stored intent (`isPendingReparent`, ~line 930); `Abort` clears it (~line 891). `TestOntoConflictRecordsPendingReparentWithoutChangingParent` (`engine_test.go:858`) passes against unchanged source → `go test ./internal/stack -run '^TestOntoConflictRecordsPendingReparentWithoutChangingParent$' -count=1` → PASS.
+- Step 2: the CLAUDE.md bullet was replaced with the plan's prescribed wording (unchanged parent on conflict, pending intent, promote on continue, clear on abort) naming the regression test. `grep -n 'PendingReparent|TestOntoConflictRecordsPendingReparent' CLAUDE.md` → both terms present.
+- `git diff -- CLAUDE.md` touches only the incorrect bullet; `git diff --check` → exit 0.
+- Full `make ci` not run: this is a documentation-only edit (plan declares the full gate not required); the targeted regression plus scoped diff is the recorded evidence.
 
 ## Why this matters
 
