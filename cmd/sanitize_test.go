@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSanitizeForTerminal(t *testing.T) {
 	tests := []struct {
@@ -46,5 +49,38 @@ func TestSanitizeErrorForTerminal(t *testing.T) {
 				t.Fatalf("sanitizeErrorForTerminal(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestTeleportHintControlPath pins the control-byte boundary: a destination
+// whose bytes terminal sanitization would escape can no longer be named by the
+// escaped spelling, so no executable `run: cd` is offered — only a direction
+// to the shell integration or the JSON field. The terminal rendering still
+// escapes the control bytes, and the raw summary keeps the exact path bytes.
+func TestTeleportHintControlPath(t *testing.T) {
+	dest := "/wt/evil\nworktree /fake"
+
+	term := teleportHintForTerminal("feat", dest)
+	if strings.Contains(term, "run: cd") {
+		t.Errorf("control-byte path must not offer an executable cd: %q", term)
+	}
+	// The path's newline byte must be visibly escaped (\x0a), not raw — a raw
+	// byte would let the embedded text forge a second output line.
+	if strings.Contains(term, "\nworktree /fake") {
+		t.Errorf("embedded newline leaked raw into terminal display: %q", term)
+	}
+	if !strings.Contains(term, `evil\x0aworktree /fake`) {
+		t.Errorf("escaped path bytes missing from display: %q", term)
+	}
+	if !strings.Contains(term, "shell integration") {
+		t.Errorf("no direction given for control-byte path: %q", term)
+	}
+
+	raw := teleportHint("feat", dest)
+	if strings.Contains(raw, "run: cd") {
+		t.Errorf("raw summary must not offer an executable cd either: %q", raw)
+	}
+	if !strings.Contains(raw, dest) {
+		t.Errorf("raw summary must keep exact path bytes: %q", raw)
 	}
 }

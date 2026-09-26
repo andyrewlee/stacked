@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -142,7 +143,35 @@ func navSummary(verb, branch, dest string) string {
 // worktree and the shell shim is not installed: it names where the branch lives
 // and the exact command to get there, instead of falsely reporting a switch.
 func teleportHint(branch, dest string) string {
-	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", branch, dest, dest)
+	return teleportHintCore(branch, dest, dest)
+}
+
+// teleportHintCore renders the two-line teleport summary from display fields
+// plus the one navigation hint derived from the raw destination, so the
+// raw-summary and terminal-sanitized variants can never drift on the command
+// they offer.
+func teleportHintCore(dispBranch, dispDest, rawDest string) string {
+	return fmt.Sprintf("%s is in worktree %s\n%s", dispBranch, dispDest, manualCDHint(rawDest))
+}
+
+// manualCDHint renders the copyable `run: cd -- '<path>'` suggestion for dest.
+// The path is single-quoted (embedded apostrophes become the POSIX
+// close-escape-reopen sequence) so spaces and shell metacharacters paste
+// inertly. When dest contains bytes that terminal sanitization would escape,
+// the escaped spelling no longer names the directory — no executable command
+// is offered, just a pointer at the shell integration and the JSON field.
+func manualCDHint(dest string) string {
+	if sanitizeForTerminal(dest) != dest {
+		return "worktree path contains control bytes; navigate with the st shell integration (st shell install) or read the exact path from --json output"
+	}
+	return "run: cd -- " + shellQuoteArg(dest)
+}
+
+// shellQuoteArg single-quotes s for POSIX-compatible shells (bash, zsh, fish):
+// an embedded apostrophe becomes the close-quote, escaped-apostrophe,
+// reopen-quote sequence '\”.
+func shellQuoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func topSummary(branch, dest string) string {
