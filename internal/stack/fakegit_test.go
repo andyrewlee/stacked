@@ -64,7 +64,7 @@ type fakeGit struct {
 	// stagedUnsupported; BlamePorcelain returns blame[file].
 	stagedHunks       []git.Hunk
 	stagedUnsupported []git.UnsupportedRecord
-	blame             map[string]map[int]string
+	blame             map[string]map[int]git.BlameLine
 	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
 	// makes AmendTipWithPatch fail like a patch that does not apply to the
 	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
@@ -207,7 +207,7 @@ func (g *tipReadSpyGit) CommitRange(exclude, include string) (map[string]bool, e
 	return g.Git.CommitRange(exclude, include)
 }
 
-func (g *tipReadSpyGit) BlamePorcelain(file, rev string) (map[int]string, error) {
+func (g *tipReadSpyGit) BlamePorcelain(file, rev string) (map[int]git.BlameLine, error) {
 	g.blameCalls++
 	return g.Git.BlamePorcelain(file, rev)
 }
@@ -302,7 +302,7 @@ func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error)
 
 // BlamePorcelain returns the canned per-file blame a test set on blame. The
 // rev is ignored: engine tests only ever blame HEAD.
-func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]string, error) {
+func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) {
 	return f.blame[file], nil
 }
 

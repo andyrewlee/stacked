@@ -896,39 +896,105 @@ func ResetHardIn(dir, ref string) error {
 	return err
 }
 
-// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
-// last touched it, via one `git blame --porcelain` spawn. In porcelain output
-// EVERY line gets a header `<40-hex> <origLine> <finalLine>[ <groupSize>]`
-// (content lines start with a TAB and metadata lines with a keyword, so the
-// hex prefix is unambiguous); only the SHA and finalLine are consumed.
-func BlamePorcelain(file, rev string) (map[int]string, error) {
+// BlameLine is one line's provenance from `git blame --line-porcelain`:
+// Commit last touched it, OriginalLine is its number in THAT commit's
+// version of the file, FinalLine its number at the blamed rev, and Path the
+// name it carried in Commit — which differs from the queried path when the
+// file was renamed since. An empty Path means the porcelain record carried
+// no decodable filename; consumers must treat it as missing provenance and
+// refuse rather than guess coordinates.
+type BlameLine struct {
+	Commit       string
+	OriginalLine int
+	FinalLine    int
+	Path         string
+}
+
+// BlamePorcelain maps each final line of file at rev to its full
+// provenance via one `git blame --line-porcelain` spawn. --line-porcelain
+// (unlike --porcelain) repeats EVERY metadata record for every line, so each
+// line's `filename` is present instead of relying on a commit-boundary
+// repeat. Each line's header is `<40-hex> <origLine> <finalLine>` (content
+// lines start with a TAB and metadata lines with a keyword, so the hex
+// prefix is unambiguous). A line whose header or filename record is
+// malformed is dropped from the map — callers treat the absence as
+// unattributable, never as a reason to guess coordinates.
+func BlamePorcelain(file, rev string) (map[int]BlameLine, error) {
 	if err := validRefArg("ref", rev); err != nil {
 		return nil, err
 	}
-	out, err := run("blame", "--porcelain", rev, "--", file)
+	out, err := run("blame", "--line-porcelain", rev, "--", file)
 	if err != nil {
 		return nil, err
 	}
-	lines := map[int]string{}
-	for _, line := range strings.Split(out, "\n") {
-		if len(line) < 42 || line[40] != ' ' {
-			continue
+	return parseBlamePorcelain(out), nil
+}
+
+// parseBlamePorcelain is BlamePorcelain's parser, split out so the porcelain
+// grammar — line headers, per-line `filename` records (including Git's
+// C-quoted names), and malformed input — can be exercised on canned fixtures
+// without spawning git. The invariant: a line enters the map only with BOTH
+// coordinates and a decoded Path; anything less is dropped so the caller
+// fails closed.
+func parseBlamePorcelain(out string) map[int]BlameLine {
+	lines := map[int]BlameLine{}
+	var cur *BlameLine
+	flush := func() {
+		if cur != nil && cur.Path != "" {
+			lines[cur.FinalLine] = *cur
 		}
-		sha := line[:40]
-		if !isHex40(sha) {
-			continue
-		}
-		fields := strings.Fields(line[41:])
-		if len(fields) < 2 {
-			continue
-		}
-		final, err := strconv.Atoi(fields[1])
-		if err != nil {
-			continue
-		}
-		lines[final] = sha
+		cur = nil
 	}
-	return lines, nil
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) >= 42 && line[40] == ' ' && isHex40(line[:40]) {
+			flush()
+			if fields := strings.Fields(line[41:]); len(fields) >= 2 {
+				orig, err1 := strconv.Atoi(fields[0])
+				final, err2 := strconv.Atoi(fields[1])
+				if err1 == nil && err2 == nil {
+					cur = &BlameLine{Commit: line[:40], OriginalLine: orig, FinalLine: final}
+				}
+			}
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		if name, ok := strings.CutPrefix(line, "filename "); ok {
+			p, ok := decodeBlameFilename(name)
+			if !ok {
+				cur = nil
+				continue
+			}
+			cur.Path = p
+			continue
+		}
+		if strings.HasPrefix(line, "\t") {
+			flush()
+		}
+	}
+	flush()
+	return lines
+}
+
+// decodeBlameFilename decodes the value of a blame `filename ` record. Git
+// C-quotes a name when it contains control bytes, '"', '\', or (under the
+// default core.quotePath=true) non-ASCII bytes; the quoting uses the usual
+// escapes plus octal \NNN, all of which strconv.Unquote decodes to the same
+// bytes. Unquoted values are verbatim — never whitespace-split or trimmed,
+// since a filename may itself contain spaces or quotes. The second result
+// is false when the value claims quoting (leading '"') but is not a
+// well-formed C string, so the caller fails closed rather than trust a
+// partially-decoded path.
+func decodeBlameFilename(v string) (string, bool) {
+	if !strings.HasPrefix(v, "\"") {
+		return v, true
+	}
+	p, err := strconv.Unquote(v)
+	if err != nil {
+		return "", false
+	}
+	return p, true
 }
 
 func isHex40(s string) bool {

@@ -127,7 +127,11 @@ restricted to the current stack's path (cur plus its ancestors): a commit
 tipped only by an off-path tracked branch is refused naming that branch, and
 a tip shared by several on-path branches goes to the lowest sharer. Everything
 ambiguous is refused loudly: hunks spanning commits, pure additions, lines
-owned by trunk/history, non-tip or off-path targets, and unclassifiable
+owned by trunk/history, non-tip or off-path targets, hunks whose blame
+provenance does not map each removed line to the same line number and path
+at the owning commit (a descendant's insert/delete shifts the line; a rename
+changes the path — either would land the -U0 patch at the wrong position in
+the ancestor's tree), and unclassifiable
 staged records (binary/mode/rename/quoted paths) — splitting hunks or
 rewriting mid-branch commits is out of scope. The staged diff itself is
 captured with pinned flags (`--no-color --no-ext-diff --no-textconv

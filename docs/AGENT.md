@@ -83,7 +83,12 @@ message.
   textconv) cannot reshape it. Targets are restricted to branches on the current
   stack's path (the current branch plus its ancestors): a hunk owned by a
   commit tipped only by an off-path tracked branch is refused, naming that
-  branch. Bare `absorb` applies any plan with ZERO refusals — multi-target
+  branch. Attribution also requires identity coordinates from blame: a hunk
+  whose lines sit at a different line number or path in the owning commit —
+  shifted by a descendant's edit, or belonging to a since-renamed file — is
+  refused, because the amend applies the hunk at its HEAD line numbers and
+  shifted coordinates could land on the wrong occurrence of repeated text.
+  Bare `absorb` applies any plan with ZERO refusals — multi-target
   plans amend each owning tip with its own hunks and run one cascade; any
   refusal (or a dirty target worktree) comes back unapplied with the summary
   prefixed `"not applied: ..."` and exit 0 (refusals are data, not errors).
