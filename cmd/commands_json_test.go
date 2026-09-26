@@ -971,19 +971,20 @@ func TestSubmitReportsNonPrefixPartialPush(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A git shim counts `push` subprocesses then delegates to the real binary:
-	// exactly one push may run — a second invocation means a retry happened.
+	// Count push invocations server-side: post-receive fires once per push
+	// that lands at least one ref. A per-branch retry would push a, then c,
+	// and bump this twice — the single batch must bump it exactly once. (A
+	// PATH shim cannot intercept git on Windows; hooks run through git's own
+	// sh everywhere.)
 	pushLog := filepath.Join(t.TempDir(), "pushes.log")
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Skipf("no git on PATH: %v", err)
-	}
-	shimDir := t.TempDir()
-	shim := "#!/bin/sh\nfor a in \"$@\"; do\n\tif [ \"$a\" = push ]; then echo push >> \"" + pushLog + "\"; fi\ndone\nexec \"" + realGit + "\" \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+	counter := "#!/bin/sh\necho push >> \"" + filepath.ToSlash(pushLog) + "\"\nexit 0\n"
+	postReceive := filepath.Join(remoteDir, "hooks", "post-receive")
+	if err := os.WriteFile(postReceive, []byte(counter), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := os.Chmod(postReceive, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	var runErr error
 	out := captureStdout(t, func() {
