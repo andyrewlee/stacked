@@ -14,7 +14,21 @@
 - **Category:** bug
 - **Audit item:** 6
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/007-protect-worktree-include-destinations` (stacked on `advisor/006`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- <scoped files>` → only documented predecessor changes (001–006) plus plan-file additions; no unexplained source drift.
+- Step 1: added `TestCopyWorktreeIncludesRefusesDestinationCollision` — seven subtests covering file/file, later-collision-blocks-earlier-copy, dir-with-tracked-descendant, tracked-file-blocking-descendant-include, tracked-but-absent index entry, and existing untracked file/dir. Fixture note: the destination branch's tracked files are written inside the new worktree via `git worktree add -b`, because switching the source worktree onto a branch that tracks the colliding paths and back would delete the source's ignored copies. Pre-fix proof came from stashing the implementation: `st worktree feat-b` then reported `copied: secret.txt`, overwriting the tracked destination file.
+- Step 2: `copyWorktreeIncludes` now selects candidates in a write-free phase 1, then calls `refuseDestinationCollisions(dstRoot, candidates)` before the first `prepareSafeDestination`/`reflinkCopy`. The preflight reads `git -C dst ls-files -z` (tracked exact path, tracked descendant via sorted-prefix probe, tracked ancestor via `path.Dir` walk) and Lstats the destination root (symlink refused first as the more specific hazard, then any existing entry — including an empty directory). Non-git destinations yield an empty tracked set; a real ls-files failure is an error. A symlink keeps the pre-existing "unsafe destination symlink" message; the e2e regression `TestWorktreeIncludeCopyFailureRollsBackWorktree` still sees that context.
+- Step 3: `reflinkCopy` returns the native `cp` error without falling back when the destination exists after the failure (partial output is never merged by `plainCopy`); it falls back only when `cp` left no destination. `TestReflinkCopyFallsBackWhenCpFails` gains a partial-output cp shim subtest.
+- e2e: `TestWorktreeCopyCollisionRollsBackWorktree` proves a newly materialized worktree is removed (registry and disk) when the copy refuses, while a preexisting sibling worktree and the ignored source file are untouched.
+- Focused verification: `go test ./cmd -run 'Test.*(CopyWorktreeIncludes|ReflinkCopy|PlainCopy)' -count=1` → ok; `make test-fast` → ok; `make test` (race) → ok; `make e2e` → ok; `make build` → ok; `make fmt-check` + `make lint` (v2.12.2) → 0 issues.
+- `make ci` on commit `e1ffc51` in detached worktree `/private/tmp/st-ci-007` → exit 0 (lint 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 87.0% ≥ 75%).
+- `git diff --check` → exit 0; modified files all in Scope (`cmd/worktree_copy.go`, `cmd/worktree_test.go`, `e2e/e2e_journey_test.go`, `CHANGELOG.md`, plan files).
+- Docs: `CHANGELOG.md` notes the destination preflight and the no-merge partial-failure rule.
 
 ## Why this matters
 

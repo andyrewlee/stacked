@@ -38,6 +38,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tip — so the follow-up restack still recognizes the move and lands the
   parent's new commits on the child. A missing or unreadable target is an
   actionable error before the rebase is continued, never a silent guess.
+- **`.worktreeinclude` copies can no longer overwrite or merge into occupied
+  destination paths.** Before the first file is copied, every selected entry
+  is preflighted against the destination worktree: a path that is tracked
+  there (`git ls-files` — including tracked-but-missing worktree files),
+  that has a tracked descendant or ancestor, or that already exists on disk
+  in any form (file, symlink, or directory — even an empty one) now fails the
+  whole copy loudly. A later colliding entry prevents even earlier
+  candidates from being copied, a copy failure still removes a worktree that
+  was just materialized for it, and when the native `cp` fails after
+  creating partial output the plain-copy fallback no longer merges into it.
 - **`st undo` refuses state written by a newer `st` before mutating anything.**
   Both the current `state.json` and the newest undo journal snapshot are
   schema-checked up front — a file or snapshot with a schema version newer
