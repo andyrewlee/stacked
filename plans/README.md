@@ -19,7 +19,7 @@ The numbering is the recommended order. Audit IDs retain the original finding nu
 | [005](005-enforce-undo-schema-compatibility.md) | Reject future state schemas before undo mutates anything | 4 | P1 | S | LOW | DONE |
 | [006](006-preserve-actual-rebase-target-on-continue.md) | Record the rebase target actually incorporated by continue | 5 | P1 | M | LOW | DONE |
 | [007](007-protect-worktree-include-destinations.md) | Refuse worktree include collisions before copying any files | 6 | P1 | M | MED | DONE |
-| [008](008-report-confirmed-partial-push-outcomes.md) | Report every confirmed push outcome without retrying the batch | 7 | P1 | M | LOW | TODO |
+| [008](008-report-confirmed-partial-push-outcomes.md) | Report every confirmed push outcome without retrying the batch | 7 | P1 | M | LOW | DONE |
 | [009](009-refuse-abandoned-reclaim-guards.md) | Fail closed when the fallback reclaim guard is abandoned | 8 | P1 | M | HIGH | TODO |
 | [010](010-bound-log-history-materialization.md) | Answer log ancestry questions without loading the entire history | 10 | P2 | M | LOW | TODO |
 | [011](011-test-installer-signature-decisions.md) | Exercise installer signature acceptance and refusal in CI | 11 | P2 | M | LOW | TODO |

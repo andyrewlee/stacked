@@ -14,7 +14,20 @@
 - **Category:** bug
 - **Audit item:** 7
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/008-report-confirmed-partial-push-outcomes` (stacked on `advisor/007`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- internal/git/git.go internal/git/git_test.go cmd/submit.go cmd/commands_json_test.go e2e/e2e_contract_test.go docs/AGENT.md CHANGELOG.md plans/008-report-confirmed-partial-push-outcomes.md plans/README.md` → only documented predecessor changes; no unexplained source drift.
+- Step 1: added `TestSubmitReportsNonPrefixPartialPush` — a per-ref `update` hook rejects feat-b while feat-a and feat-c land; asserts remote refs, `pushed: [feat-a, feat-c]`, `failed: feat-b`, the stderr error envelope, and exactly one push invocation. Pre-fix it failed: the old code retried each branch individually (3 pushes). Note: `pre-receive` rejects the whole batch atomically (every pending ref reports `!`), so per-ref outcomes need an `update` hook — `TestSubmitPartialFailureJSON` was converted accordingly, and `TestSubmitPartialFailureJSONFirstBranchKeepsPushedArray` keeps the atomic case with `failed: feat-a` and an empty `pushed`.
+- Step 2: `internal/git` gained `PushStatus` (`PushUpdated`/`PushUpToDate`/`PushRejected`/`PushUnconfirmed`) and `PushResult{Status}`; `PushBranches` now runs a single `git push --porcelain -u` and parses its own per-ref records — no individual retry. `cmd/submit.go` renders the typed result: `pushed` = every confirmed updated/up-to-date branch in stack order (non-nil array), `failed` = the first confirmed rejection, unconfirmed refs land in neither and are explained in the error. Parser unit tests cover accepted/rejected/up-to-date flags, fatal transport failure, and malformed status lines; `TestPushBranchesReportsPerRefStatus` exercises a real bare remote.
+- e2e: `TestSubmitNonPrefixPartialPush` drives a real push where the remote accepts A/C and rejects B → `pushed: [feat-a, feat-c]`, `failed: feat-b`, nonzero exit with the error envelope.
+- Focused verification: `go test ./cmd -run '^TestSubmit' -count=1` → ok; `go test ./internal/git -run 'TestPush|TestParsePush' -count=1` → ok; e2e contract test → ok.
+- `make ci` on commit `8bab104` in detached worktree `/private/tmp/st-ci-008` → exit 0 (lint 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 87.0% ≥ 75%).
+- `git diff --check` → exit 0; modified files all in Scope (`internal/git/git.go`, `internal/git/git_test.go`, `cmd/submit.go`, `cmd/commands_json_test.go`, `e2e/e2e_contract_test.go`, `docs/AGENT.md`, `CHANGELOG.md`).
+- Docs: `docs/AGENT.md`'s `submit --json` paragraph now describes confirmed per-ref outcomes (`pushed` may be a non-prefix; `failed` names the first confirmed rejection; unconfirmed refs appear in neither) and `CHANGELOG.md` notes the honest partial-outcome reporting.
 
 ## Why this matters
 

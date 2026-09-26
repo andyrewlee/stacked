@@ -48,6 +48,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   candidates from being copied, a copy failure still removes a worktree that
   was just materialized for it, and when the native `cp` fails after
   creating partial output the plain-copy fallback no longer merges into it.
+- **`st submit` reports every confirmed push outcome instead of retrying the
+  batch.** The single `git push --porcelain` invocation's own per-ref
+  statuses now drive the result: when the remote accepts A and C but rejects
+  B in the same push, `--json` reports `pushed` `[A,C]` in stack order and
+  `failed` `B` — the old fallback's per-branch retries stopped at B and hid
+  C's confirmed update. A ref whose outcome the push did not report is
+  counted in neither field; the error describes the uncertainty instead of
+  guessing.
 - **`st undo` refuses state written by a newer `st` before mutating anything.**
   Both the current `state.json` and the newest undo journal snapshot are
   schema-checked up front — a file or snapshot with a schema version newer

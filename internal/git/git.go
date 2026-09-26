@@ -1552,22 +1552,55 @@ func PushRemote(remote, branch string, force bool) error {
 	return err
 }
 
+// PushStatus is the remote's confirmed outcome for one pushed ref, taken from
+// the push's own porcelain status records — never inferred from process exit.
+type PushStatus int
+
+const (
+	// PushUnconfirmed means no usable status record arrived for the ref.
+	PushUnconfirmed PushStatus = iota
+	// PushUpdated means the remote moved the ref (new, fast-forward, or
+	// forced update).
+	PushUpdated
+	// PushUpToDate means the remote already had the requested tip.
+	PushUpToDate
+	// PushRejected means the remote explicitly refused the ref update.
+	PushRejected
+)
+
+// PushResult reports the confirmed per-ref outcome of a single push
+// invocation. Status holds one entry per requested branch; entries that stay
+// PushUnconfirmed must never be reported as pushed or failed — the transport
+// error (if any) explains why.
+type PushResult struct {
+	Status map[string]PushStatus
+}
+
 // PushBranches pushes the given branches to remote in a single git invocation
-// and records upstreams (-u) for each branch.
-func PushBranches(remote string, branches []string, force bool) error {
+// and records upstreams (-u) for each branch. The returned PushResult carries
+// every per-ref status the remote confirmed; on a partial rejection the
+// process error and the confirmed records both come back so callers can
+// report exactly which refs landed without pushing again. A push that exits
+// zero but reports no status for a requested ref is itself an error — an
+// unrecorded ref is never assumed pushed.
+func PushBranches(remote string, branches []string, force bool) (*PushResult, error) {
 	if err := validRefArg("remote", remote); err != nil {
-		return err
+		return nil, err
 	}
 	for _, branch := range branches {
 		if err := validRefArg("branch", branch); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	res := &PushResult{Status: make(map[string]PushStatus, len(branches))}
+	for _, branch := range branches {
+		res.Status[branch] = PushUnconfirmed
+	}
 	if len(branches) == 0 {
-		return nil
+		return res, nil
 	}
 
-	args := []string{"push", "-u"}
+	args := []string{"push", "--porcelain", "-u"}
 	if force {
 		args = append(args, "--force-with-lease")
 	}
@@ -1576,8 +1609,56 @@ func PushBranches(remote string, branches []string, force bool) error {
 		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
 		args = append(args, refspec)
 	}
-	_, err := Run(args...)
-	return err
+	out, err := run(args...)
+	parsePushPorcelain(out, branches, res)
+	if err != nil {
+		return res, err
+	}
+	for _, branch := range branches {
+		if res.Status[branch] == PushUnconfirmed {
+			return res, fmt.Errorf("git push: no per-ref status reported for %q", branch)
+		}
+	}
+	return res, nil
+}
+
+// parsePushPorcelain folds `git push --porcelain` status records into res.
+// Each record is "<flag>\t<src>:<dst>\t<summary>" — the flag can be a literal
+// space, so lines are never trimmed. Only records whose dst is a requested
+// refs/heads/<branch> are honored: unrelated refs, non-record chatter (the
+// "To <url>" header, "set up to track" lines, "Done") and malformed lines
+// never fabricate outcomes. A duplicate record simply rewrites the status —
+// the remote's final word stands.
+func parsePushPorcelain(out string, branches []string, res *PushResult) {
+	want := make(map[string]string, len(branches))
+	for _, b := range branches {
+		want["refs/heads/"+b] = b
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 3 || line[1] != '\t' {
+			continue
+		}
+		refs, _, ok := strings.Cut(line[2:], "\t")
+		if !ok {
+			continue
+		}
+		_, dst, ok := strings.Cut(refs, ":")
+		if !ok || dst == "" {
+			continue
+		}
+		branch, ok := want[dst]
+		if !ok {
+			continue
+		}
+		switch line[0] {
+		case ' ', '*', '+', '-':
+			res.Status[branch] = PushUpdated
+		case '=':
+			res.Status[branch] = PushUpToDate
+		case '!':
+			res.Status[branch] = PushRejected
+		}
+	}
 }
 
 // RemoteExists reports whether a remote with the given name is configured. A

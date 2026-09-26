@@ -383,11 +383,11 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 		},
 		{
 			name: "push branches remote",
-			run:  func() error { return PushBranches("--receive-pack=true", []string{"main"}, false) },
+			run:  func() error { _, err := PushBranches("--receive-pack=true", []string{"main"}, false); return err },
 		},
 		{
 			name: "push branches branch",
-			run:  func() error { return PushBranches("origin", []string{"--force"}, false) },
+			run:  func() error { _, err := PushBranches("origin", []string{"--force"}, false); return err },
 		},
 		{
 			name: "force branch",
@@ -719,13 +719,157 @@ func TestFetchAndPush(t *testing.T) {
 	writeFile(t, "feat.txt", "feat\n")
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "feat")
-	if err := PushBranches("origin", []string{"main", "feat"}, false); err != nil {
+	if _, err := PushBranches("origin", []string{"main", "feat"}, false); err != nil {
 		t.Fatalf("PushBranches: %v", err)
 	}
 	for _, branch := range []string{"main", "feat"} {
 		if got := mustGit(t, "--git-dir", bare, "rev-parse", "--verify", "refs/heads/"+branch); got == "" {
 			t.Fatalf("remote ref for %s is empty", branch)
 		}
+	}
+}
+
+// TestParsePushPorcelain covers the record classes a `git push --porcelain`
+// stream can carry: updated (space/*/+/−), up-to-date, rejected, refs we did
+// not request, duplicate records (last wins) and incomplete or malformed
+// lines — anything unusable must leave the branch PushUnconfirmed rather than
+// guessing an outcome.
+func TestParsePushPorcelain(t *testing.T) {
+	branches := []string{"feat-a", "feat-b", "feat-c"}
+	fresh := func() *PushResult {
+		res := &PushResult{Status: map[string]PushStatus{}}
+		for _, b := range branches {
+			res.Status[b] = PushUnconfirmed
+		}
+		return res
+	}
+
+	for _, tc := range []struct {
+		name string
+		out  string
+		want map[string]PushStatus
+	}{
+		{
+			name: "all new branches",
+			out: "To /remote\n" +
+				"*\trefs/heads/feat-a:refs/heads/feat-a\t[new branch]\n" +
+				"*\trefs/heads/feat-b:refs/heads/feat-b\t[new branch]\n" +
+				"*\trefs/heads/feat-c:refs/heads/feat-c\t[new branch]\n" +
+				"Done\n",
+			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushUpdated, "feat-c": PushUpdated},
+		},
+		{
+			name: "non-prefix rejection",
+			out: "To /remote\n" +
+				"*\trefs/heads/feat-a:refs/heads/feat-a\t[new branch]\n" +
+				"!\trefs/heads/feat-b:refs/heads/feat-b\t[remote rejected] (hook declined)\n" +
+				"*\trefs/heads/feat-c:refs/heads/feat-c\t[new branch]\n" +
+				"Done\n",
+			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushRejected, "feat-c": PushUpdated},
+		},
+		{
+			name: "fast-forward flag is a literal space",
+			out:  " \trefs/heads/feat-a:refs/heads/feat-a\tabc123..def456\n",
+			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "up to date",
+			out:  "=\trefs/heads/feat-a:refs/heads/feat-a\t[up to date]\n",
+			want: map[string]PushStatus{"feat-a": PushUpToDate, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "forced update",
+			out:  "+\trefs/heads/feat-a:refs/heads/feat-a\tabc123...def456 (forced update)\n",
+			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "unrelated refs and chatter are ignored",
+			out: "To /remote\n" +
+				"*\trefs/heads/other:refs/heads/other\t[new branch]\n" +
+				"branch 'feat-a' set up to track 'origin/feat-a'.\n" +
+				"Done\n",
+			want: map[string]PushStatus{"feat-a": PushUnconfirmed, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "duplicate records keep the remote's final word",
+			out: "!\trefs/heads/feat-a:refs/heads/feat-a\t[rejected] (stale info)\n" +
+				" \trefs/heads/feat-a:refs/heads/feat-a\tabc123..def456\n",
+			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "malformed lines are unconfirmed",
+			out: "no tabs at all\n" +
+				"=\trefs/heads/feat-b\t[up to date]\n" + // no src:dst pair
+				"?\trefs/heads/feat-c:refs/heads/feat-c\t[?]\n", // unknown flag
+			want: map[string]PushStatus{"feat-a": PushUnconfirmed, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+		{
+			name: "empty output confirms nothing",
+			out:  "",
+			want: map[string]PushStatus{"feat-a": PushUnconfirmed, "feat-b": PushUnconfirmed, "feat-c": PushUnconfirmed},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := fresh()
+			parsePushPorcelain(tc.out, branches, res)
+			for _, b := range branches {
+				if res.Status[b] != tc.want[b] {
+					t.Errorf("Status[%s] = %v, want %v (out %q)", b, res.Status[b], tc.want[b], tc.out)
+				}
+			}
+		})
+	}
+}
+
+// TestPushBranchesReportsPerRefStatus pushes three branches to a bare remote
+// whose update hook rejects the middle one: the result must report feat-a and
+// feat-c confirmed updated and feat-b confirmed rejected from that single
+// invocation's own status records.
+func TestPushBranchesReportsPerRefStatus(t *testing.T) {
+	newRepo(t)
+	bare := t.TempDir()
+	mustGit(t, "init", "-q", "--bare", bare)
+	mustGit(t, "remote", "add", "origin", bare)
+
+	mustGit(t, "checkout", "-q", "-b", "feat-a")
+	writeFile(t, "a.txt", "a\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "a")
+	for _, b := range []string{"feat-b", "feat-c"} {
+		mustGit(t, "checkout", "-q", "-b", b)
+		writeFile(t, b+".txt", b+"\n")
+		mustGit(t, "add", "-A")
+		mustGit(t, "commit", "-q", "-m", b)
+	}
+
+	hook := filepath.Join(bare, "hooks", "update")
+	script := "#!/bin/sh\n[ \"$1\" = refs/heads/feat-b ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PushBranches("origin", []string{"feat-a", "feat-b", "feat-c"}, true)
+	if err == nil {
+		t.Fatal("PushBranches succeeded while feat-b was rejected")
+	}
+	want := map[string]PushStatus{
+		"feat-a": PushUpdated,
+		"feat-b": PushRejected,
+		"feat-c": PushUpdated,
+	}
+	for b, wantStatus := range want {
+		if res.Status[b] != wantStatus {
+			t.Errorf("Status[%s] = %v, want %v", b, res.Status[b], wantStatus)
+		}
+	}
+	// The remote agrees: a and c landed, b did not.
+	for _, b := range []string{"feat-a", "feat-c"} {
+		if got := mustGit(t, "--git-dir", bare, "rev-parse", "--verify", "refs/heads/"+b); got == "" {
+			t.Fatalf("remote ref for %s is empty — confirmed update did not land", b)
+		}
+	}
+	if err := exec.Command("git", "--git-dir", bare, "rev-parse", "--verify", "-q", "refs/heads/feat-b").Run(); err == nil {
+		t.Fatal("remote refs/heads/feat-b exists — the hook-rejected ref was pushed")
 	}
 }
 
