@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -714,6 +715,29 @@ func TestReflinkCopyFallsBackWhenCpFails(t *testing.T) {
 		}
 		assertCopied(t, dst)
 	})
+
+	// A cp that dies mid-copy has already created destination content — the
+	// strategies must NOT mix: reflinkCopy returns cp's error (the caller's
+	// rollback owns the partial tree) instead of merging a plainCopy into it.
+	t.Run("cp writes partial content then fails", func(t *testing.T) {
+		src := buildSrc(t)
+		dst := filepath.Join(t.TempDir(), "out")
+		shimDir := t.TempDir()
+		shim := "#!/bin/sh\nfor last; do :; done\n/bin/mkdir -p \"$last\"\necho partial > \"$last/partial.txt\"\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "cp"), []byte(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", shimDir)
+		if err := reflinkCopy(src, dst); err == nil {
+			t.Fatal("reflinkCopy succeeded after cp failed on a partial destination")
+		}
+		if b, err := os.ReadFile(filepath.Join(dst, "partial.txt")); err != nil || string(b) != "partial\n" {
+			t.Fatalf("partial.txt = %q, %v; cp's partial content must be left for rollback", b, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dst, "top.txt")); !os.IsNotExist(err) {
+			t.Fatal("top.txt exists — a fallback copy merged into cp's partial output")
+		}
+	})
 }
 
 // TestEmitWorktreeTextOutput covers emitWorktree's text branch: the summary
@@ -779,6 +803,169 @@ func TestDropNestedEntries(t *testing.T) {
 			t.Fatalf("dropNestedEntries[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
 		}
 	}
+}
+
+// TestCopyWorktreeIncludesRefusesDestinationCollision: an ignored source file
+// may be TRACKED in the destination branch (or otherwise occupied). The copier
+// must refuse before writing anything — a destination file is never
+// overwritten or merged, and a later colliding entry prevents even earlier
+// candidates from copying.
+func TestCopyWorktreeIncludesRefusesDestinationCollision(t *testing.T) {
+	// dstWorktree builds a branch that TRACKS the colliding paths inside a new
+	// real git worktree, so ls-files reports them there. Writing the tracked
+	// content INSIDE the worktree keeps the source worktree untouched: the
+	// source's ignored files stay in place (switching the source worktree to a
+	// branch that tracks them and back would delete them), and the new
+	// worktree holds exactly the branch's tracked files.
+	dstWorktree := func(t *testing.T, files map[string]string, deleteFromWorktree ...string) string {
+		t.Helper()
+		dst := filepath.Join(t.TempDir(), "wt")
+		mustRun(t, "git", "worktree", "add", "-q", "-b", "wt-dest", dst, "main")
+		for name, content := range files {
+			path := filepath.Join(dst, name)
+			if dir := filepath.Dir(path); dir != dst {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		names := make([]string, 0, len(files))
+		for name := range files {
+			names = append(names, name)
+		}
+		// -f: the destination branch deliberately tracks files the source
+		// branch ignores — that is the collision under test.
+		mustRun(t, "git", append([]string{"-C", dst, "add", "-f"}, names...)...)
+		mustRun(t, "git", "-C", dst, "commit", "-q", "-m", "destination branch files")
+		for _, name := range deleteFromWorktree {
+			// Remove the file from the worktree but keep it tracked — the
+			// index entry still protects the path.
+			if err := os.Remove(filepath.Join(dst, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dst
+	}
+	// srcFixture builds the source side: every candidate is gitignored and
+	// present on disk, so the destination checks are the only gates left.
+	srcFixture := func(t *testing.T) string {
+		newRepo(t)
+		mustInit(t)
+		write(t, ".gitignore", "config.local\nvendor/\nnotes.txt\nbundle/\ngone.txt\n")
+		write(t, "config.local", "SECRET=src\n")
+		write(t, "notes.txt", "src notes\n")
+		if err := os.MkdirAll(filepath.Join("vendor", "lib"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join("vendor", "lib", "dep.go"), "package lib\n")
+		if err := os.MkdirAll("bundle", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join("bundle", "x"), "x\n")
+		write(t, "gone.txt", "gone in dst\n")
+		mustRun(t, "git", "add", ".gitignore")
+		mustRun(t, "git", "commit", "-q", "-m", "ignore rules")
+		root, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	wantRefusal := func(t *testing.T, err error, rel string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("copyWorktreeIncludes error = nil, want a collision refusal for %q", rel)
+		}
+		// The refusal formats rel with %q, which escapes the separator as \\
+		// on Windows — needle on the quoted form so the check is literal.
+		if !strings.Contains(err.Error(), fmt.Sprintf("%q", rel)) {
+			t.Fatalf("error = %v, want it to name %q", err, rel)
+		}
+	}
+
+	t.Run("ignored source file is tracked in the destination", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "config.local\n")
+		dst := dstWorktree(t, map[string]string{"config.local": "SECRET=dst\n"})
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "config.local")
+		if b, rerr := os.ReadFile(filepath.Join(dst, "config.local")); rerr != nil || string(b) != "SECRET=dst\n" {
+			t.Fatalf("destination config.local = %q, %v; must remain untouched", b, rerr)
+		}
+	})
+
+	t.Run("later collision prevents earlier copies", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "notes.txt\nconfig.local\n")
+		dst := dstWorktree(t, map[string]string{"config.local": "SECRET=dst\n"})
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "config.local")
+		if _, serr := os.Lstat(filepath.Join(dst, "notes.txt")); !os.IsNotExist(serr) {
+			t.Fatalf("earlier candidate notes.txt was copied before the later refusal")
+		}
+	})
+
+	t.Run("selected dir contains a tracked descendant", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "vendor\n")
+		dst := dstWorktree(t, map[string]string{filepath.Join("vendor", "lib", "owned.go"): "package lib\n"})
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "vendor")
+		if _, serr := os.Lstat(filepath.Join(dst, "vendor", "lib", "dep.go")); !os.IsNotExist(serr) {
+			t.Fatal("vendor/lib/dep.go merged into a tree with tracked descendants")
+		}
+	})
+
+	t.Run("tracked file blocks a descendant include", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", filepath.Join("bundle", "x")+"\n")
+		dst := dstWorktree(t, map[string]string{"bundle": "dst file\n"})
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, filepath.Join("bundle", "x"))
+	})
+
+	t.Run("tracked-but-absent file still refuses", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "gone.txt\n")
+		dst := dstWorktree(t, map[string]string{"gone.txt": "tracked\n"}, "gone.txt")
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "gone.txt")
+		if _, serr := os.Lstat(filepath.Join(dst, "gone.txt")); !os.IsNotExist(serr) {
+			t.Fatal("gone.txt was recreated despite its tracked index entry")
+		}
+	})
+
+	t.Run("existing untracked destination file refuses", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "notes.txt\n")
+		dst := filepath.Join(t.TempDir(), "wt")
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, "notes.txt"), []byte("dst\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "notes.txt")
+		if b, rerr := os.ReadFile(filepath.Join(dst, "notes.txt")); rerr != nil || string(b) != "dst\n" {
+			t.Fatalf("untracked destination file = %q, %v; must remain untouched", b, rerr)
+		}
+	})
+
+	t.Run("existing untracked destination dir refuses", func(t *testing.T) {
+		root := srcFixture(t)
+		write(t, ".worktreeinclude", "vendor\n")
+		dst := filepath.Join(t.TempDir(), "wt")
+		// Even an EMPTY directory must refuse — cp -R would merge into it.
+		if err := os.MkdirAll(filepath.Join(dst, "vendor"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, err := copyWorktreeIncludes(root, dst)
+		wantRefusal(t, err, "vendor")
+	})
 }
 
 // TestCopyWorktreeIncludesKeepsIgnoredFileUnderTrackedDir pins the other half
