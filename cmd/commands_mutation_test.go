@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -785,6 +789,228 @@ func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	}
 	if stateT(t).IsTracked("feat-a") {
 		t.Fatal("undo did not restore the previous state snapshot")
+	}
+}
+
+// bumpVersionJSON returns doc with its "version" field set to v (deleting
+// the key when v < 0, which is how a legacy v0 file reads), preserving the
+// document's other bytes.
+func bumpVersionJSON(t *testing.T, doc map[string]json.RawMessage, v int) map[string]json.RawMessage {
+	t.Helper()
+	if v < 0 {
+		delete(doc, "version")
+	} else {
+		doc["version"] = json.RawMessage(strconv.Itoa(v))
+	}
+	return doc
+}
+
+func writeJSONFile(t *testing.T, path string, v any) {
+	t.Helper()
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatalf("encode %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestUndoRejectsFutureCurrentState pins the current-state barrier on the
+// undo path: a state file stamped by a newer st must NOT fall back to
+// reverting the journal snapshot — an older binary cannot know what the
+// newer metadata records. Everything must be left byte-identical: state,
+// journal, refs, index, and cwd.
+func TestUndoRejectsFutureCurrentState(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(gitDir, "stacked", "state.json")
+	undoFile := filepath.Join(gitDir, "stacked", "undo.json")
+	undoBefore, err := os.ReadFile(undoFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexBefore := mustRun(t, "git", "ls-files", "--stage")
+	aTip := mustRun(t, "git", "rev-parse", "feat-a")
+	cwdBefore, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateBefore, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(stateBefore, &doc); err != nil {
+		t.Fatalf("state does not parse: %v", err)
+	}
+	writeJSONFile(t, stateFile, bumpVersionJSON(t, doc, 99))
+	stateAfter, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = runUndo(nil)
+	if !errors.Is(err, stack.ErrStateTooNew) {
+		t.Fatalf("undo error = %v, want wrapped ErrStateTooNew", err)
+	}
+	if got, _ := os.ReadFile(stateFile); !bytes.Equal(got, stateAfter) {
+		t.Fatal("refused undo rewrote the future-schema state file")
+	}
+	if got, _ := os.ReadFile(undoFile); !bytes.Equal(got, undoBefore) {
+		t.Fatal("refused undo touched the journal")
+	}
+	if _, ok, err := stack.PeekUndo(); err != nil || !ok {
+		t.Fatal("refused undo dropped the journal entry — the undo is still pending")
+	}
+	if got := mustRun(t, "git", "rev-parse", "feat-a"); got != aTip {
+		t.Fatalf("feat-a tip = %s after refused undo, want %s", got, aTip)
+	}
+	if got := mustRun(t, "git", "ls-files", "--stage"); got != indexBefore {
+		t.Fatal("index changed during refused undo")
+	}
+	if cwd, _ := os.Getwd(); cwd != cwdBefore {
+		t.Fatalf("cwd = %q after refused undo, want %q", cwd, cwdBefore)
+	}
+}
+
+// TestUndoRejectsFutureSnapshotBeforeWorktreePreparation pins ordering: the
+// snapshot's schema check must run BEFORE prepareUndoCurrentCreatedWorktree —
+// the case where undo would chdir out of and delete the worktree it is being
+// invoked from. A future-schema snapshot refuses with ErrStateTooNew and
+// leaves cwd, worktree, refs, state, and journal untouched.
+func TestUndoRejectsFutureSnapshotBeforeWorktreePreparation(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	var created struct {
+		Branch   string `json:"branch"`
+		Parent   string `json:"parent"`
+		Worktree string `json:"worktree"`
+		Switched bool   `json:"switched"`
+		Summary  string `json:"summary"`
+	}
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-wt", "--worktree", "--json"}); err != nil {
+			t.Fatalf("create --worktree: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "create --worktree", out, &created)
+	wtDir := created.Worktree
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateFile := filepath.Join(gitDir, "stacked", "state.json")
+	undoFile := filepath.Join(gitDir, "stacked", "undo.json")
+
+	// Bump ONLY the newest journal entry's snapshot version; the rest of the
+	// journal — labels, refs, created-worktree records — is byte-identical.
+	data, err := os.ReadFile(undoFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &entries); err != nil || len(entries) == 0 {
+		t.Fatalf("undo journal does not parse (%v) or is empty", err)
+	}
+	var snap map[string]json.RawMessage
+	if err := json.Unmarshal(entries[len(entries)-1]["state"], &snap); err != nil {
+		t.Fatalf("snapshot does not parse: %v", err)
+	}
+	raw, err := json.Marshal(bumpVersionJSON(t, snap, 99))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries[len(entries)-1]["state"] = json.RawMessage(raw)
+	writeJSONFile(t, undoFile, entries)
+	undoBefore, err := os.ReadFile(undoFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtTip := mustRun(t, "git", "rev-parse", "feat-wt")
+
+	// Run the undo from INSIDE the created worktree — pre-check ordering is
+	// what the test exists to prove.
+	t.Chdir(wtDir)
+	resetWorktreeCache()
+
+	err = runUndo(nil)
+	if !errors.Is(err, stack.ErrStateTooNew) {
+		t.Fatalf("undo error = %v, want wrapped ErrStateTooNew", err)
+	}
+	if cwd, _ := os.Getwd(); cwd != wtDir {
+		t.Fatalf("cwd = %q, want still inside %q — preparation ran before the barrier", cwd, wtDir)
+	}
+	if _, err := os.Stat(wtDir); err != nil {
+		t.Fatalf("created worktree removed during refused undo: %v", err)
+	}
+	if !git.BranchExists("feat-wt") {
+		t.Fatal("refused undo deleted the created branch")
+	}
+	if got := mustRun(t, "git", "rev-parse", "feat-wt"); got != wtTip {
+		t.Fatalf("feat-wt tip = %s after refused undo, want %s", got, wtTip)
+	}
+	if got, _ := os.ReadFile(stateFile); !bytes.Equal(got, stateBefore) {
+		t.Fatal("refused undo rewrote the state file")
+	}
+	if got, _ := os.ReadFile(undoFile); !bytes.Equal(got, undoBefore) {
+		t.Fatal("refused undo touched the journal")
+	}
+
+	// Controls: the same layout with legacy v0 (version field absent) and
+	// current v1 snapshots still undoes — the barrier rejects only what this
+	// binary cannot read.
+	for _, v := range []int{-1, 1} {
+		t.Run(fmt.Sprintf("snapshot version %d still undoes", v), func(t *testing.T) {
+			newRepo(t)
+			t.Setenv("HOME", t.TempDir())
+			mustInit(t)
+			mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+			gitDir, err := git.GitCommonDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(gitDir, "stacked", "undo.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var entries []map[string]json.RawMessage
+			if err := json.Unmarshal(data, &entries); err != nil || len(entries) == 0 {
+				t.Fatalf("undo journal does not parse (%v) or is empty", err)
+			}
+			var snap map[string]json.RawMessage
+			if err := json.Unmarshal(entries[len(entries)-1]["state"], &snap); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(bumpVersionJSON(t, snap, v))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries[len(entries)-1]["state"] = json.RawMessage(raw)
+			writeJSONFile(t, filepath.Join(gitDir, "stacked", "undo.json"), entries)
+
+			if err := runUndo(nil); err != nil {
+				t.Fatalf("undo with snapshot version %d: %v", v, err)
+			}
+			if stateT(t).IsTracked("feat-a") {
+				t.Fatal("supported-snapshot undo left feat-a tracked")
+			}
+		})
 	}
 }
 

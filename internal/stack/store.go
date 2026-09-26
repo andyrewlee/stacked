@@ -101,9 +101,28 @@ func Load() (*State, error) {
 		}
 		return nil, fmt.Errorf("read state file: %w", err)
 	}
+	s, err := decodeState(data)
+	if err != nil {
+		if errors.Is(err, ErrStateTooNew) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("parse state file %s (fix or delete it and re-run st init): %w", path, err)
+	}
+	return s, nil
+}
+
+// decodeState parses serialized State bytes and enforces the schema barrier
+// shared by every entry point that interprets them — the on-disk state file
+// (Load) and undo journal snapshots (Undo, ValidateUndoState). Malformed
+// bytes are a plain error, a version above stateSchemaVersion is a wrapped
+// ErrStateTooNew, and a v0 document (no version field — written before
+// versioning existed) is accepted as v1-compatible. Branches is always
+// non-nil in the result so an accepted legacy snapshot behaves identically
+// to a current one.
+func decodeState(data []byte) (*State, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parse state file %s (fix or delete it and re-run st init): %w", path, err)
+		return nil, err
 	}
 	if s.Version > stateSchemaVersion {
 		return nil, fmt.Errorf("%w (schema v%d; this st understands v%d) — upgrade st or check for a downgrade", ErrStateTooNew, s.Version, stateSchemaVersion)
@@ -112,6 +131,17 @@ func Load() (*State, error) {
 		s.Branches = make(map[string]*Branch)
 	}
 	return &s, nil
+}
+
+// ValidateUndoState applies the state schema barrier to a serialized State
+// carried by an undo journal entry — the compatibility check cmd must run
+// before undo preparation touches worktrees, refs, or cwd. Compatible bytes
+// (including legacy v0) return nil; a snapshot written by a newer st returns
+// a wrapped ErrStateTooNew; malformed bytes return a plain error the caller
+// surfaces like the parse errors Undo itself produces.
+func ValidateUndoState(data []byte) error {
+	_, err := decodeState(data)
+	return err
 }
 
 // Save atomically writes the state to disk as pretty-printed JSON with a

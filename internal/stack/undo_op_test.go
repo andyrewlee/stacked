@@ -3,6 +3,8 @@ package stack
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -443,6 +445,138 @@ func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
 	if !f.BranchExists("b") {
 		t.Fatal("undo deleted the branch despite refusing its worktree")
 	}
+}
+
+// TestUndoRejectsFutureSnapshot pins the schema barrier on the undo path: a
+// snapshot — or a supplied nonnil current State — stamped with a version this
+// binary does not understand must be refused BEFORE any branch/worktree
+// mutation, ref restore, or Save call. An older binary reverting metadata it
+// cannot fully interpret could silently drop what a newer st recorded.
+func TestUndoRejectsFutureSnapshot(t *testing.T) {
+	// stampVersion rewrites only the snapshot's schema version field, leaving
+	// the rest of the document byte-identical.
+	stampVersion := func(t *testing.T, entry *UndoEntry, version int) {
+		t.Helper()
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(entry.State, &doc); err != nil {
+			t.Fatalf("snapshot state does not parse: %v", err)
+		}
+		doc["version"] = json.RawMessage(strconv.Itoa(version))
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("encode stamped snapshot: %v", err)
+		}
+		entry.State = raw
+	}
+	// setupCreateUndo snapshots main->a, then creates b with a commit — the
+	// entry whose undo would delete b and move refs.
+	setupCreateUndo := func(t *testing.T) (*fakeGit, *State, Env, *UndoEntry) {
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		entry := mustSnapshot(t, s, f, "create")
+		if _, err := Create(env, s, "b", "c-b", true); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		return f, s, env, entry
+	}
+	// assertNothingMoved proves the refusal happened before the mutation
+	// phase: created branch b survives, HEAD stayed put, and Save never ran.
+	assertNothingMoved := func(t *testing.T, f *fakeGit, saves int) {
+		t.Helper()
+		if !f.BranchExists("b") {
+			t.Fatal("refused undo deleted the created branch anyway")
+		}
+		if f.head != "b" {
+			t.Fatalf("HEAD = %q, want b — a refused undo must not shuffle checkout", f.head)
+		}
+		if saves != 0 {
+			t.Fatalf("Save called %d times during a refused undo", saves)
+		}
+	}
+
+	t.Run("future snapshot with supported current state", func(t *testing.T) {
+		f, s, env, entry := setupCreateUndo(t)
+		stampVersion(t, entry, stateSchemaVersion+1)
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, s, entry)
+		if !errors.Is(err, ErrStateTooNew) {
+			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
+		}
+		assertNothingMoved(t, f, saves)
+	})
+
+	t.Run("future snapshot with nil current state", func(t *testing.T) {
+		f, _, env, entry := setupCreateUndo(t)
+		stampVersion(t, entry, stateSchemaVersion+1)
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, nil, entry)
+		if !errors.Is(err, ErrStateTooNew) {
+			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
+		}
+		assertNothingMoved(t, f, saves)
+	})
+
+	t.Run("future nonnil current state is refused as a defensive boundary", func(t *testing.T) {
+		f, s, env, entry := setupCreateUndo(t)
+		s.Version = stateSchemaVersion + 1
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, s, entry)
+		if !errors.Is(err, ErrStateTooNew) {
+			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
+		}
+		assertNothingMoved(t, f, saves)
+	})
+
+	// Controls: legacy v0 (no version field) and current v1 snapshots still
+	// undo, and a malformed snapshot errors without reaching ErrStateTooNew.
+	for _, version := range []int{0, 1} {
+		t.Run(fmt.Sprintf("version %d snapshot still undoes", version), func(t *testing.T) {
+			f, s, env, entry := setupCreateUndo(t)
+			if version == 0 {
+				var doc map[string]json.RawMessage
+				if err := json.Unmarshal(entry.State, &doc); err != nil {
+					t.Fatal(err)
+				}
+				delete(doc, "version")
+				raw, err := json.Marshal(doc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry.State = raw
+			} else {
+				stampVersion(t, entry, version)
+			}
+
+			if _, err := Undo(env, s, entry); err != nil {
+				t.Fatalf("undo with schema v%d snapshot: %v", version, err)
+			}
+			if f.BranchExists("b") {
+				t.Fatal("supported-snapshot undo left created branch behind")
+			}
+		})
+	}
+
+	t.Run("malformed snapshot errors without mutations", func(t *testing.T) {
+		f, s, env, entry := setupCreateUndo(t)
+		entry.State = json.RawMessage("{bad json\n")
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, s, entry)
+		if err == nil || errors.Is(err, ErrStateTooNew) {
+			t.Fatalf("undo error = %v, want a parse error (not ErrStateTooNew)", err)
+		}
+		assertNothingMoved(t, f, saves)
+	})
 }
 
 // A failure of the batched ref restore inside Undo must surface as the wrapped

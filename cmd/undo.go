@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -63,14 +64,27 @@ func runUndo(args []string) error {
 
 	// The current state informs which branches the undone command created; when
 	// it cannot be loaded the engine still reverts from the snapshot alone, and
-	// the snapshot bytes are persisted directly.
+	// the snapshot bytes are persisted directly. One load failure is fatal,
+	// though: ErrStateTooNew means a newer st wrote the file and undo would
+	// discard fields it cannot interpret — refuse before anything mutates.
 	env := stack.Env{Git: gitShell}
 	s, loadErr := stack.Load()
 	if loadErr == nil {
 		env.Save = s.Save
 	} else {
+		if errors.Is(loadErr, stack.ErrStateTooNew) {
+			return loadErr
+		}
 		s = nil
 		env.Save = func() error { return stack.RestoreState(entry.State) }
+	}
+	// Schema barrier for the snapshot itself, ahead of worktree preparation
+	// (which may os.Chdir out of a to-be-deleted worktree) and every engine
+	// mutation: a journal entry written by a newer st is refused here, leaving
+	// state, journal, refs, and cwd untouched. Malformed snapshots fail here
+	// with the same parse error Undo would produce.
+	if err := stack.ValidateUndoState(entry.State); err != nil {
+		return fmt.Errorf("parsing undo state: %w", err)
 	}
 	cdAfterSuccess, err := prepareUndoCurrentCreatedWorktree(entry, s)
 	if err != nil {
