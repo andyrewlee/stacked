@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,14 +22,43 @@ import (
 // git deterministic and non-interactive regardless of the host: the cmd suite
 // must not depend on real user config.
 func TestMain(m *testing.M) {
-	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil && os.Getenv("ST_TEST_DEBUG") == "" {
-		os.Stdout = devnull
-	}
+	replay := silenceStdout()
 	if err := normalizeGitTestEnv(); err != nil {
 		fmt.Fprintln(os.Stderr, "normalize git test env:", err)
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	replay(code)
+	os.Exit(code)
+}
+
+// silenceStdout pipes os.Stdout into a buffer so command output does not
+// drown test results. The returned restore closes the pipe and, on failure,
+// replays the capture to stderr — without it a failing test's "--- FAIL"
+// detail would be swallowed along with the noise, leaving CI logs empty.
+// ST_TEST_DEBUG=1 keeps stdout streaming live instead.
+func silenceStdout() func(code int) {
+	if os.Getenv("ST_TEST_DEBUG") != "" {
+		return func(int) {}
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return func(int) {}
+	}
+	var buf bytes.Buffer
+	drained := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(drained)
+	}()
+	os.Stdout = w
+	return func(code int) {
+		_ = os.Stdout.Close()
+		<-drained
+		if code != 0 {
+			_, _ = os.Stderr.Write(buf.Bytes())
+		}
+	}
 }
 
 func mustRun(t *testing.T, name string, args ...string) string {
