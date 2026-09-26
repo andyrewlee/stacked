@@ -1463,6 +1463,36 @@ func RebaseHeadName() (string, error) {
 	return "", nil
 }
 
+// RebaseOntoSHA returns the commit the in-progress rebase is replaying onto,
+// read from the worktree-local rebase metadata (rebase-merge/onto or
+// rebase-apply/onto). The metadata lives under GitDir — not GitCommonDir — so
+// a rebase paused inside a linked worktree resolves against that worktree's
+// state. The recorded value must resolve to a commit; a missing/unreadable
+// file and an unresolvable value are distinct actionable errors — a caller
+// must never substitute the current parent ref for a target it cannot read.
+func RebaseOntoSHA() (string, error) {
+	gitDir, err := GitDir()
+	if err != nil {
+		return "", err
+	}
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		if _, err := os.Stat(filepath.Join(gitDir, dir)); err != nil {
+			continue // this backend is not the one in progress
+		}
+		data, err := os.ReadFile(filepath.Join(gitDir, dir, "onto"))
+		if err != nil {
+			return "", fmt.Errorf("reading %s/onto: %w", dir, err)
+		}
+		target := strings.TrimSpace(string(data))
+		sha, err := Run("rev-parse", "--verify", "--quiet", target+"^{commit}")
+		if err != nil {
+			return "", fmt.Errorf("%s/onto value %q does not resolve to a commit: %w", dir, target, err)
+		}
+		return sha, nil
+	}
+	return "", errors.New("no in-progress rebase found (rebase-merge/onto, rebase-apply/onto)")
+}
+
 // RebaseContinue runs "git rebase --continue", reusing the existing commit
 // messages without opening an editor so it never blocks on interactive input. It
 // returns an error if the rebase does not run to completion (for example because

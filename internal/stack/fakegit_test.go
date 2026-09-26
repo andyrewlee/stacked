@@ -37,13 +37,19 @@ type fakeGit struct {
 	// conflict modeling: a branch in conflictNext stops mid-rebase the next time
 	// it is rebased, mirroring a real merge conflict that the caller resolves with
 	// RebaseContinue.
-	conflictNext    map[string]bool
+	conflictNext map[string]bool
+	// conflictEvery stalls EVERY rebase of the branch (not just the next), so
+	// a test can keep a branch conflicting after the paused rebase completes —
+	// e.g. a catch-up cascade rebase that must also stall.
+	conflictEvery   map[string]bool
 	rebaseActive    bool
 	rebaseRestall   bool // when set, RebaseContinue fails and leaves the rebase paused
 	rebaseBranch    string
 	rebaseNewBase   string
 	rebaseOldBase   string
 	rebaseAbortErr  error
+	rebaseOntoErr   error // when set, RebaseOntoSHA fails while the rebase stays paused
+	rebaseLog       []rebaseCall
 	staged          bool
 	clean           bool
 	checkoutErr     map[string]error
@@ -82,6 +88,7 @@ func newFakeGit() *fakeGit {
 		commits:         map[string]*fakeCommit{},
 		branches:        map[string]string{},
 		conflictNext:    map[string]bool{},
+		conflictEvery:   map[string]bool{},
 		checkoutErr:     map[string]error{},
 		deleteErr:       map[string]error{},
 		rebaseErr:       map[string]error{},
@@ -97,6 +104,13 @@ func newFakeGit() *fakeGit {
 
 // conflictOn makes the next rebase of branch stop on a conflict.
 func (f *fakeGit) conflictOn(branch string) { f.conflictNext[branch] = true }
+
+// alwaysConflictOn makes every rebase of branch stop on a conflict.
+func (f *fakeGit) alwaysConflictOn(branch string) { f.conflictEvery[branch] = true }
+
+// rebaseCall records a RebaseOnto attempt's unresolved arguments so tests can
+// pin which target each rebase replayed onto.
+type rebaseCall struct{ newBase, oldBase, branch string }
 
 func (f *fakeGit) newID() string {
 	f.seq++
@@ -381,7 +395,7 @@ func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error
 	if err := f.rebaseErr[branch]; err != nil {
 		return err
 	}
-	if f.conflictNext[branch] {
+	if f.conflictNext[branch] || f.conflictEvery[branch] {
 		f.rebaseActive = true
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
@@ -662,11 +676,12 @@ func assertDetachedPanic(t *testing.T, op string, fn func()) {
 // "git rebase --onto". If the branch is marked to conflict, it stops mid-rebase
 // (leaving a rebase in progress) until RebaseContinue is called.
 func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
+	f.rebaseLog = append(f.rebaseLog, rebaseCall{newBase, oldBase, branch})
 	if err := f.rebaseErr[branch]; err != nil {
 		f.head = branch
 		return err
 	}
-	if f.conflictNext[branch] {
+	if f.conflictNext[branch] || f.conflictEvery[branch] {
 		f.rebaseActive = true
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
@@ -702,6 +717,19 @@ func (f *fakeGit) replay(newBase, oldBase, branch string) error {
 
 func (f *fakeGit) RebaseInProgress() (bool, error) { return f.rebaseActive, nil }
 func (f *fakeGit) RebaseHeadName() (string, error) { return f.rebaseBranch, nil }
+
+// RebaseOntoSHA reports the target recorded when the rebase paused — the fake
+// equivalent of rebase-merge/onto. rebaseOntoErr models unreadable/corrupt
+// metadata: the accessor fails but the paused rebase is left intact.
+func (f *fakeGit) RebaseOntoSHA() (string, error) {
+	if !f.rebaseActive {
+		return "", fmt.Errorf("no rebase in progress")
+	}
+	if f.rebaseOntoErr != nil {
+		return "", f.rebaseOntoErr
+	}
+	return f.rebaseNewBase, nil
+}
 
 // RebaseAbort ends an in-progress rebase. The conflicting RebaseOnto never moved
 // the branch (it only paused), so clearing the rebase state restores the

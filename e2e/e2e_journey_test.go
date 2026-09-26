@@ -1074,6 +1074,66 @@ func TestConflictAbort(t *testing.T) {
 	wantStderrContains(t, res, "no rebase in progress")
 }
 
+// TestContinueAfterParentMoves drives a real conflict, advances the parent ref
+// while the child's rebase is paused, then continues. Continue must record the
+// target the rebase actually completed onto — the paused metadata's onto SHA —
+// not the parent's moved tip, so the follow-up cascade still recognizes the
+// move and lands the parent's new commits on the child.
+func TestContinueAfterParentMoves(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "f.txt", "A\n", "a")
+	r.create("feat-b", "f.txt", "A\nB\n", "b")
+	r.stOK("checkout", "feat-a")
+
+	r.writeFile("f.txt", "X\n")
+	res := r.st("modify", "-a")
+	wantExit(t, res, 2) // feat-b's rebase onto feat-a pauses on the conflict
+
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); err != nil {
+		t.Fatalf("expected a rebase in progress: %v", err)
+	}
+	a1 := r.rev("feat-a")
+
+	// Advance feat-a to A2 while feat-b's rebase is paused. feat-a is not
+	// checked out (the rebase detached HEAD onto feat-b), so a linked worktree
+	// can own it and commit a real change there.
+	wt := filepath.Join(t.TempDir(), "wt")
+	r.git("worktree", "add", wt, "feat-a")
+	if err := os.WriteFile(filepath.Join(wt, "a2.txt"), []byte("A2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.gitIn(wt, "add", "a2.txt")
+	r.gitIn(wt, "commit", "-q", "-m", "a2")
+	r.git("worktree", "remove", wt)
+	a2 := r.rev("feat-a")
+	if a2 == a1 {
+		t.Fatal("test setup: feat-a did not advance while feat-b was paused")
+	}
+
+	// Resolve and continue. The completed rebase incorporated A1; the cascade
+	// must then pick up A2.
+	r.writeFile("f.txt", "X\nB\n")
+	r.git("add", "f.txt")
+	res = r.stOK("continue")
+	wantStdoutContains(t, res, "continued restack")
+
+	if got := r.git("show", "feat-b:f.txt"); got != "X\nB" {
+		t.Fatalf("feat-b:f.txt = %q, want X\\nB", got)
+	}
+	// The parent's post-pause commit must have landed on the child — only
+	// possible when the recorded base was the actual rebase target (A1), not
+	// the moved tip the rebase never incorporated.
+	if got := r.git("show", "feat-b:a2.txt"); got != "A2" {
+		t.Fatalf("feat-b:a2.txt = %q, want A2 — the moved parent was not restacked in", got)
+	}
+	if !r.isAncestor(a2, "feat-b") {
+		t.Fatal("feat-a's moved tip is not an ancestor of feat-b after continue")
+	}
+	r.stOK("validate")
+}
+
 func TestOntoConflictContinue(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)

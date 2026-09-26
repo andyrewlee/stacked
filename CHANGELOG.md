@@ -31,6 +31,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was renamed are refused — the apply lands a zero-context patch at HEAD line
   numbers on the ancestor's tree, where shifted coordinates could hit the
   wrong occurrence of repeated text.
+- **`st continue` records the rebase target that was actually incorporated.**
+  When a child's rebase was paused on a conflict and the parent ref moved
+  before `st continue`, the child now records the target captured from the
+  paused rebase's own metadata (`rebase-merge/onto`) — not the parent's new
+  tip — so the follow-up restack still recognizes the move and lands the
+  parent's new commits on the child. A missing or unreadable target is an
+  actionable error before the rebase is continued, never a silent guess.
 - **`st undo` refuses state written by a newer `st` before mutating anything.**
   Both the current `state.json` and the newest undo journal snapshot are
   schema-checked up front — a file or snapshot with a schema version newer

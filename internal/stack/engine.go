@@ -918,6 +918,24 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	if conflicted == "" && s.PendingReparent != nil {
 		conflicted = s.PendingReparent.Branch
 	}
+
+	// Capture the target the paused rebase is actually replaying onto BEFORE
+	// RebaseContinue removes the worktree-local metadata. Only an ordinary
+	// tracked branch needs it: a pending reparent already persists its target
+	// (pending.ParentSHA), and an untracked conflicted branch has no ParentSHA
+	// to stamp. If the parent ref moved while the rebase was paused, the live
+	// tip is NOT what the rebase incorporated — recording it would suppress
+	// the follow-up restack that picks up the move.
+	ontoSHA := ""
+	isPendingReparent := s.PendingReparent != nil && s.PendingReparent.Branch == conflicted
+	if conflicted != "" && !isPendingReparent {
+		if _, ok := s.Get(conflicted); ok {
+			if ontoSHA, err = g.RebaseOntoSHA(); err != nil {
+				return nil, fmt.Errorf("reading the paused rebase's target before continuing %q: %w", conflicted, err)
+			}
+		}
+	}
+
 	if err := g.RebaseContinue(); err != nil {
 		// Surface the branch the rebase re-stalled on as structured fields, like
 		// the other conflict paths (restackBranch/Onto), so a `st continue --json`
@@ -946,11 +964,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 				return nil, err
 			}
 		} else if b, ok := s.Get(conflicted); ok {
-			tip, err := g.RevParse(branchTipRef(b.Parent))
-			if err != nil {
-				return nil, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
-			}
-			b.ParentSHA = tip
+			b.ParentSHA = ontoSHA
 			if err := env.save(); err != nil {
 				return nil, err
 			}
