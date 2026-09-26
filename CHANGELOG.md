@@ -15,6 +15,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **Squash-merge detection keeps both sides of a rename.** `st sync`'s
+  containment check now enumerates rename sources as well as destinations, so
+  a branch that renames A to B is no longer pruned when upstream merely copied
+  A to B while keeping A — the branch's deletion of A has not landed.
 - **`st absorb` only attributes hunks to on-path tips.** A hunk whose owning
   commit is tipped only by a tracked branch *off* the current stack's path is
   now refused, naming that branch — previously it could be attributed to the
