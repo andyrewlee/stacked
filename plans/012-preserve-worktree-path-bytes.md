@@ -14,7 +14,23 @@
 - **Category:** bug
 - **Audit item:** 12
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/012-preserve-worktree-path-bytes` (stacked on `advisor/011`), commit `3ce04ad` (CI-verified tree `0486ebf` — identical code; only plan docs differ).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- internal/git/git.go internal/git/git_test.go internal/git/fuzz_test.go e2e/e2e_journey_test.go docs/AGENT.md CHANGELOG.md plans/012-preserve-worktree-path-bytes.md plans/README.md` → only documented predecessor changes; no unexplained drift.
+- Injection demonstrated pre-fix: `git worktree add` at a path containing `\nworktree /fake\nHEAD deadbeef` made the legacy listing emit a forged `worktree /fake` record with a fabricated `HEAD` — the exact truncation+injection this plan removes.
+- Implementation: `Worktrees()` invokes `git worktree list --porcelain -z` with stdout/stderr separated (`worktreeListZ`). Success → `parseWorktreesZ` (NUL-terminated attributes, empty attribute = record boundary; validates structural fields, refuses unknown attributes/duplicated inline records/HEAD-less non-bare records; `locked`/`prunable` annotations handled without becoming records). Failure → fallback only on exit 129 + C-locale `unknown option` stderr (`unsupportedWorktreeListZ`); any other error propagates untouched (`TestWorktreesDoesNotFallbackOnError`).
+- Guarded legacy path (`worktreesLegacy`): `checkLegacyWorktreeMetadata` reads `rev-parse --git-common-dir` via raw `run` (exactly one trailing newline stripped, no TrimSpace), refuses CR/LF in the common dir or the derived main-worktree path (`<dir>/.git` suffix required — separate-gitdir layouts get an actionable unsupported-layout error), reads every `worktrees/*/gitdir` registration (strip exactly one record newline; CR/LF or unreadable → refusal), then strict `parseWorktreesLegacy` (blank-separated records only, no inline `worktree` lines, unknown lines rejected) plus a record-count cross-check against registration count.
+- Tests: `TestWorktreesPreservesPathBytes` (real newline/tab/trailing-space/quote/UTF-8/embedded-fake-record worktree paths round-trip byte-exact), `TestParseWorktreesZ` + `TestParseWorktreesZMalformed`, `TestParseWorktreesLegacyMalformed` (incl. field-looking split fragments), `TestWorktreesLegacyFallback` + `TestWorktreesDoesNotFallbackOnError` + `TestWorktreesLegacyGuardRejectsUnsafeMetadata` via a PATH git-shim logging every call. Fuzz targets adapted to error-returning parsers; `FuzzParseWorktreesZ` added.
+- e2e `TestWorktreeNewlinePathRoundTrip`: newline+tab+quote+UTF-8 worktree path round-trips exact bytes through `worktree ls --json` and the `log --json` ownership annotation; terminal output escapes the control bytes.
+- Docs: AGENT.md's worktree section documents the compatibility boundary (newline-path worktrees need git ≥ 2.36; ordinary legacy worktrees keep working); CHANGELOG entry under `### Fixed`.
+- Legacy-git runtime note: the 129/unknown-option fallback was verified through a deterministic PATH shim that reproduces the C-locale diagnostic byte-for-byte; no actual git 2.17–2.35 runtime was available locally — the guard's refusal path (not silent success) is what protects such repos, so worst case is an actionable error, not corrupted data.
+- Verification: `go test ./internal/git -run 'Test.*(Worktree|ParseWorktrees)' -count=1` → ok; `go test ./e2e -run '^TestWorktreeNewlinePathRoundTrip$'` → ok; `make test-fast` → ok; `make test` → ok; `make e2e` → ok; `make build` → ok; `make fmt-check`/`make lint` (v2.12.2) → 0 issues.
+- `make ci` on commit `0486ebf` in detached worktree `/private/tmp/st-ci-012` → exit 0 (lint clean, native/windows/plan9 vet, build, race tests, e2e, merged coverage 87.1% ≥ 75%, per-function floor holds).
+- `git diff --check` → exit 0; files all in Scope (`internal/git/git.go`, `internal/git/git_test.go`, `internal/git/fuzz_test.go`, `e2e/e2e_journey_test.go`, `docs/AGENT.md`, `CHANGELOG.md`, this plan, `plans/README.md`).
 
 ## Why this matters
 

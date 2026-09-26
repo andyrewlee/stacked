@@ -48,6 +48,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is active, then remove the named file — see CONTRIBUTING's troubleshooting
   section. Stale `lock.excl` reclamation under a freshly owned guard is
   unchanged.
+- **Worktree paths are parsed byte-exactly.** `git worktree list` now uses
+  the NUL-framed `--porcelain -z` grammar on git ≥ 2.36, so a path containing
+  a newline (or text that would look like a record field) can no longer
+  split into a truncated path plus a forged worktree record. Older git keeps
+  the line-based listing, but only after the worktree registration metadata
+  (`worktrees/*/gitdir`) proves no path carries CR/LF bytes — an ambiguous
+  repo gets an actionable error naming git ≥ 2.36 instead of a corrupted
+  ownership map.
 - **`.worktreeinclude` copies can no longer overwrite or merge into occupied
   destination paths.** Before the first file is copied, every selected entry
   is preflighted against the destination worktree: a path that is tracked
