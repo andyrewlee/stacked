@@ -14,7 +14,19 @@
 - **Category:** bug
 - **Audit item:** 2
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/003-account-for-every-staged-absorb-change` (stacked on `advisor/002`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- <scoped files>` → only documented predecessor changes (001 test-env isolation, 002 `--no-renames` enumeration) plus plan-file additions; no unexplained source drift.
+- Step 1: extended `TestDiffCachedHunks` in `internal/git/git_test.go` with empty-file add/delete, mode-only, rename, hostile `diff.*` config, and an external-diff sentinel. Pre-fix run failed as specified (noprefix config reshaped the parse; the external-diff sentinel produced unclassifiable output absorbed without accounting).
+- Step 2: pinned the staged diff invocation (`--no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/`), classified unsupported/metadata-only sections as `UnsupportedRecord` refusals, and added the rename-disabled raw staged-path inventory cross-check so a zero-refusal plan provably covers the whole index before any reset. Post-fix parser tests PASS.
+- Step 3: added `TestAbsorbPreservesMixedEmptyFileChanges` in `e2e/e2e_absorb_test.go` (attributable text edit combined with an empty-file add and, separately, delete): dry-run and apply both refuse, staged index/worktree bytes, branch refs, and the undo journal are preserved, and `st validate` stays clean. PASS after fixing a trailing-newline expectation for the harness's trimmed output.
+- `make test-fast` → ok; focused regression `go test ./internal/git ./internal/stack -run 'Test.*(Absorb|DiffCached)' -count=1` → ok; `go test ./e2e -run '^TestAbsorbPreservesMixedEmptyFileChanges$' -count=1` → ok.
+- `make ci` on commit `6314b14` in detached worktree `/private/tmp/st-ci-003` → exit 0 (golangci-lint v2.12.2 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 86.7% ≥ 75%). A first CI run hit the 10-minute `go test` package timeout under competing load; the rerun on an otherwise idle tree passed the cmd suite in 359s — environmental, not a regression.
+- `git diff --check` → exit 0; modified files all in Scope.
 
 ## Why this matters
 

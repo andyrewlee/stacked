@@ -14,7 +14,7 @@ The numbering is the recommended order. Audit IDs retain the original finding nu
 | --- | --- | --- | --- | --- | --- | --- |
 | [001](001-isolate-git-test-environments.md) | Isolate real-Git fixtures from host configuration | 9 | P1 | S | LOW | DONE |
 | [002](002-include-rename-sources-in-containment.md) | Keep both sides of renames in the prune containment check | 1 | P1 | S | LOW | DONE |
-| [003](003-account-for-every-staged-absorb-change.md) | Account for every staged change before absorb can reset the index | 2 | P1 | M | MED | TODO |
+| [003](003-account-for-every-staged-absorb-change.md) | Account for every staged change before absorb can reset the index | 2 | P1 | M | MED | DONE |
 | [004](004-refuse-shifted-absorb-mappings.md) | Refuse absorb hunks whose ancestor coordinates cannot be applied safely | 3 | P1 | M | MED | TODO |
 | [005](005-enforce-undo-schema-compatibility.md) | Reject future state schemas before undo mutates anything | 4 | P1 | S | LOW | TODO |
 | [006](006-preserve-actual-rebase-target-on-continue.md) | Record the rebase target actually incorporated by continue | 5 | P1 | M | LOW | TODO |

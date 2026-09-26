@@ -422,3 +422,78 @@ func TestAbsorbRefusesModeRideAlong(t *testing.T) {
 		t.Fatalf("refused absorb disturbed the staged set; diff --cached = %q", diff)
 	}
 }
+
+// TestAbsorbPreservesMixedEmptyFileChanges proves the staged-diff accounting
+// invariant end to end: a staged set pairing an attributable text edit with a
+// metadata-only change (an empty file add or delete — a diff section that
+// yields NO hunks) is refused wholesale by both --dry-run and apply, leaving
+// the index, worktree bytes, refs, and the undo journal exactly as they were.
+// Before the parser accounted for empty files, the apply's index reset would
+// have silently discarded the empty-file change.
+func TestAbsorbPreservesMixedEmptyFileChanges(t *testing.T) {
+	t.Parallel()
+	for _, variant := range []string{"add", "delete"} {
+		t.Run(variant, func(t *testing.T) {
+			r := newRepo(t)
+			r.initStack()
+			r.writeFile("shared.txt", "A0\np\nq\nB0\n")
+			r.git("add", "shared.txt")
+			if variant == "delete" {
+				r.writeFile("empty.txt", "")
+				r.git("add", "empty.txt")
+			}
+			r.git("commit", "-q", "-m", "seed")
+			r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
+
+			// Stage the attributable edit plus the metadata-only change.
+			r.writeFile("shared.txt", "A2\np\nq\nB0\n")
+			r.git("add", "shared.txt")
+			if variant == "add" {
+				r.writeFile("empty.txt", "")
+				r.git("add", "empty.txt")
+			} else {
+				r.git("rm", "-q", "--", "empty.txt")
+			}
+
+			snapshot := func() (index, status, undo string) {
+				index = r.git("ls-files", "--stage")
+				status = r.git("status", "--porcelain")
+				undo = r.stOK("undo", "--list").stdout
+				return index, status, undo
+			}
+			indexBefore, statusBefore, undoBefore := snapshot()
+			tipsBefore := map[string]string{"main": r.rev("main"), "feat-a": r.rev("feat-a")}
+
+			dry := r.stOK("absorb", "--dry-run")
+			if !strings.Contains(dry.stdout, "refuse empty.txt") {
+				t.Fatalf("dry-run = %q, want a refusal naming empty.txt", dry.stdout)
+			}
+			res := r.stOK("absorb")
+			if !strings.Contains(res.stdout, "not applied:") || !strings.Contains(res.stdout, "refuse empty.txt") {
+				t.Fatalf("apply = %q, want the not-applied summary refusing empty.txt", res.stdout)
+			}
+
+			indexAfter, statusAfter, undoAfter := snapshot()
+			if indexAfter != indexBefore {
+				t.Fatalf("index changed during refused absorb\nbefore:\n%s\nafter:\n%s", indexBefore, indexAfter)
+			}
+			if statusAfter != statusBefore {
+				t.Fatalf("worktree/index state changed during refused absorb\nbefore:\n%s\nafter:\n%s", statusBefore, statusAfter)
+			}
+			if undoAfter != undoBefore {
+				t.Fatalf("undo journal changed during refused absorb\nbefore:\n%s\nafter:\n%s", undoBefore, undoAfter)
+			}
+			for b, tip := range tipsBefore {
+				if r.rev(b) != tip {
+					t.Fatalf("%s moved during a refused absorb: %s -> %s", b, tip, r.rev(b))
+				}
+			}
+			// The staged bytes themselves are untouched (r.git trims, so the
+			// trailing newline is intentionally absent here).
+			if got := r.git("show", ":shared.txt"); got != "A2\np\nq\nB0" {
+				t.Fatalf("staged shared.txt = %q, want the staged edit preserved", got)
+			}
+			r.stOK("validate")
+		})
+	}
+}

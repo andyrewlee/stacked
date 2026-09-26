@@ -74,7 +74,13 @@ message.
   ```
   `restacked`, `notes`, and `dryRun` are `omitempty`. `--dry-run` maps staged
   hunks to the stack commits owning their lines with zero mutation
-  (`"dryRun": true`). Targets are restricted to branches on the current
+  (`"dryRun": true`). Every staged section must classify as plain text hunks
+  or be refused — metadata-only changes such as empty added/deleted files,
+  mode-only changes, renames/copies, binary files, and quoted paths are all
+  refused, and a raw staged-path inventory cross-check fails closed on
+  anything the parser cannot account for. The staged diff is captured with
+  pinned flags, so user diff configuration (prefixes, color, external diff,
+  textconv) cannot reshape it. Targets are restricted to branches on the current
   stack's path (the current branch plus its ancestors): a hunk owned by a
   commit tipped only by an off-path tracked branch is refused, naming that
   branch. Bare `absorb` applies any plan with ZERO refusals — multi-target

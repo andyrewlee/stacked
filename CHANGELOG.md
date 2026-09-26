@@ -15,6 +15,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **`st absorb` can no longer drop unaccounted staged changes.** The staged
+  diff is now captured with pinned flags (`--no-color --no-ext-diff
+  --no-textconv --src-prefix=a/ --dst-prefix=b/`) so user diff configuration
+  cannot reshape it; metadata-only sections such as empty added or deleted
+  files produce explicit refusals instead of being silently omitted, and a
+  raw staged-path inventory cross-check refuses anything the parser cannot
+  classify — a zero-refusal plan now provably covers the whole index before
+  any reset runs.
 - **Squash-merge detection keeps both sides of a rename.** `st sync`'s
   containment check now enumerates rename sources as well as destinations, so
   a branch that renames A to B is no longer pruned when upstream merely copied

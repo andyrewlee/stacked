@@ -1546,6 +1546,108 @@ func TestDiffCachedHunks(t *testing.T) {
 			t.Fatalf("hunks = %+v unsupported = %+v, want one hunk still attributed to real.txt", hunks, unsupported)
 		}
 	})
+
+	t.Run("empty added file is refused, not omitted", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "f.txt", "l1\nl2\n")
+		mustGit(t, "add", "f.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		// An empty added file produces a `new file mode` section with NO
+		// hunks — it must still be accounted for.
+		writeFile(t, "empty.txt", "")
+		mustGit(t, "add", "empty.txt")
+		writeFile(t, "f.txt", "l1\nEDIT\n")
+		mustGit(t, "add", "f.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "f.txt" {
+			t.Fatalf("hunks = %+v, want the f.txt edit only", hunks)
+		}
+		if len(unsupported) != 1 || unsupported[0].File != "empty.txt" {
+			t.Fatalf("unsupported = %+v, want a refusal naming empty.txt", unsupported)
+		}
+	})
+
+	t.Run("empty deleted file is refused, not omitted", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "gone.txt", "")
+		mustGit(t, "add", "gone.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		mustGit(t, "rm", "-q", "gone.txt")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].File != "gone.txt" {
+			t.Fatalf("hunks = %+v unsupported = %+v, want a refusal naming gone.txt", hunks, unsupported)
+		}
+	})
+
+	t.Run("noprefix and mnemonicPrefix configs cannot reshape the stream", func(t *testing.T) {
+		for _, cfg := range [][2]string{{"diff.noprefix", "true"}, {"diff.mnemonicPrefix", "true"}} {
+			newRepo(t)
+			writeFile(t, "f.txt", "l1\nl2\n")
+			mustGit(t, "add", "f.txt")
+			mustGit(t, "commit", "-q", "-m", "base")
+			writeFile(t, "f.txt", "l1\nEDIT\n")
+			mustGit(t, "add", "f.txt")
+			mustGit(t, "config", cfg[0], cfg[1])
+			hunks, unsupported := mustHunks(t)
+			want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
+			if len(hunks) != 1 || hunks[0] != want || len(unsupported) != 0 {
+				t.Fatalf("%s: hunks = %+v unsupported = %+v, want exactly %+v", cfg[0], hunks, unsupported, want)
+			}
+			mustGit(t, "config", "--unset", cfg[0])
+		}
+	})
+
+	t.Run("color.ui=always cannot inject escapes into the stream", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "f.txt", "l1\nl2\n")
+		mustGit(t, "add", "f.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		writeFile(t, "f.txt", "l1\nEDIT\n")
+		mustGit(t, "add", "f.txt")
+		mustGit(t, "config", "color.ui", "always")
+		hunks, unsupported := mustHunks(t)
+		if len(hunks) != 1 || hunks[0].File != "f.txt" || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one clean hunk", hunks, unsupported)
+		}
+	})
+
+	t.Run("configured external diff driver is never invoked", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "f.txt", "l1\nl2\n")
+		mustGit(t, "add", "f.txt")
+		mustGit(t, "commit", "-q", "-m", "base")
+		writeFile(t, "f.txt", "l1\nEDIT\n")
+		mustGit(t, "add", "f.txt")
+		sentinel := filepath.Join(t.TempDir(), "sentinel")
+		stub := writeSentinelStub(t, filepath.Dir(sentinel), "extdiff", sentinel)
+		mustGit(t, "config", "diff.external", stub)
+		hunks, unsupported := mustHunks(t)
+		if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+			t.Fatal("external diff driver was invoked")
+		}
+		if len(hunks) != 1 || hunks[0].File != "f.txt" || len(unsupported) != 0 {
+			t.Fatalf("hunks = %+v unsupported = %+v, want the real diff's hunk", hunks, unsupported)
+		}
+	})
+
+	t.Run("configured textconv driver is never invoked", func(t *testing.T) {
+		newRepo(t)
+		writeFile(t, "bin.dat", "\x00\x01\x02")
+		mustGit(t, "add", "bin.dat")
+		mustGit(t, "commit", "-q", "-m", "base")
+		writeFile(t, "bin.dat", "\x00\x03\x04")
+		mustGit(t, "add", "bin.dat")
+		sentinel := filepath.Join(t.TempDir(), "sentinel")
+		stub := writeSentinelStub(t, filepath.Dir(sentinel), "textconv", sentinel)
+		mustGit(t, "config", "diff.driver.textconv", stub)
+		hunks, unsupported := mustHunks(t)
+		if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+			t.Fatal("textconv driver was invoked")
+		}
+		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "binary file" {
+			t.Fatalf("hunks = %+v unsupported = %+v, want one binary record", hunks, unsupported)
+		}
+	})
 }
 
 // TestAmendTipWithPatch pins the temp-index amend: a staged patch captured on
