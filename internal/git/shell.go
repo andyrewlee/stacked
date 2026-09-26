@@ -56,6 +56,7 @@ func (Shell) HasUnstagedChanges() (bool, error) {
 func (Shell) IsClean() (bool, error)                          { return IsClean() }
 func (Shell) RebaseInProgress() (bool, error)                 { return RebaseInProgress() }
 func (Shell) RebaseHeadName() (string, error)                 { return RebaseHeadName() }
+func (Shell) RebaseOntoSHA() (string, error)                  { return RebaseOntoSHA() }
 func (Shell) RebaseContinue() error                           { return RebaseContinue() }
 func (Shell) RebaseAbort() error                              { return RebaseAbort() }
 func (Shell) AncestorSet(ref string) (map[string]bool, error) { return AncestorSet(ref) }
