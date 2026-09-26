@@ -110,9 +110,7 @@ func navEmitText(asJSON bool, branch, summary, textSummary string) error {
 }
 
 func teleportHintForTerminal(branch, dest string) string {
-	safeBranch := sanitizeForTerminal(branch)
-	safeDest := sanitizeForTerminal(dest)
-	return fmt.Sprintf("%s is in worktree %s\nrun: cd %s", safeBranch, safeDest, safeDest)
+	return teleportHintCore(sanitizeForTerminal(branch), sanitizeForTerminal(dest), dest)
 }
 
 // navSummaryForTerminal is navSummary with branch/dest field-sanitized for

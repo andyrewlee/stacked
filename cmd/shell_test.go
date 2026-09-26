@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,8 +100,8 @@ func TestNavSummary(t *testing.T) {
 	if strings.Contains(got, "switched") {
 		t.Errorf("navSummary teleport without shim must not claim a switch: %q", got)
 	}
-	if !strings.Contains(got, "cd /wt/feat") {
-		t.Errorf("navSummary teleport without shim must suggest cd: %q", got)
+	if !strings.Contains(got, "cd -- '/wt/feat'") {
+		t.Errorf("navSummary teleport without shim must suggest a quoted cd: %q", got)
 	}
 }
 
@@ -112,5 +113,77 @@ func TestShimActive(t *testing.T) {
 	t.Setenv(cdDirectiveEnv, "/tmp/cd")
 	if !shimActive() {
 		t.Error("shimActive false with ST_CD_FILE set")
+	}
+}
+
+// TestTeleportHintQuotedPath proves the emitted `run: cd …` command is
+// paste-executable for ordinary paths containing spaces and shell
+// metacharacters: each offered command is run in a real shell and must land in
+// the exact directory without evaluating any metacharacter payload.
+func TestTeleportHintQuotedPath(t *testing.T) {
+	base := t.TempDir()
+	sentinel := filepath.Join(base, "PWNED")
+	dirs := map[string]string{
+		"spaces":     filepath.Join(base, "has space"),
+		"apostrophe": filepath.Join(base, "it's here"),
+		"dollar":     filepath.Join(base, "cost$money"),
+		"semicolon":  filepath.Join(base, "semi;colon"),
+		"backtick":   filepath.Join(base, "tick`name`"),
+		"parens":     filepath.Join(base, "paren(dir)"),
+		"utf8":       filepath.Join(base, "☃ dir"),
+		// A path that is itself a command injection attempt: when quoted it
+		// must just be a directory name; unquoted it would run `touch`.
+		"injection":  filepath.Join(base, "x;touch "+sentinel),
+		"dollar-sub": filepath.Join(base, "x$(touch "+sentinel+")"),
+	}
+	for name, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("%s: mkdir %q: %v", name, dir, err)
+		}
+	}
+
+	t.Setenv(cdDirectiveEnv, "")
+	shells := []string{"bash"}
+	for _, opt := range []string{"zsh", "fish"} {
+		if _, err := exec.LookPath(opt); err == nil {
+			shells = append(shells, opt)
+		} else {
+			t.Logf("%s not installed; that shell's round-trip is unverified", opt)
+		}
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash required to exercise the emitted cd command")
+	}
+
+	for name, dir := range dirs {
+		t.Run(name, func(t *testing.T) {
+			hint := teleportHint("feat", dir)
+			line := ""
+			for _, l := range strings.Split(hint, "\n") {
+				if strings.HasPrefix(l, "run: ") {
+					line = strings.TrimPrefix(l, "run: ")
+				}
+			}
+			if line == "" {
+				t.Fatalf("no executable suggestion in hint %q", hint)
+			}
+			for _, sh := range shells {
+				if _, err := exec.LookPath(sh); err != nil {
+					continue
+				}
+				out, err := exec.Command(sh, "-c", line+"; pwd -P").CombinedOutput()
+				if err != nil {
+					t.Fatalf("%s -c %q failed: %v\n%s", sh, line, err, out)
+				}
+				got := strings.TrimSuffix(string(out), "\n")
+				want, _ := filepath.EvalSymlinks(dir)
+				if got != want {
+					t.Errorf("%s: cd landed at %q, want %q (hint line %q)", sh, got, want, line)
+				}
+			}
+		})
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("metacharacter payload executed: %s exists", sentinel)
 	}
 }

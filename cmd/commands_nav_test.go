@@ -123,7 +123,7 @@ func TestUpToLeafInWorktreeTeleports(t *testing.T) {
 			t.Fatalf("up 2 (teleport, no shim): %v", err)
 		}
 	})
-	for _, want := range []string{"feat-b is in worktree " + wtPath, "run: cd " + wtPath} {
+	for _, want := range []string{"feat-b is in worktree " + wtPath, "run: cd -- '" + wtPath + "'"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("up 2 teleport = %q, want it to contain %q", out, want)
 		}
