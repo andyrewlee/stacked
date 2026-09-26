@@ -23,6 +23,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raw staged-path inventory cross-check refuses anything the parser cannot
   classify — a zero-refusal plan now provably covers the whole index before
   any reset runs.
+- **`st absorb` refuses hunks whose coordinates moved since the owning
+  commit.** Blame attribution now keeps each line's original line number and
+  path (`git blame --line-porcelain`), and a hunk is accepted only when every
+  removed line maps to the same line number and path at its owning stack
+  commit. Lines shifted by a descendant's insert/delete and lines whose file
+  was renamed are refused — the apply lands a zero-context patch at HEAD line
+  numbers on the ancestor's tree, where shifted coordinates could hit the
+  wrong occurrence of repeated text.
 - **Squash-merge detection keeps both sides of a rename.** `st sync`'s
   containment check now enumerates rename sources as well as destinations, so
   a branch that renames A to B is no longer pruned when upstream merely copied

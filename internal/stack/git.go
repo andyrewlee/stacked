@@ -84,9 +84,12 @@ type Git interface {
 	// Contract: every staged change appears in one of the two slices, so a
 	// caller gating on "zero refusals" covers the whole staged diff.
 	DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error)
-	// BlamePorcelain maps each final line of file at rev to the 40-hex SHA that
-	// last touched it (git blame --porcelain).
-	BlamePorcelain(file, rev string) (map[int]string, error)
+	// BlamePorcelain maps each final line of file at rev to its provenance
+	// (git blame --line-porcelain): the commit that last touched the line,
+	// the line's number in THAT commit's version, and the path it carried
+	// there. Implementations must drop entries whose metadata is incomplete
+	// — a missing map key means unattributable, never "fill in defaults".
+	BlamePorcelain(file, rev string) (map[int]git.BlameLine, error)
 	// DiffCachedPatchFor returns a minimal staged patch containing ONLY the
 	// given hunks (keyed by the DiffCachedHunks tuple), with post-image line
 	// numbers corrected for omitted same-file hunks — the per-target bytes

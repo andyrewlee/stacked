@@ -497,3 +497,159 @@ func TestAbsorbPreservesMixedEmptyFileChanges(t *testing.T) {
 		})
 	}
 }
+
+// TestAbsorbRefusesShiftedRepeatedLines pins the coordinate-integrity gate:
+// blame identifies the OWNING commit, but absorb's -U0 patch applies at HEAD
+// line numbers against that commit's tree. When a descendant shifted the
+// lines (insert/delete) or renamed the file, the HEAD coordinates do not
+// exist at the target tip — and with repeated text the patch can apply to the
+// WRONG occurrence. Those mappings are refused, preserving refs, the index,
+// worktree bytes, and the undo journal. An unshifted repeated line still
+// absorbs, so the ban is on unsafe coordinates, not repeated text.
+func TestAbsorbRefusesShiftedRepeatedLines(t *testing.T) {
+	t.Parallel()
+
+	preserved := func(t *testing.T, r *repo, branches []string) func() {
+		t.Helper()
+		tips := map[string]string{}
+		for _, b := range branches {
+			tips[b] = r.rev(b)
+		}
+		indexBefore := r.git("ls-files", "--stage")
+		statusBefore := r.git("status", "--porcelain")
+		undoBefore := r.stOK("undo", "--list").stdout
+		return func() {
+			t.Helper()
+			for b, tip := range tips {
+				if r.rev(b) != tip {
+					t.Fatalf("%s moved during a refused absorb: %s -> %s", b, tip, r.rev(b))
+				}
+			}
+			if got := r.git("ls-files", "--stage"); got != indexBefore {
+				t.Fatalf("index changed during refused absorb\nbefore:\n%s\nafter:\n%s", indexBefore, got)
+			}
+			if got := r.git("status", "--porcelain"); got != statusBefore {
+				t.Fatalf("worktree/index changed during refused absorb\nbefore:\n%s\nafter:\n%s", statusBefore, got)
+			}
+			if got := r.stOK("undo", "--list").stdout; got != undoBefore {
+				t.Fatalf("undo journal changed during refused absorb\nbefore:\n%s\nafter:\n%s", undoBefore, got)
+			}
+		}
+	}
+
+	t.Run("insert-shifted repeated line is refused", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		// main seeds f.txt; feat-a owns the FIRST "same" (its line 2); feat-b
+		// inserts two lines at the top, pushing the owned line to HEAD line 4.
+		r.writeFile("f.txt", "top\nx\nmiddle\nsame\nbottom\n")
+		r.git("add", "-A")
+		r.git("commit", "-q", "-m", "seed")
+		r.create("feat-a", "f.txt", "top\nsame\nmiddle\nsame\nbottom\n", "a")
+		r.create("feat-b", "f.txt", "n1\nn2\ntop\nsame\nmiddle\nsame\nbottom\n", "b")
+
+		// Stage an edit of feat-a's line (HEAD line 4).
+		r.writeFile("f.txt", "n1\nn2\ntop\nEDITED\nmiddle\nsame\nbottom\n")
+		r.git("add", "f.txt")
+
+		check := preserved(t, r, []string{"main", "feat-a", "feat-b"})
+		featATip := r.rev("feat-a")
+
+		dry := r.stOK("absorb", "--dry-run")
+		if !strings.Contains(dry.stdout, "refuse f.txt") {
+			t.Fatalf("dry-run = %q, want a refusal for f.txt", dry.stdout)
+		}
+		res := r.stOK("absorb")
+		if !strings.Contains(res.stdout, "not applied:") {
+			t.Fatalf("apply = %q, want the not-applied summary", res.stdout)
+		}
+		check()
+
+		// The corruption this refuses: applying @@ -4 +4 @@ -same +EDITED to
+		// feat-a's tree lands on the OTHER "same" (its line 4). Verify both
+		// occurrences survived untouched.
+		if got := r.git("show", "feat-a:f.txt"); got != "top\nsame\nmiddle\nsame\nbottom" {
+			t.Fatalf("feat-a:f.txt = %q, want both same lines intact (feat-a tip %s)", got, featATip)
+		}
+	})
+
+	t.Run("delete-shifted line is refused", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		// feat-a owns line 3; feat-b deletes line 1, shifting it to HEAD line 2.
+		r.writeFile("f.txt", "gone\ntop\nx\nmiddle\nbottom\n")
+		r.git("add", "-A")
+		r.git("commit", "-q", "-m", "seed")
+		r.create("feat-a", "f.txt", "gone\ntop\nkeep\nmiddle\nbottom\n", "a")
+		r.create("feat-b", "f.txt", "top\nkeep\nmiddle\nbottom\n", "b")
+
+		r.writeFile("f.txt", "top\nEDITED\nmiddle\nbottom\n")
+		r.git("add", "f.txt")
+
+		check := preserved(t, r, []string{"main", "feat-a", "feat-b"})
+
+		dry := r.stOK("absorb", "--dry-run")
+		if !strings.Contains(dry.stdout, "refuse f.txt") {
+			t.Fatalf("dry-run = %q, want a refusal for f.txt", dry.stdout)
+		}
+		res := r.stOK("absorb")
+		if !strings.Contains(res.stdout, "not applied:") {
+			t.Fatalf("apply = %q, want the not-applied summary", res.stdout)
+		}
+		check()
+		if got := r.git("show", "feat-a:f.txt"); got != "gone\ntop\nkeep\nmiddle\nbottom" {
+			t.Fatalf("feat-a:f.txt = %q, want unchanged", got)
+		}
+	})
+
+	t.Run("historical rename is refused", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		// feat-a owns line 2 of f.txt; feat-b renames the file to g.txt, so
+		// blame on g.txt reports the old path.
+		r.writeFile("f.txt", "top\nx\nbottom\n")
+		r.git("add", "-A")
+		r.git("commit", "-q", "-m", "seed")
+		r.create("feat-a", "f.txt", "top\nkeep\nbottom\n", "a")
+		r.stOK("create", "feat-b")
+		r.git("mv", "f.txt", "g.txt")
+		r.git("commit", "-q", "-m", "rename f to g")
+
+		r.writeFile("g.txt", "top\nEDITED\nbottom\n")
+		r.git("add", "g.txt")
+
+		check := preserved(t, r, []string{"main", "feat-a", "feat-b"})
+
+		dry := r.stOK("absorb", "--dry-run")
+		if !strings.Contains(dry.stdout, "refuse g.txt") {
+			t.Fatalf("dry-run = %q, want a refusal for g.txt", dry.stdout)
+		}
+		res := r.stOK("absorb")
+		if !strings.Contains(res.stdout, "not applied:") {
+			t.Fatalf("apply = %q, want the not-applied summary", res.stdout)
+		}
+		check()
+	})
+
+	t.Run("unshifted repeated line still absorbs", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		// feat-a owns the FIRST "same" at line 2 and nothing shifts it; the
+		// second "same" (line 4) stays main's.
+		r.writeFile("f.txt", "top\nx\nmiddle\nsame\nbottom\n")
+		r.git("add", "-A")
+		r.git("commit", "-q", "-m", "seed")
+		r.create("feat-a", "f.txt", "top\nsame\nmiddle\nsame\nbottom\n", "a")
+
+		r.writeFile("f.txt", "top\nEDITED\nmiddle\nsame\nbottom\n")
+		r.git("add", "f.txt")
+
+		res := r.stOK("absorb")
+		if !strings.Contains(res.stdout, "absorbed 1 hunk(s) into feat-a") {
+			t.Fatalf("apply = %q, want the unshifted hunk absorbed into feat-a", res.stdout)
+		}
+		if got := r.git("show", "feat-a:f.txt"); got != "top\nEDITED\nmiddle\nsame\nbottom" {
+			t.Fatalf("feat-a:f.txt = %q, want the first same edited", got)
+		}
+	})
+}

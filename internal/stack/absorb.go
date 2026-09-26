@@ -59,8 +59,12 @@ func requireNoUnstaged(g Git) error {
 // AbsorbPlan attributes every staged hunk to the stack commit that owns its
 // pre-image lines, with zero mutation: reads only. The decision table
 // (from the absorb design spike) refuses everything ambiguous — multi-commit
-// hunks, lines owned by trunk/history, pure additions, and targets that are
-// not the tip of a tracked branch on the current stack's path.
+// hunks, lines owned by trunk/history, pure additions, targets that are not
+// the tip of a tracked branch on the current stack's path, and hunks whose
+// blame provenance does not map each old line to the SAME line number and
+// path at the owning commit (shifted or renamed coordinates would make the
+// -U0 apply land at the wrong position in the ancestor's tree — with
+// repeated text, silently).
 func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	res, _, err := absorbPlan(env, s)
 	return res, err
@@ -142,7 +146,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	// the advisory lock, and this pass performs no mutation). Keyed on file
 	// alone only because every lookup is at HEAD; if a future caller blames
 	// other revs or sub-ranges, key on (file, rev, range).
-	blameByFile := map[string]map[int]string{}
+	blameByFile := map[string]map[int]git.BlameLine{}
 	for _, h := range hunks {
 		lines := hunkLines(h)
 		if h.OldN == 0 {
@@ -159,26 +163,53 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 			}
 			blameByFile[h.File] = blame
 		}
+		// Beyond ownership, every old line's provenance must carry IDENTITY
+		// coordinates: the apply lands a -U0 patch on the owning commit's
+		// tree at the HEAD line numbers, so a line whose OriginalLine or
+		// path differs — shifted by a descendant's insert/delete, renamed
+		// since the owner, or missing/malformed metadata — would apply at
+		// the wrong spot (repeated text makes a wrong-position apply succeed
+		// silently). Identity is also what makes a hunk's coordinates
+		// contiguous: OriginalLine == final line for every line leaves no
+		// room for gaps.
 		owners := map[string]bool{}
 		missing := false
+		malformed := false
+		renamed := ""
+		var shiftFrom, shiftTo int
 		outside := false
 		for line := h.OldStart; line <= h.OldStart+h.OldN-1; line++ {
-			sha, ok := blame[line]
+			bl, ok := blame[line]
 			if !ok {
 				missing = true
 				break
 			}
-			if !stackSet[sha] {
+			switch {
+			case bl.Path == "" || bl.FinalLine != line:
+				malformed = true
+			case !stackSet[bl.Commit]:
 				outside = true
-				break
+			case bl.Path != h.File:
+				renamed = bl.Path
+			case bl.OriginalLine != line:
+				shiftFrom, shiftTo = bl.OriginalLine, line
+			default:
+				owners[bl.Commit] = true
+				continue
 			}
-			owners[sha] = true
+			break
 		}
 		switch {
 		case missing:
 			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "cannot attribute (untracked, renamed, or binary file)"})
+		case malformed:
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "cannot attribute (blame metadata missing or malformed)"})
 		case outside:
 			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "touches lines owned by trunk or history below the stack"})
+		case renamed != "":
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: fmt.Sprintf("line's path at the owning commit was %q (the file was renamed since); absorb refuses historical paths", renamed)})
+		case shiftTo != 0:
+			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: fmt.Sprintf("line %d was line %d at the owning commit (a descendant shifted it); absorb refuses shifted coordinates", shiftTo, shiftFrom)})
 		case len(owners) > 1:
 			names := make([]string, 0, len(owners))
 			for sha := range owners {

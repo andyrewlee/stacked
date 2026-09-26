@@ -28,13 +28,21 @@ func absorbEnv(t *testing.T) (*fakeGit, *State, Env, map[string]string) {
 	return f, s, env, tips
 }
 
+// blameID builds an identity-coordinate blame entry — the line sits at the
+// same number and path in the owning commit's version as at HEAD, which is
+// the only provenance absorb accepts. Tests wanting shifted, renamed, or
+// incomplete provenance set the fields explicitly instead.
+func blameID(commit string, line int, path string) git.BlameLine {
+	return git.BlameLine{Commit: commit, OriginalLine: line, FinalLine: line, Path: path}
+}
+
 // The five attribution cases from the absorb design spike, driven through
 // the fake git with canned hunks + blame. Refusals must never be errors.
 func TestAbsorbPlanAttribution(t *testing.T) {
 	t.Run("single target absorbs into the owning branch tip", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
 
 		res, err := AbsorbPlan(env, s)
 		if err != nil {
@@ -55,7 +63,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 	t.Run("hunk spanning two stack commits is refused", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 3, OldN: 2, NewStart: 3, NewN: 2}}
-		f.blame = map[string]map[int]string{"f.txt": {3: tips["a"], 4: tips["b"]}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {3: blameID(tips["a"], 3, "f.txt"), 4: blameID(tips["b"], 4, "f.txt")}}
 
 		res, err := AbsorbPlan(env, s)
 		if err != nil {
@@ -75,7 +83,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 	t.Run("line owned by trunk is refused", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 1, OldN: 1, NewStart: 1, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {1: tips["main"]}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {1: blameID(tips["main"], 1, "f.txt")}}
 
 		res, err := AbsorbPlan(env, s)
 		if err != nil {
@@ -104,7 +112,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 		f.staged = true
 		f.stagedPatch = []byte("fake patch")
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
 		f.stagedUnsupported = []git.UnsupportedRecord{{File: "bin.dat", Reason: "binary file"}}
 
 		res, err := AbsorbPlan(env, s)
@@ -133,7 +141,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 	t.Run("line missing from blame is refused as unattributable", func(t *testing.T) {
 		f, s, env, _ := absorbEnv(t)
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {}}
 
 		res, err := AbsorbPlan(env, s)
 		if err != nil {
@@ -141,6 +149,120 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 		}
 		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "cannot attribute") {
 			t.Fatalf("result = %+v, want the cannot-attribute refusal", res)
+		}
+	})
+
+	// A descendant that inserts ABOVE the owned line pushes it down: blame
+	// reports the HEAD line (4) but the line sat at 2 in the owning commit.
+	// The -U0 patch would land at line 4 of the ancestor's tree — with
+	// repeated text, on the wrong occurrence — so the hunk is refused.
+	t.Run("line shifted down by an insertion is refused", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 4, OldN: 1, NewStart: 4, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			4: {Commit: tips["a"], OriginalLine: 2, FinalLine: 4, Path: "f.txt"},
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "shifted") {
+			t.Fatalf("result = %+v, want a shifted-coordinates refusal", res)
+		}
+	})
+
+	// A descendant that deletes ABOVE the owned line pulls it up: original 3
+	// now sits at HEAD line 2.
+	t.Run("line shifted up by a deletion is refused", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			2: {Commit: tips["a"], OriginalLine: 3, FinalLine: 2, Path: "f.txt"},
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "shifted") {
+			t.Fatalf("result = %+v, want a shifted-coordinates refusal", res)
+		}
+	})
+
+	// A descendant renamed the file: blame reports the historical path even
+	// at identity line numbers, and the patch header names the CURRENT path
+	// which does not exist in the ancestor's tree.
+	t.Run("line whose file was renamed is refused", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "g.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"g.txt": {
+			2: {Commit: tips["a"], OriginalLine: 2, FinalLine: 2, Path: "f.txt"},
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 ||
+			!strings.Contains(res.Refused[0].Reason, `was "f.txt"`) ||
+			!strings.Contains(res.Refused[0].Reason, "renamed") {
+			t.Fatalf("result = %+v, want a historical-path refusal naming f.txt", res)
+		}
+	})
+
+	// Provenance without a decodable path is malformed — fail closed, never
+	// pretend identity coordinates.
+	t.Run("line with empty provenance path is refused", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			2: {Commit: tips["a"], OriginalLine: 2, FinalLine: 2, Path: ""},
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "missing or malformed") {
+			t.Fatalf("result = %+v, want a malformed-provenance refusal", res)
+		}
+	})
+
+	// An entry keyed by one final line but claiming another is corrupt;
+	// refuse rather than trust either number.
+	t.Run("entry whose FinalLine disagrees with its key is refused", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			2: {Commit: tips["a"], OriginalLine: 2, FinalLine: 5, Path: "f.txt"},
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || !strings.Contains(res.Refused[0].Reason, "missing or malformed") {
+			t.Fatalf("result = %+v, want a malformed-provenance refusal", res)
+		}
+	})
+
+	// The positive twin: a multi-line hunk whose every line carries identity
+	// provenance (contiguous by construction) still absorbs.
+	t.Run("multi-line hunk with identity provenance absorbs", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 2, NewStart: 2, NewN: 2}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			2: blameID(tips["a"], 2, "f.txt"),
+			3: blameID(tips["a"], 3, "f.txt"),
+		}}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Absorbed) != 1 || len(res.Refused) != 0 {
+			t.Fatalf("result = %+v, want the identity two-line hunk absorbed", res)
 		}
 	})
 
@@ -157,7 +279,7 @@ func TestAbsorbPlanAttribution(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {5: oldBTip}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {5: blameID(oldBTip, 5, "f.txt")}}
 
 		res, err := AbsorbPlan(env, s)
 		if err != nil {
@@ -177,7 +299,7 @@ func TestAbsorbApply(t *testing.T) {
 		f.staged = true
 		f.stagedPatch = []byte("fake patch")
 		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-		f.blame = map[string]map[int]string{"f.txt": {2: tips[owner]}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips[owner], 2, "f.txt")}}
 	}
 
 	t.Run("single target amends the tip and cascades", func(t *testing.T) {
@@ -291,7 +413,7 @@ func TestAbsorbApply(t *testing.T) {
 	stageTwoTargets := func(f *fakeGit, tips map[string]string) {
 		stage(f, tips, "a")
 		f.stagedHunks = append(f.stagedHunks, git.Hunk{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1})
-		f.blame["f.txt"][5] = tips["b"]
+		f.blame["f.txt"][5] = blameID(tips["b"], 5, "f.txt")
 	}
 
 	t.Run("multi-target plan amends every target and cascades once", func(t *testing.T) {
@@ -453,7 +575,7 @@ func TestAbsorbPlanSpawnDiet(t *testing.T) {
 	f, s, env, tips := absorbEnv(t)
 	f.staged = true
 	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
 	spy := &tipReadSpyGit{Git: f}
 	env.Git = spy
 
@@ -486,9 +608,9 @@ func TestAbsorbPlanBatchesBlamePerFile(t *testing.T) {
 		{File: "b.txt", OldStart: 3, OldN: 1, NewStart: 3, NewN: 1},
 		{File: "b.txt", OldStart: 9, OldN: 1, NewStart: 9, NewN: 1},
 	}
-	f.blame = map[string]map[int]string{
-		"a.txt": {2: tips["a"], 7: tips["a"]},
-		"b.txt": {3: tips["a"], 9: tips["a"]},
+	f.blame = map[string]map[int]git.BlameLine{
+		"a.txt": {2: blameID(tips["a"], 2, "a.txt"), 7: blameID(tips["a"], 7, "a.txt")},
+		"b.txt": {3: blameID(tips["a"], 3, "b.txt"), 9: blameID(tips["a"], 9, "b.txt")},
 	}
 	spy := &tipReadSpyGit{Git: f}
 	env.Git = spy
@@ -519,7 +641,7 @@ func TestAbsorbPreFlightReadsWorktreesOnce(t *testing.T) {
 		{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
 		{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
 	}
-	f.blame = map[string]map[int]string{"f.txt": {2: tips["a"], 5: tips["b"]}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt"), 5: blameID(tips["b"], 5, "f.txt")}}
 	f.addWorktree("/wt/b", "b")
 	f.dirtyWT = map[string]bool{"b": true}
 	spy := &tipReadSpyGit{Git: f}
@@ -563,7 +685,7 @@ func TestAbsorbPlanGuards(t *testing.T) {
 	// is unstaged-only). staged=true makes IsClean false but absorb proceeds.
 	f.staged = true
 	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	f.blame = map[string]map[int]string{"f.txt": {2: tips["a"]}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
 	res, err = AbsorbPlan(env, s)
 	if err != nil {
 		t.Fatalf("AbsorbPlan with a staged index: %v", err)
@@ -597,7 +719,7 @@ func TestAbsorbPlanRefusesOffPathSiblingTip(t *testing.T) {
 	}
 	s.Track("side", "main", tips["main"])
 	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	f.blame = map[string]map[int]string{"f.txt": {2: oldATip}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(oldATip, 2, "f.txt")}}
 
 	res, err := AbsorbPlan(env, s)
 	if err != nil {
@@ -624,7 +746,7 @@ func TestAbsorbPlanOffPathSharedTipStaysOnPath(t *testing.T) {
 	}
 	s.Track("side", "main", tips["main"])
 	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	f.blame = map[string]map[int]string{"f.txt": {2: tips["b"]}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["b"], 2, "f.txt")}}
 
 	for i := 0; i < 20; i++ {
 		res, err := AbsorbPlan(env, s)
@@ -655,7 +777,7 @@ func TestAbsorbPlanSharedTipDeterministic(t *testing.T) {
 	}
 	s.Track("mark", "b", tips["b"])
 	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	f.blame = map[string]map[int]string{"f.txt": {2: tips["b"]}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["b"], 2, "f.txt")}}
 
 	for i := 0; i < 20; i++ {
 		res, err := AbsorbPlan(env, s)
