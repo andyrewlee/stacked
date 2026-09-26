@@ -35,7 +35,7 @@ These are bounded design tasks. Completing one produces a contract, examples, ac
 
 | Plan | Outcome | Audit ID | Priority | Effort | Risk | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| [015](015-design-structured-recovery-status.md) | Specify structured recovery and skip results for orchestrators | D1 | P2 | M | MED | TODO |
+| [015](015-design-structured-recovery-status.md) | Specify structured recovery and skip results for orchestrators | D1 | P2 | M | MED | DONE |
 | [016](016-design-undo-impact-preview.md) | Specify a read-only preview of the next undo's impact | D2 | P2 | M | MED | TODO |
 | [017](017-design-branch-aware-completion.md) | Specify fast read-only branch completion for supported shells | D3 | P3 | S–M | LOW | TODO |
 

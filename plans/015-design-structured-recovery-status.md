@@ -14,7 +14,18 @@
 - **Category:** direction
 - **Audit item:** D1
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/015-design-structured-recovery-status` (stacked on `advisor/014`).
+
+- Step 1 trace: mapped `runRestack`/`runSync`/`runContinue`/`runAbort` adapters, the shared mutation JSON shape, `s.skippedWorktrees`→`skippedWorktreeNote` prose drain (`internal/stack/engine.go:371-386`), the `ConflictError`→exit-2 stderr envelope (`cmd/root.go:405-419`), the cross-worktree rolled-back conflict (plain error, exit 1, `internal/stack/worktree.go:230-243`), `status --json`'s existing `rebaseInProgress`/`rebaseBranch`/`conflictedFiles`, and the already-structured `worktree --all`/`rm --all` `skipped` precedent.
+- Step 2 chose ONE additive contract: optional `recovery` array on success results and conflict envelopes; closed reason registry `{worktree_dirty, conflict_paused, conflict_rolled_back}`; `state` ∈ `{skipped, paused, rolled_back}`; `action.kind` ∈ `{argv (only when the next command is known-resumable), manual}`; omission-vs-empty, ordering, stderr/stdout placement, uninitialized-repo behavior and the strict-decoder boundary all specified. Proposed fields carry a `proposed` marker list per fixture.
+- Artifacts: `plans/design/015-structured-recovery-status.md` (7 required sections), `015-recovery-examples.json` (8 scenarios), `015-recovery-acceptance.md` (scenario→test map + invariants), `check-recovery.py` (stdlib validator: JSON syntax, required scenarios, registered reasons, argv/cwd shapes, proposed-path resolution, acceptance cross-refs, required design sections).
+- Verify commands: `rg -n '^## (Current contract|Proposed contract|Compatibility|State and concurrency|Examples|Acceptance|Deferred work)$' plans/design/015-structured-recovery-status.md` → all 7 sections present; `python3 plans/design/check-recovery.py` → `OK: 8 scenarios, 3 reasons, all shapes and cross-references consistent` (exit 0).
+- Focused source tests confirming the traced surface: `go test ./cmd -run 'Test(ContinueJSONAfterConflict|StatusJSONSurfacesConflict)' -count=1` → ok; `go test ./internal/stack -run 'TestOntoConflict|TestRestack' -count=1` → ok.
+- `git diff --check` → exit 0; created files all in Scope (`plans/design/*` + this plan + `plans/README.md`). No runtime source, tests, or repository metadata changed.
 
 ## Why this matters
 

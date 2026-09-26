@@ -1,0 +1,197 @@
+[
+  {
+    "scenario": "clean_success",
+    "_note": "Baseline: no recovery entries at all. The whole response is current behavior; `recovery` is absent (omitted, never []).",
+    "command": "st restack --json",
+    "stdout": {
+      "summary": "restacked",
+      "restacked": ["feat-b", "feat-c"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": []
+  },
+  {
+    "scenario": "dirty_remote_worktree_skip",
+    "_note": "feat-c lives in a dirty linked worktree: skipped into structured recovery AND the existing prose note. PROPOSED: `recovery` (entire field).",
+    "command": "st restack --json",
+    "stdout": {
+      "summary": "restacked",
+      "restacked": ["feat-b"],
+      "notes": ["skipped feat-c: its worktree is dirty (commit/stash there, then re-run)"],
+      "recovery": [
+        {
+          "branch": "feat-c",
+          "reason": "worktree_dirty",
+          "worktree": "/repo/.st/worktrees/feat-c",
+          "state": "skipped",
+          "action": {
+            "kind": "manual",
+            "detail": "commit or stash inside /repo/.st/worktrees/feat-c, then re-run st restack"
+          }
+        }
+      ]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout.recovery"]
+  },
+  {
+    "scenario": "current_worktree_paused_conflict",
+    "_note": "Rebase paused in the caller's worktree. Envelope keeps error.branch/onto; PROPOSED: recovery[] on stderr plus restacked progress surfacing.",
+    "command": "st restack --json",
+    "stdout": "",
+    "stderr": {
+      "error": {
+        "code": "conflict",
+        "message": "rebasing \"feat-b\" onto \"feat-a\": rebase conflict — resolve the conflicted files, then run 'st continue' (or 'st abort' to roll back)",
+        "branch": "feat-b",
+        "onto": "feat-a"
+      },
+      "restacked": ["feat-a-child"],
+      "recovery": [
+        {
+          "branch": "feat-b",
+          "reason": "conflict_paused",
+          "state": "paused",
+          "action": {
+            "kind": "argv",
+            "argv": ["st", "continue"]
+          }
+        }
+      ]
+    },
+    "exitCode": 2,
+    "proposed": ["stderr.recovery", "stderr.restacked"]
+  },
+  {
+    "scenario": "continuation_conflicts_again",
+    "_note": "st continue re-stalls on the same branch: same envelope shape, action still st continue. PROPOSED: recovery[].",
+    "command": "st continue --json",
+    "stdout": "",
+    "stderr": {
+      "error": {
+        "code": "conflict",
+        "message": "continuing \"feat-b\": rebase conflict — resolve the conflicted files, then run 'st continue' (or 'st abort' to roll back)",
+        "branch": "feat-b"
+      },
+      "recovery": [
+        {
+          "branch": "feat-b",
+          "reason": "conflict_paused",
+          "state": "paused",
+          "action": {
+            "kind": "argv",
+            "argv": ["st", "continue"]
+          }
+        }
+      ]
+    },
+    "exitCode": 2,
+    "proposed": ["stderr.recovery"]
+  },
+  {
+    "scenario": "cross_worktree_conflict_rolled_back",
+    "_note": "Conflict inside a linked worktree is aborted there by st — NOT resumable via `st continue` here. PROPOSED: error.branch, recovery[] with state rolled_back and a manual action naming the worktree.",
+    "command": "st restack --json",
+    "stdout": "",
+    "stderr": {
+      "error": {
+        "code": "error",
+        "message": "rebasing \"feat-b\" in its worktree \"/repo/.st/worktrees/feat-b\": rebase conflict (resolve it there, then re-run)",
+        "branch": "feat-b"
+      },
+      "recovery": [
+        {
+          "branch": "feat-b",
+          "reason": "conflict_rolled_back",
+          "worktree": "/repo/.st/worktrees/feat-b",
+          "state": "rolled_back",
+          "action": {
+            "kind": "manual",
+            "detail": "rebase feat-b inside /repo/.st/worktrees/feat-b (resolve there), then re-run st restack"
+          }
+        }
+      ]
+    },
+    "exitCode": 1,
+    "proposed": ["stderr.error.branch", "stderr.recovery"]
+  },
+  {
+    "scenario": "partial_earlier_progress",
+    "_note": "Two branches already restacked before the conflict paused — progress must stay visible to a machine reader, not just prose. PROPOSED: stderr.restacked + recovery[].",
+    "command": "st restack --all --json",
+    "stdout": "",
+    "stderr": {
+      "error": {
+        "code": "conflict",
+        "message": "rebasing \"feat-c\" onto \"feat-b\": rebase conflict — resolve the conflicted files, then run 'st continue' (or 'st abort' to roll back)",
+        "branch": "feat-c",
+        "onto": "feat-b"
+      },
+      "restacked": ["feat-a", "feat-b"],
+      "recovery": [
+        {
+          "branch": "feat-c",
+          "reason": "conflict_paused",
+          "state": "paused",
+          "action": {
+            "kind": "argv",
+            "argv": ["st", "continue"]
+          }
+        },
+        {
+          "branch": "feat-d",
+          "reason": "worktree_dirty",
+          "worktree": "/repo/.st/worktrees/feat-d",
+          "state": "skipped",
+          "action": {
+            "kind": "manual",
+            "detail": "commit or stash inside /repo/.st/worktrees/feat-d, then re-run st restack"
+          }
+        }
+      ]
+    },
+    "exitCode": 2,
+    "proposed": ["stderr.recovery", "stderr.restacked"]
+  },
+  {
+    "scenario": "not_initialized",
+    "_note": "Outside an initialized repo the contract is the plain not_initialized envelope; recovery must not appear. All current behavior.",
+    "command": "st restack --json",
+    "stdout": "",
+    "stderr": {
+      "error": {
+        "code": "not_initialized",
+        "message": "not an st repository (run: st init)"
+      }
+    },
+    "exitCode": 3,
+    "proposed": []
+  },
+  {
+    "scenario": "escaped_path_bytes",
+    "_note": "Worktree path containing a newline byte: JSON escapes it inside the raw worktree value (encoding/json), reason stays worktree_dirty, action stays manual. PROPOSED: recovery[].",
+    "command": "st restack --json",
+    "stdout": {
+      "summary": "restacked",
+      "restacked": [],
+      "notes": ["skipped feat-x: its worktree is dirty (commit/stash there, then re-run)"],
+      "recovery": [
+        {
+          "branch": "feat-x",
+          "reason": "worktree_dirty",
+          "worktree": "/repo/wt\nevils",
+          "state": "skipped",
+          "action": {
+            "kind": "manual",
+            "detail": "commit or stash inside /repo/wt\nevils, then re-run st restack"
+          }
+        }
+      ]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout.recovery"]
+  }
+]
