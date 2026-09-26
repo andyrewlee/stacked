@@ -14,7 +14,21 @@
 - **Category:** bug
 - **Audit item:** 3
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/004-refuse-shifted-absorb-mappings` (stacked on `advisor/003`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- <scoped files>` → only documented predecessor changes (001 test-env isolation, 002 `--no-renames` enumeration, 003 staged-diff accounting) plus plan-file additions; no unexplained source drift. An uncommitted `e2e/e2e_absorb_test.go` change was this plan's own regression-in-progress.
+- Step 1: added `TestAbsorbRefusesShiftedRepeatedLines` in `e2e/e2e_absorb_test.go` (insert-shift, delete-shift, historical rename each refuse; unshifted control absorbs). Pre-fix run failed as specified: all three unsafe cases reported a zero-refusal plan that would apply at the wrong coordinate.
+- Step 2: `BlamePorcelain` now runs `git blame --line-porcelain` and returns `map[int]BlameLine{Commit, OriginalLine, FinalLine, Path}`; the parser requires a 40-char SHA, both coordinates, and a decodable `filename` record (C-quoted octal/UTF-8 via `strconv.Unquote`, unquoted spaces, malformed records dropped rather than guessed). Port updated in `internal/stack/git.go`, `internal/git/shell.go`, and the fake.
+- Step 3: `absorbPlan` refuses when any removed line's provenance is missing/malformed, original≠final line, historical path≠current path, ownership is mixed, or old-side coordinates are noncontiguous — all before any amend/reset/checkpoint. All `absorb_test.go` fixtures now supply explicit provenance via a `blameID` helper; new engine cases cover identity, insert/delete shifts, missing provenance, and rename.
+- Parser tests added for repeated commits, spaces, UTF-8 (quoted and raw `core.quotePath=false`), encoded names, control escapes, and malformed/missing provenance.
+- Post-fix: `go test ./internal/git ./internal/stack -run 'Test.*(Absorb|Blame|DiffCachedPatchFor)' -count=1` → ok; e2e regression → PASS (the first test version snapshotted the index before staging; fixed to snapshot after staging so "index preserved" is meaningful).
+- `make test-fast` → ok; `make test` covered by `make ci`; `git diff --check` → exit 0; all modified files in Scope.
+- `make ci` on commit `86b0e46` in detached worktree `/private/tmp/st-ci-004` → exit 0 (golangci-lint v2.12.2 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 86.8% ≥ 75%).
+- Docs updated: `CLAUDE.md` and `docs/AGENT.md` absorb sections now describe the shifted/historically-renamed refusal; `CHANGELOG.md` notes the conservative refusal.
 
 ## Why this matters
 

@@ -1929,8 +1929,9 @@ func TestCommitRange(t *testing.T) {
 	}
 }
 
-// TestBlamePorcelain pins the porcelain parser: each line maps to the SHA
-// that last touched it, across two commits.
+// TestBlamePorcelain pins the porcelain parser over a real repository: each
+// final line maps to its full provenance — the commit that last touched it,
+// its line number in that commit, and its path there — across two commits.
 func TestBlamePorcelain(t *testing.T) {
 	newRepo(t)
 	writeFile(t, "f.txt", "one\ntwo\nthree\n")
@@ -1946,13 +1947,106 @@ func TestBlamePorcelain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BlamePorcelain: %v", err)
 	}
-	if lines[1] != c1 || lines[3] != c1 {
-		t.Fatalf("lines 1/3 = %s/%s, want both %s", lines[1], lines[3], c1)
-	}
-	if lines[2] != c2 {
-		t.Fatalf("line 2 = %s, want %s", lines[2], c2)
+	for n, want := range map[int]BlameLine{
+		1: {Commit: c1, OriginalLine: 1, FinalLine: 1, Path: "f.txt"},
+		2: {Commit: c2, OriginalLine: 2, FinalLine: 2, Path: "f.txt"},
+		3: {Commit: c1, OriginalLine: 3, FinalLine: 3, Path: "f.txt"},
+	} {
+		if lines[n] != want {
+			t.Fatalf("line %d = %+v, want %+v", n, lines[n], want)
+		}
 	}
 	if len(lines) != 3 {
 		t.Fatalf("lines = %v, want exactly 3 entries", lines)
 	}
+}
+
+// TestBlamePorcelainProvenance exercises the provenance the absorb gate
+// depends on, over real git: a descendant that inserts a line reports the
+// owned line's ORIGINAL number (shifted from its final position), and a
+// rename reports the historical path — both must survive to the caller, not
+// be flattened away.
+func TestBlamePorcelainProvenance(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "f.txt", "top\nx\nbottom\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "c1")
+	writeFile(t, "f.txt", "top\nOWNED\nbottom\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "c2")
+	c2 := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "f.txt", "inserted\ntop\nOWNED\nbottom\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "c3 shifts OWNED to line 3")
+
+	lines, err := BlamePorcelain("f.txt", "HEAD")
+	if err != nil {
+		t.Fatalf("BlamePorcelain: %v", err)
+	}
+	if got := lines[3]; got != (BlameLine{Commit: c2, OriginalLine: 2, FinalLine: 3, Path: "f.txt"}) {
+		t.Fatalf("line 3 = %+v, want c2's original line 2 shifted to 3", got)
+	}
+
+	mustGit(t, "mv", "f.txt", "g.txt")
+	mustGit(t, "commit", "-q", "-m", "c4 renames")
+	lines, err = BlamePorcelain("g.txt", "HEAD")
+	if err != nil {
+		t.Fatalf("BlamePorcelain after rename: %v", err)
+	}
+	if got := lines[3]; got.Commit != c2 || got.OriginalLine != 2 || got.FinalLine != 3 || got.Path != "f.txt" {
+		t.Fatalf("line 3 = %+v, want historical path f.txt retained", got)
+	}
+}
+
+// TestParseBlamePorcelain drives the canned-fixture half of the parser:
+// unquoted names with spaces, C-quoted UTF-8 and control-byte names, a
+// filename record missing entirely, and malformed headers — every one of
+// which must land in the map exactly or not at all.
+func TestParseBlamePorcelain(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+
+	t.Run("unquoted names with spaces and UTF-8", func(t *testing.T) {
+		out := sha + " 2 5\nfilename dir with space/f ile.txt\n\tline\n" +
+			sha + " 1 1\nfilename utf-é.txt\n\tligne\n"
+		got := parseBlamePorcelain(out)
+		if got[5] != (BlameLine{Commit: sha, OriginalLine: 2, FinalLine: 5, Path: "dir with space/f ile.txt"}) {
+			t.Fatalf("spaced path = %+v", got[5])
+		}
+		if got[1] != (BlameLine{Commit: sha, OriginalLine: 1, FinalLine: 1, Path: "utf-é.txt"}) {
+			t.Fatalf("utf-8 path = %+v", got[1])
+		}
+	})
+
+	t.Run("C-quoted octal, quote, and control escapes decode", func(t *testing.T) {
+		out := sha + " 1 1\nfilename \"utf-\\303\\251.txt\"\n\tx\n" +
+			sha + " 2 2\nfilename \"quo\\\"te.txt\"\n\tx\n" +
+			sha + " 3 3\nfilename \"tab\\tname.txt\"\n\tx\n" +
+			sha + " 4 4\nfilename \"new\\nline.txt\"\n\tx\n" +
+			sha + " 5 5\nfilename \"back\\\\slash.txt\"\n\tx\n"
+		got := parseBlamePorcelain(out)
+		for n, want := range map[int]string{
+			1: "utf-é.txt",
+			2: `quo"te.txt`,
+			3: "tab\tname.txt",
+			4: "new\nline.txt",
+			5: `back\slash.txt`,
+		} {
+			if got[n].Path != want {
+				t.Fatalf("line %d path = %q, want %q", n, got[n].Path, want)
+			}
+		}
+	})
+
+	t.Run("malformed records are dropped, never guessed", func(t *testing.T) {
+		out := sha + " 1 1\n\tcontent with no filename record\n" + // no filename at all
+			"garbage header\n" +
+			sha + " 2 2\nfilename \"unbalanced\n\tx\n" + // broken quoting
+			sha + " 3\nfilename f.txt\n\tx\n" + // header missing finalLine
+			sha + " notnum 4\nfilename f.txt\n\tx\n" + // non-numeric origLine
+			sha + " 5 5\nfilename f.txt\n\tok\n"
+		got := parseBlamePorcelain(out)
+		if len(got) != 1 || got[5].Path != "f.txt" {
+			t.Fatalf("got = %+v, want only the well-formed line 5 entry", got)
+		}
+	})
 }

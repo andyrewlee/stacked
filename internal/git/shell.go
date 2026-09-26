@@ -70,7 +70,7 @@ func (Shell) RebaseAbortIn(dir string) error                        { return Reb
 func (Shell) IsCleanIn(dir string) (bool, error)                    { return IsCleanIn(dir) }
 func (Shell) WorktreeRemove(dir string, force bool) error           { return WorktreeRemove(dir, force) }
 func (Shell) DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) { return DiffCachedHunks() }
-func (Shell) BlamePorcelain(file, rev string) (map[int]string, error) {
+func (Shell) BlamePorcelain(file, rev string) (map[int]BlameLine, error) {
 	return BlamePorcelain(file, rev)
 }
 
