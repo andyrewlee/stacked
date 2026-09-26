@@ -417,6 +417,64 @@ func TestSubmitRealPushSetsUpstream(t *testing.T) {
 	}
 }
 
+// TestSubmitNonPrefixPartialPush drives a real push whose remote rejects the
+// middle branch: the JSON result on stdout reports every confirmed outcome —
+// pushed [feat-a, feat-c] in stack order and failed feat-b — the process still
+// exits non-zero with the error envelope on stderr, and the remote refs agree.
+func TestSubmitNonPrefixPartialPush(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+
+	// A per-ref update hook rejects feat-b while feat-a and feat-c land in the
+	// same batch — unlike pre-receive, which would refuse the push atomically.
+	hook := filepath.Join(bare, "hooks", "update")
+	script := "#!/bin/sh\n[ \"$1\" = refs/heads/feat-b ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatalf("write update hook: %v", err)
+	}
+
+	res := r.st("submit", "--json")
+	if res.exitCode == 0 {
+		t.Fatalf("st submit --json succeeded; want a non-zero partial-failure exit\nstdout:\n%s", res.stdout)
+	}
+	wantStderrContains(t, res, `"code": "error"`)
+
+	var payload struct {
+		Pushed []string `json:"pushed"`
+		Failed string   `json:"failed"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &payload); err != nil {
+		t.Fatalf("partial submit stdout is not the JSON result: %v\n%s", err, res.stdout)
+	}
+	if len(payload.Pushed) != 2 || payload.Pushed[0] != "feat-a" || payload.Pushed[1] != "feat-c" {
+		t.Fatalf("pushed = %v, want [feat-a feat-c] in stack order", payload.Pushed)
+	}
+	if payload.Failed != "feat-b" {
+		t.Fatalf("failed = %q, want feat-b", payload.Failed)
+	}
+
+	// The remote itself confirms the non-prefix outcome.
+	remoteBranches := r.gitIn(bare, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	for _, b := range []string{"feat-a", "feat-c"} {
+		if !strings.Contains(remoteBranches, b) {
+			t.Fatalf("remote missing confirmed branch %q; remote has:\n%s", b, remoteBranches)
+		}
+	}
+	if strings.Contains(remoteBranches, "feat-b") {
+		t.Fatalf("rejected branch feat-b exists on remote:\n%s", remoteBranches)
+	}
+}
+
 // TestCompletion asserts each supported shell emits a non-empty script and an
 // unsupported shell errors.
 func TestCompletion(t *testing.T) {

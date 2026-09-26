@@ -129,10 +129,16 @@ message.
   targets its stack parent; `compareURL` is present for known compare URL shapes
   (github.com, gitlab.com, and self-hosted hosts whose name carries a
   `github`/`gitlab` label); for unrecognized hosts the hint object still
-  carries `head`/`base` but `compareURL` is simply absent. On a partial push failure the result is the
-  same shape carrying `{ "remote", "dryRun", "pushed", "failed" }`: `failed` names the
-  branch whose push failed, the branches in `pushed` were already pushed to the
-  remote, and the process still exits non-zero with the error envelope on stderr.
+  carries `head`/`base` but `compareURL` is simply absent. Submit reads the single
+  batch push's own per-ref statuses, so a partial failure can report a
+  non-prefix outcome — e.g. `pushed` `[A,C]` with `failed` `B` when the remote
+  accepted A and C but rejected B in the same push: the result is the same
+  shape carrying `{ "remote", "dryRun", "pushed", "failed" }`, `pushed` lists
+  every branch the remote confirmed updated or already current in stack order,
+  `failed` names the first confirmed rejection, and the process still exits
+  non-zero with the error envelope on stderr. A ref whose outcome the push did
+  not confirm is reported in neither field — the stderr message describes the
+  uncertainty instead.
 - **`init --json`** — one shape for both outcomes:
   `{ "trunk", "initialized": bool, "alreadyInitialized": bool }` (a fresh init
   sets `initialized`; an already-initialized repo sets `alreadyInitialized`).
