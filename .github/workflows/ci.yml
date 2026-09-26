@@ -106,6 +106,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: scripts/check-install-assets.sh
 
+      # The signature/checksum decision matrix exercises install.sh's
+      # fail-closed paths against a disposable signed fixture — it needs a real
+      # minisign but never a release secret (keys are generated per run).
+      - name: Install minisign
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+      - name: Installer signature decision matrix
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-install-signatures.sh
+
       - name: make ci
         run: make ci
 
