@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -75,7 +76,10 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		return nil, err
 	}
 
-	var copied []string
+	// Phase 1 — select the entries that would actually copy. The gates are the
+	// same as before (exists in source, gitignored, contained in the repo);
+	// nothing is written to the destination in this phase.
+	var candidates []string
 	for _, rel := range entries {
 		src := filepath.Join(srcRoot, rel)
 		if _, err := os.Lstat(src); err != nil {
@@ -91,16 +95,107 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		if realParent != realRoot && !strings.HasPrefix(realParent, realRoot+string(filepath.Separator)) {
 			continue // resolves outside the repo, for example through a symlinked dir
 		}
+		candidates = append(candidates, rel)
+	}
+
+	// Phase 2 — destination preflight, all-or-nothing BEFORE the first copy:
+	// a later colliding entry must not leave earlier copies behind. Read-only:
+	// no destination directories are created here.
+	if err := refuseDestinationCollisions(dstRoot, candidates); err != nil {
+		return nil, err
+	}
+
+	var copied []string
+	for _, rel := range candidates {
 		dst, err := prepareSafeDestination(dstRoot, rel)
 		if err != nil {
 			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
 		}
-		if err := reflinkCopy(src, dst); err != nil {
+		if err := reflinkCopy(filepath.Join(srcRoot, rel), dst); err != nil {
 			return copied, err
 		}
 		copied = append(copied, rel)
 	}
 	return copied, nil
+}
+
+// refuseDestinationCollisions rejects every selected include whose
+// destination is not empty, BEFORE any file is copied. A collision is: rel is
+// tracked in the destination (ls-files — including a tracked-but-missing
+// worktree file), a tracked path lives beneath a selected dir, a tracked path
+// is an ancestor of rel (destination tracks "dir" as a file/symlink/gitlink
+// while rel is "dir/sub"), or ANY filesystem entry already sits at the
+// destination root (untracked file, symlink, or directory — including an
+// empty one: `cp -R src dst` would merge into an existing dst dir, while
+// plainCopy would overwrite files, so the strategies must both start from an
+// absent root). Existing ANCESTOR directories are still fine — the copy's own
+// containment checks govern those. Pure validation: no directory creation.
+func refuseDestinationCollisions(dstRoot string, candidates []string) error {
+	tracked, trackedSorted, err := gitTrackedPaths(dstRoot)
+	if err != nil {
+		return err
+	}
+	for _, rel := range candidates {
+		slashed := filepath.ToSlash(rel)
+		dst := filepath.Join(dstRoot, rel)
+		info, lerr := os.Lstat(dst)
+		// A symlink is refused FIRST even when it is also tracked: it names
+		// the more specific hazard — a copy could follow it outside the
+		// worktree.
+		if lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf(".worktreeinclude path %q: unsafe destination symlink %q", rel, dst)
+		}
+		if tracked[slashed] {
+			return fmt.Errorf(".worktreeinclude path %q is tracked in the destination worktree", rel)
+		}
+		// A tracked DESCENDANT under a selected directory entry: copying the
+		// dir would merge into tracked content.
+		i := sort.SearchStrings(trackedSorted, slashed+"/")
+		if i < len(trackedSorted) && strings.HasPrefix(trackedSorted[i], slashed+"/") {
+			return fmt.Errorf(".worktreeinclude path %q contains the destination-tracked path %q", rel, trackedSorted[i])
+		}
+		// A tracked ANCESTOR of rel: the destination tracks "dir" itself (file,
+		// symlink or gitlink), so "dir/sub" cannot be created beneath it.
+		for parent := path.Dir(slashed); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			if tracked[parent] {
+				return fmt.Errorf(".worktreeinclude path %q sits under the destination-tracked path %q", rel, parent)
+			}
+		}
+		if lerr != nil && !os.IsNotExist(lerr) {
+			return fmt.Errorf(".worktreeinclude path %q: %w", rel, lerr)
+		}
+		if lerr == nil {
+			// Non-symlink entry (file or directory — even an empty dir, which
+			// `cp -R` would merge into) already occupies the destination root.
+			return fmt.Errorf(".worktreeinclude path %q already exists in the destination worktree", rel)
+		}
+	}
+	return nil
+}
+
+// gitTrackedPaths returns the destination worktree's tracked paths as a
+// lookup set plus a sorted list (for descendant prefix probes), from one
+// `git -C dstRoot ls-files -z` — NUL-separated so paths with spaces or quotes
+// survive byte-exact. A destination that is not a git worktree (plain dir, as
+// in unit tests) yields an empty set; a real ls-files failure is an error.
+func gitTrackedPaths(dstRoot string) (tracked map[string]bool, trackedSorted []string, err error) {
+	tracked = map[string]bool{}
+	if _, err := os.Lstat(filepath.Join(dstRoot, ".git")); err != nil {
+		return tracked, nil, nil // not a git worktree: nothing can be tracked
+	}
+	cmd := exec.Command("git", "-C", dstRoot, "ls-files", "-z")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, nil, fmt.Errorf("git -C %s ls-files: %w", dstRoot, err)
+	}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			tracked[p] = true
+			trackedSorted = append(trackedSorted, p)
+		}
+	}
+	sort.Strings(trackedSorted)
+	return tracked, trackedSorted, nil
 }
 
 // dropNestedEntries removes every entry that lives inside another selected
@@ -368,8 +463,14 @@ func reflinkCopy(src, dst string) error {
 		return plainCopy(src, dst)
 	}
 	if err := exec.Command("cp", args...).Run(); err != nil {
-		// cp may be absent or reject -c on an unsupported FS; fall back so the copy
-		// still happens, just without the reflink speedup.
+		// cp may be absent or reject -c on an unsupported FS; fall back so the
+		// copy still happens, just without the reflink speedup. But only when cp
+		// left nothing behind: if it created partial destination content, merging
+		// a fresh plainCopy into that tree mixes strategies on half-written data —
+		// return the cp error so the caller's fresh-worktree rollback discards it.
+		if _, statErr := os.Lstat(dst); statErr == nil {
+			return err
+		}
 		return plainCopy(src, dst)
 	}
 	return nil

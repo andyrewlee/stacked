@@ -2122,6 +2122,76 @@ func TestWorktreeRemoveAllJourney(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestWorktreeCopyCollisionRollsBackWorktree: when a .worktreeinclude entry's
+// destination is already tracked on the branch being materialized, the copy
+// refuses and the just-created worktree is removed again — a preexisting
+// worktree and the source's ignored files are untouched.
+func TestWorktreeCopyCollisionRollsBackWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	// secret.txt is ignored on the source branch and selected for copying.
+	// The manifest is committed so it exists on every branch and worktree —
+	// left untracked, `st create -a` would sweep it into the new branch's
+	// commit and switching back to main would delete it.
+	r.writeFile(".gitignore", "secret.txt\n")
+	r.writeFile(".worktreeinclude", "secret.txt\n")
+	r.git("add", ".gitignore", ".worktreeinclude")
+	r.git("commit", "-q", "-m", "ignore secret.txt")
+	r.writeFile("secret.txt", "SECRET=local\n")
+
+	// A sibling's preexisting worktree must survive the rollback untouched.
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so a worktree can check it out
+	addA := r.stOK("worktree", "feat-a", "--json")
+	var wtA struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(addA.stdout), &wtA); err != nil {
+		t.Fatalf("worktree feat-a --json: %v\n%s", err, addA.stdout)
+	}
+	if wtA.Path == "" {
+		t.Fatalf("worktree feat-a --json returned no path: %s", addA.stdout)
+	}
+
+	// feat-b TRACKS secret.txt — the colliding path. Once committed on feat-b,
+	// switching back to main removes it from the main worktree, so restore the
+	// ignored local copy the copy step should find.
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.git("add", "-f", "secret.txt")
+	r.git("commit", "-q", "-m", "track secret on feat-b")
+	r.stOK("checkout", "main")
+	r.writeFile("secret.txt", "SECRET=local\n")
+
+	res := r.st("worktree", "feat-b")
+	if res.exitCode == 0 {
+		t.Fatalf("st worktree feat-b succeeded; want a destination-collision refusal\nstdout:\n%s", res.stdout)
+	}
+	if !strings.Contains(res.stderr+res.stdout, "secret.txt") {
+		t.Fatalf("refusal should name secret.txt\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	}
+
+	// The just-created worktree must be gone — from git's registry and from
+	// disk under the generated worktrees root.
+	if out := r.git("worktree", "list", "--porcelain"); strings.Contains(out, "feat-b") {
+		t.Fatalf("feat-b still owns a worktree after copy failure:\n%s", out)
+	}
+	matches, err := filepath.Glob(filepath.Join(r.home, ".stacked", "worktrees", "*", "feat-b"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("feat-b worktree path survived rollback: %v (err %v)", matches, err)
+	}
+
+	// The preexisting worktree and the ignored source file are untouched.
+	if b, rerr := os.ReadFile(filepath.Join(wtA.Path, "a.txt")); rerr != nil || string(b) != "a\n" {
+		t.Fatalf("preexisting feat-a worktree damaged by rollback: %q, %v", b, rerr)
+	}
+	if b, rerr := os.ReadFile(filepath.Join(r.dir, "secret.txt")); rerr != nil || string(b) != "SECRET=local\n" {
+		t.Fatalf("source secret.txt = %q, %v; must remain untouched", b, rerr)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncNoRemote asserts sync is a clean no-op when no remote is configured.
 func TestSyncNoRemote(t *testing.T) {
 	t.Parallel()
