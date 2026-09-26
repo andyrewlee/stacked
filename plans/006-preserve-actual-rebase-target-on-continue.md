@@ -14,7 +14,20 @@
 - **Category:** bug
 - **Audit item:** 5
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/006-preserve-actual-rebase-target-on-continue` (stacked on `advisor/005`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- <scoped files>` → only documented predecessor changes (001 test-env isolation, 002–004 absorb work, 005 undo schema barrier) plus plan-file additions; no unexplained source drift.
+- Step 1: added `TestContinueUsesActualRebaseOnto` — child paused onto parent tip A1, parent advanced to A2, then continue. Save-checkpoint assertions prove the completed-rebase checkpoint records A1 while the following restack legitimately re-runs onto A2; a repeated-conflict variant retains the A1 checkpoint. A `conflictEvery` knob on the fake models conflicts that persist across continue attempts. Stashing the engine change made the moved-parent case fail as specified (checkpoint recorded the moved tip, suppressing the catch-up restack).
+- Step 2: added `RebaseOntoSHA` to the `stack.Git` port, `git.Shell` (reads worktree-local `rebase-merge/onto` or `rebase-apply/onto`, validates the SHA, refuses outside a paused rebase), and the fake (returns the recorded `rebaseNewBase`, plus a `rebaseOntoErr` knob). `stack.Continue` captures the target BEFORE `RebaseContinue` — the call removes the metadata — and stamps the captured SHA as the recorded parent.
+- Step 3: engine tests `TestContinueUsesActualRebaseOnto` and `TestContinueRefusesWhenRebaseTargetUnreadable` (unreadable metadata leaves the paused rebase and refs untouched); adapter tests `TestRebaseOntoSHA` (both metadata layouts plus corrupt/missing fixtures), `TestRebaseOntoSHARealRebase` (real conflict, default backend), `TestRebaseOntoSHALinkedWorktree` (metadata read inside a linked worktree); e2e `TestContinueAfterParentMoves` (paused restack + moved parent + caught-up descendant cascade).
+- Focused verification: `go test ./internal/stack -run 'Test.*(Continue|RestackConflict|OntoConflict)' -count=1` → ok; `go test ./internal/git` → ok; `go test ./e2e -run '^TestContinueAfterParentMoves$'` → ok; `make test-fast` → ok; `go test ./cmd ./internal/stack` → ok.
+- `make ci` on commit `097d179` in detached worktree `/private/tmp/st-ci-006` → exit 0 (golangci-lint v2.12.2 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 87.0% ≥ 75%).
+- `git diff --check` → exit 0; modified files all in Scope (`internal/git/git.go`, `shell.go`, `git_test.go`, `internal/stack/git.go`, `fakegit_test.go`, `engine.go`, `engine_test.go`, `e2e/e2e_journey_test.go`, `CHANGELOG.md`, plan files).
+- Docs: `CHANGELOG.md` notes continue now records the rebase's actual target instead of resolving a possibly moved parent ref.
 
 ## Why this matters
 

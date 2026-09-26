@@ -1294,6 +1294,143 @@ func TestRebaseInProgressFalse(t *testing.T) {
 	}
 }
 
+// TestRebaseOntoSHA covers the worktree-local rebase-target reader: both
+// metadata backends resolve their recorded commit, and missing or corrupt
+// metadata is a distinct actionable error — never a guess.
+func TestRebaseOntoSHA(t *testing.T) {
+	t.Run("rebase-merge fixture", func(t *testing.T) {
+		newRepo(t)
+		tip := mustGit(t, "rev-parse", "HEAD")
+		gitDir := mustGit(t, "rev-parse", "--absolute-git-dir")
+		dir := filepath.Join(gitDir, "rebase-merge")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "onto"), []byte(tip+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sha, err := RebaseOntoSHA()
+		if err != nil || sha != tip {
+			t.Fatalf("RebaseOntoSHA = %q err=%v, want %s", sha, err, tip)
+		}
+	})
+
+	t.Run("rebase-apply fixture", func(t *testing.T) {
+		newRepo(t)
+		tip := mustGit(t, "rev-parse", "HEAD")
+		gitDir := mustGit(t, "rev-parse", "--absolute-git-dir")
+		dir := filepath.Join(gitDir, "rebase-apply")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "onto"), []byte(tip+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sha, err := RebaseOntoSHA()
+		if err != nil || sha != tip {
+			t.Fatalf("RebaseOntoSHA = %q err=%v, want %s", sha, err, tip)
+		}
+	})
+
+	t.Run("no rebase metadata", func(t *testing.T) {
+		newRepo(t)
+		if sha, err := RebaseOntoSHA(); err == nil {
+			t.Fatalf("RebaseOntoSHA = %q, want an error with no rebase in progress", sha)
+		}
+	})
+
+	t.Run("active backend without onto file", func(t *testing.T) {
+		newRepo(t)
+		gitDir := mustGit(t, "rev-parse", "--absolute-git-dir")
+		if err := os.MkdirAll(filepath.Join(gitDir, "rebase-merge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if sha, err := RebaseOntoSHA(); err == nil {
+			t.Fatalf("RebaseOntoSHA = %q, want an error for a missing onto file", sha)
+		}
+	})
+
+	t.Run("corrupt onto value", func(t *testing.T) {
+		newRepo(t)
+		gitDir := mustGit(t, "rev-parse", "--absolute-git-dir")
+		dir := filepath.Join(gitDir, "rebase-merge")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "onto"), []byte("not-a-commit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if sha, err := RebaseOntoSHA(); err == nil {
+			t.Fatalf("RebaseOntoSHA = %q, want an error for an unresolvable target", sha)
+		}
+	})
+}
+
+// pauseRebase starts a real `git rebase --onto` that stops on a conflict,
+// returning the SHA the rebase is replaying onto. f.txt differs between the
+// onto target and the rebased commit so the replay must pause. The target is
+// advanced on a DETACHED head so the helper also works inside a linked
+// worktree, where main's checkout is owned by the main worktree.
+func pauseRebase(t *testing.T) string {
+	t.Helper()
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "f.txt", "feat\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "feat")
+	mustGit(t, "checkout", "-q", "--detach", "main")
+	writeFile(t, "f.txt", "main\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "main-advance")
+	onto := mustGit(t, "rev-parse", "HEAD")
+	base := mustGit(t, "rev-parse", "main")
+	out, err := exec.Command("git", "rebase", "--onto", onto, base, "feat").CombinedOutput()
+	if err == nil {
+		t.Fatalf("rebase unexpectedly succeeded:\n%s", out)
+	}
+	if inProgress, _ := RebaseInProgress(); !inProgress {
+		t.Fatalf("expected a paused rebase:\n%s", out)
+	}
+	return onto
+}
+
+// TestRebaseOntoSHARealRebase proves the accessor against an actual paused
+// default-backend rebase, not just a fixture file.
+func TestRebaseOntoSHARealRebase(t *testing.T) {
+	newRepo(t)
+	onto := pauseRebase(t)
+	sha, err := RebaseOntoSHA()
+	if err != nil || sha != onto {
+		t.Fatalf("RebaseOntoSHA = %q err=%v, want %s", sha, err, onto)
+	}
+	mustGit(t, "rebase", "--abort")
+	if _, err := RebaseOntoSHA(); err == nil {
+		t.Fatal("RebaseOntoSHA succeeded after the rebase was aborted")
+	}
+}
+
+// TestRebaseOntoSHALinkedWorktree: rebase state is worktree-local — a rebase
+// paused inside a linked worktree must be read from THAT worktree's git dir,
+// not the common dir.
+func TestRebaseOntoSHALinkedWorktree(t *testing.T) {
+	newRepo(t)
+	linked := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, "worktree", "add", "-q", "--detach", linked)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(linked)
+	defer t.Chdir(cwd)
+
+	onto := pauseRebase(t)
+	sha, err := RebaseOntoSHA()
+	if err != nil || sha != onto {
+		t.Fatalf("RebaseOntoSHA in linked worktree = %q err=%v, want %s", sha, err, onto)
+	}
+	mustGit(t, "rebase", "--abort")
+}
+
 func TestRebaseContinueQuietUsesValidContinueForm(t *testing.T) {
 	newRepo(t)
 	err := RebaseContinueQuiet()

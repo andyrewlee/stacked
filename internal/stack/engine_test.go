@@ -1131,6 +1131,148 @@ func TestContinueRestallCarriesBranch(t *testing.T) {
 	}
 }
 
+// TestContinueUsesActualRebaseOnto: a parent can move while a child's rebase
+// sits paused. Continue must record the target the rebase ACTUALLY completed
+// onto (A1) — captured from the worktree-local rebase metadata — not the
+// parent's moved tip (A2); otherwise the catch-up restack that incorporates
+// A2 is suppressed because the recorded base already claims it.
+func TestContinueUsesActualRebaseOnto(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env, string, string) {
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+
+		// Advance the parent to A1 so the restack has work, then pause b on it.
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("a1")
+		a1, _ := f.RevParse("a")
+		f.conflictOn("b")
+		if _, err := Restack(env, s); !errors.Is(err, ErrConflict) {
+			t.Fatalf("Restack error = %v, want ErrConflict", err)
+		}
+
+		// The parent moves AGAIN while b's rebase sits paused.
+		f.commit("a2")
+		a2, _ := f.RevParse("a")
+		return f, s, env, a1, a2
+	}
+
+	t.Run("catch-up restack lands the moved parent", func(t *testing.T) {
+		f, s, env, a1, a2 := setup(t)
+
+		// A repeated conflict on the first continue attempt must leave the
+		// paused rebase and the recorded bases untouched.
+		f.rebaseRestall = true
+		if _, err := Continue(env, s); !errors.Is(err, ErrConflict) {
+			t.Fatalf("re-stall Continue error = %v, want ErrConflict", err)
+		}
+		f.rebaseRestall = false
+
+		var saved []*State
+		env.Save = func() error { saved = append(saved, cloneState(s)); return nil }
+
+		if _, err := Continue(env, s); err != nil {
+			t.Fatalf("Continue: %v", err)
+		}
+
+		// The first checkpoint after the completed rebase must record A1 —
+		// the target b actually incorporated — not the moved tip A2.
+		if len(saved) == 0 {
+			t.Fatal("Continue persisted no checkpoint")
+		}
+		if b, _ := saved[0].Get("b"); b.ParentSHA != a1 {
+			t.Fatalf("first checkpoint b.ParentSHA = %s, want the actual rebase target %s", b.ParentSHA, a1)
+		}
+
+		// The follow-up cascade must recognize the moved parent and rebase b
+		// onto A2, so the final recorded base is legitimately A2.
+		last := f.rebaseLog[len(f.rebaseLog)-1]
+		if last.branch != "b" || last.newBase != a2 || last.oldBase != a1 {
+			t.Fatalf("final rebase = (%s onto %s from %s), want b onto %s from %s",
+				last.branch, last.newBase, last.oldBase, a2, a1)
+		}
+		if b, _ := s.Get("b"); b.ParentSHA != a2 {
+			t.Fatalf("final b.ParentSHA = %s, want %s after the catch-up rebase", b.ParentSHA, a2)
+		}
+		checkInvariants(t, f, s, 0)
+	})
+
+	t.Run("conflicting catch-up keeps the completed checkpoint", func(t *testing.T) {
+		f, s, env, a1, a2 := setup(t)
+
+		var saved []*State
+		env.Save = func() error { saved = append(saved, cloneState(s)); return nil }
+
+		// Keep b conflicting so the catch-up rebase onto A2 stalls too: the
+		// recorded base must stay A1 — the target actually incorporated.
+		f.alwaysConflictOn("b")
+		_, err := Continue(env, s)
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("Continue error = %v, want ErrConflict from the catch-up rebase", err)
+		}
+		if len(saved) == 0 {
+			t.Fatal("Continue persisted no checkpoint before the catch-up conflict")
+		}
+		if b, _ := saved[0].Get("b"); b.ParentSHA != a1 {
+			t.Fatalf("checkpoint b.ParentSHA = %s, want %s", b.ParentSHA, a1)
+		}
+		if b, _ := s.Get("b"); b.ParentSHA != a1 {
+			t.Fatalf("b.ParentSHA = %s after a conflicting catch-up, want %s retained", b.ParentSHA, a1)
+		}
+		if inProgress, _ := f.RebaseInProgress(); !inProgress {
+			t.Fatal("catch-up rebase should still be paused on its conflict")
+		}
+		// The paused catch-up targets A2 — continuing it must record A2.
+		if sha, err := f.RebaseOntoSHA(); err != nil || sha != a2 {
+			t.Fatalf("paused catch-up target = %q err=%v, want %s", sha, err, a2)
+		}
+	})
+}
+
+// TestContinueRefusesWhenRebaseTargetUnreadable: for an ordinary tracked
+// branch, a missing/corrupt rebase-merge/onto value is an actionable error
+// BEFORE continuation — the paused rebase, refs, and state are untouched and
+// nothing is saved.
+func TestContinueRefusesWhenRebaseTargetUnreadable(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("a1")
+	f.conflictOn("b")
+	if _, err := Restack(env, s); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Restack error = %v, want ErrConflict", err)
+	}
+	b, _ := s.Get("b")
+	beforeSHA := b.ParentSHA
+	aTip, _ := f.RevParse("a")
+
+	f.rebaseOntoErr = errors.New("corrupt onto metadata")
+	saves := 0
+	env.Save = func() error { saves++; return nil }
+
+	_, err := Continue(env, s)
+	if !errors.Is(err, f.rebaseOntoErr) {
+		t.Fatalf("Continue error = %v, want wrapped metadata failure", err)
+	}
+	if saves != 0 {
+		t.Fatalf("Save called %d times during a refused continue", saves)
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("refused continue must leave the rebase paused")
+	}
+	if b, _ := s.Get("b"); b.ParentSHA != beforeSHA {
+		t.Fatalf("b.ParentSHA changed during refused continue: %s -> %s", beforeSHA, b.ParentSHA)
+	}
+	if tip, _ := f.RevParse("b"); tip == "" || tip == aTip {
+		t.Fatalf("b tip = %q after refused continue, want its pre-rebase ref", tip)
+	}
+}
+
 func TestFoldConflictContinueRecovers(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

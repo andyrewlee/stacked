@@ -55,6 +55,13 @@ type Git interface {
 	IsClean() (bool, error)
 	RebaseInProgress() (bool, error)
 	RebaseHeadName() (string, error)
+	// RebaseOntoSHA returns the commit the in-progress rebase is replaying
+	// onto (rebase-merge/onto metadata), captured while the rebase is still
+	// paused. Continue records it as the rebased branch's ParentSHA — the
+	// target actually incorporated — instead of the parent's possibly-moved
+	// current tip. An error means the target could not be determined; the
+	// caller must surface it rather than guess.
+	RebaseOntoSHA() (string, error)
 	RebaseContinue() error
 	RebaseAbort() error
 	// AncestorSet returns the set of commit SHAs reachable from ref, so callers
