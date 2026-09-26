@@ -1,0 +1,193 @@
+[
+  {
+    "scenario": "no_journal",
+    "_note": "Empty journal: same empty result shape as bare undo; no blockers needed since there is nothing to preview. Entirely derivable from current PeekUndo semantics.",
+    "command": "st undo --dry-run --json",
+    "stdout": { "dryRun": true, "undone": false },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout.dryRun"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "ordinary_modify",
+    "_note": "A 'modify' that amended feat-a: preview lists the ref restore with the live-vs-recorded SHAs and the per-ref loss count. PROPOSED: the whole shape below except label.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "modify feat-a",
+      "wouldRestore": [
+        { "branch": "feat-a", "from": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "to": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "commitsLostFromRef": 1 }
+      ],
+      "wouldCheckout": "feat-a",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-a": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
+      "blockers": []
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "create_with_worktree",
+    "_note": "create --worktree recorded feat-x + its worktree: preview lists both removals and the checkout target. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "create feat-x",
+      "wouldDelete": [
+        { "branch": "feat-x", "worktree": "/repo/.st/worktrees/feat-x", "worktreeDirty": false, "isCurrentWorktree": false }
+      ],
+      "wouldCheckout": "main",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-x": "cccccccccccccccccccccccccccccccccccccccc" } },
+      "blockers": []
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "later_created_owning_worktree",
+    "_note": "The journal recorded NO worktree for feat-y, but one was materialized afterwards via `st worktree feat-y`. Live-owner discovery still finds it — matching removeCreatedWorktree. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "create feat-y",
+      "wouldDelete": [
+        { "branch": "feat-y", "worktree": "/repo/.st/worktrees/feat-y", "worktreeDirty": false, "isCurrentWorktree": false }
+      ],
+      "wouldCheckout": "main",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-y": "dddddddddddddddddddddddddddddddddddddddd" } },
+      "blockers": []
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "dirty_created_worktree",
+    "_note": "The created worktree has uncommitted changes: a real undo would refuse. Preview lists the deletion intent AND the blocker — still exit 0, blockers are data. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "create feat-z",
+      "wouldDelete": [
+        { "branch": "feat-z", "worktree": "/repo/.st/worktrees/feat-z", "worktreeDirty": true, "isCurrentWorktree": false }
+      ],
+      "wouldCheckout": "main",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-z": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" } },
+      "blockers": ["worktree_dirty:feat-z"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "cwd_inside_created_worktree",
+    "_note": "Cwd is inside the worktree undo would delete and no shell shim is active: real undo errors before mutating. Preview reports it as a blocker with the intended checkout. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "create feat-x",
+      "wouldDelete": [
+        { "branch": "feat-x", "worktree": "/repo/.st/worktrees/feat-x", "worktreeDirty": false, "isCurrentWorktree": true }
+      ],
+      "wouldCheckout": "main",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-x": "cccccccccccccccccccccccccccccccccccccccc" } },
+      "blockers": ["cwd_inside_created_worktree:feat-x"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "changed_live_tips",
+    "_note": "feat-a moved two commits forward since the snapshot: the restore would drop them from that ref. Per-ref count only — never a global-reachability claim. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "restack",
+      "wouldRestore": [
+        { "branch": "feat-a", "from": "ffffffffffffffffffffffffffffffffffffffff", "to": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "commitsLostFromRef": 2 }
+      ],
+      "wouldCheckout": "feat-a",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-a": "ffffffffffffffffffffffffffffffffffffffff" } },
+      "blockers": []
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "missing_ref_object",
+    "_note": "The recorded tip's object is gone (gc'd): the SHA is still restorable-by-name in intent, but reachability cannot be measured — unknown, not zero. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "squash feat-b",
+      "wouldRestore": [
+        { "branch": "feat-b", "from": "0000000000000000000000000000000000000000", "to": "9999999999999999999999999999999999999999", "commitsLostFromRef": "unknown" }
+      ],
+      "wouldCheckout": "feat-b",
+      "journalDrop": true,
+      "observed": { "entryIndex": 1, "tips": { "feat-b": null } },
+      "blockers": []
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "future_schema",
+    "_note": "A newer st wrote the state file: the preview does not bypass the schema barrier — it reports the blocker and computes nothing speculative. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "blockers": ["state_too_new"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "malformed_current_state",
+    "_note": "Snapshot bytes fail to decode: preview surfaces the same blocker the real undo's barrier would hit — not a guess at contents. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "modify feat-a",
+      "blockers": ["malformed_snapshot"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  },
+  {
+    "scenario": "active_rebase",
+    "_note": "A paused rebase makes a real undo refuse. Preview keeps exit 0 and lists the blocker. PROPOSED: whole payload.",
+    "command": "st undo --dry-run --json",
+    "stdout": {
+      "dryRun": true,
+      "label": "restack",
+      "blockers": ["rebase_in_progress"]
+    },
+    "stderr": "",
+    "exitCode": 0,
+    "proposed": ["stdout"],
+    "mustRemainUnchanged": ["state file bytes", "journal bytes", "index", "refs", "worktrees", "cwd"]
+  }
+]

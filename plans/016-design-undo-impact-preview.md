@@ -14,7 +14,18 @@
 - **Category:** direction
 - **Audit item:** D2
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/016-design-undo-impact-preview` (stacked on `advisor/015-design-structured-recovery-status`).
+
+- Step 1 trace: mapped `runUndo`/`runUndoList` (`cmd/undo.go`), the engine's `Undo` (`internal/stack/undo_op.go`) and the journal (`internal/stack/undo.go`): lock → `RebaseInProgress` → `PeekUndo` → `Load` (`ErrStateTooNew` fatal) → `ValidateUndoState` → `prepareUndoCurrentCreatedWorktree` (shim-gated chdir + rebase re-check) → created-branch discovery over `LocalBranches` diff → live-owner worktree check (`removeCreatedWorktree`: recorded-path mismatch and dirty refusal) → HEAD move/detach → `DeleteBranch(force)` → `*s = *prev` + `env.save()` → single `UpdateRefs` transaction → tolerant final `Checkout` → `DropUndo` → `writeCDDirective`. `--list` documents a recorded-data-only projection; preview does not weaken it.
+- Step 2 chose ONE contract: `st undo --dry-run [--json]`, next entry only (`PeekUndo`), `--dry-run`/`--list` mutually exclusive; sorted `wouldRestore`/`wouldDelete` with before/after SHAs, live discovered worktrees, `worktreeDirty`, `isCurrentWorktree`, `wouldCheckout`, `journalDrop`, `observed.entryIndex`/`observed.tips`, and a `blockers` registry (`journal_empty`, `rebase_in_progress`, `state_too_new`, `malformed_snapshot`, `worktree_dirty:<b>`, `cwd_inside_created_worktree:<b>`, `recorded_worktree_mismatch:<b>`). Reachability is per-ref only (`commitsLostFromRef`), with the literal string `"unknown"` for missing refs/objects — never 0, never a global-unreachability claim. No persisted fingerprint; real undo revalidates.
+- Artifacts: `plans/design/016-undo-preview.md` (8 required sections), `016-undo-preview-examples.json` (11 scenarios), `016-undo-preview-acceptance.md` (scenario→test map incl. the mutating-call decorator and the non-reservation concurrency case), `check-undo-preview.py` (stdlib validator: required scenarios/keys, invariant set equality, blocker registry, `commitsLostFromRef` int-or-`"unknown"`, acceptance cross-refs, required design headings/terms).
+- Verify commands: `rg -n '^## (Current contract|Proposed command|Impact model|Validation and blockers|Concurrency|Examples|Acceptance|Deferred work)$' plans/design/016-undo-preview.md` → all 8 sections; `python3 plans/design/check-undo-preview.py` → `check-undo-preview: OK` (exit 0); `rg -c 'dry-run|mutually exclusive|unknown|future|reservation|DropUndo' plans/design/016-undo-preview.md` → 19.
+- Focused source tests confirming the traced surface: `go test ./internal/stack -run 'Undo' -count=1` → ok; `go test ./cmd -run 'Undo' -count=1` → ok.
+- `git diff --check` → exit 0; created files all in Scope (`plans/design/*` + this plan + `plans/README.md`). No runtime source, tests, or repository metadata changed; the preview itself is not implemented.
 
 ## Why this matters
 
