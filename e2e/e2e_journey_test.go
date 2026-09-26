@@ -1770,6 +1770,79 @@ func TestSyncPrunesSquashMerged(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestSyncPreservesUncontainedRename pins the rename-vs-copy containment fix:
+// a branch that renames A to B is NOT contained in an upstream that merely
+// copied A to B while keeping A — the branch's deletion of A never landed —
+// so sync must keep the branch (ref and stack metadata), while a genuinely
+// contained sibling is still pruned.
+func TestSyncPreservesUncontainedRename(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	// Shared file A on main before branching.
+	r.writeFile("a.txt", "a\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "add a")
+	r.git("push", "-q", "origin", "main")
+
+	// renamer (child of main): rename a.txt -> b.txt and nothing else.
+	r.stOK("create", "renamer")
+	r.git("mv", "a.txt", "b.txt")
+	r.git("commit", "-q", "-m", "rename a to b")
+
+	// control (another child of main): adds c.txt, which upstream lands —
+	// proves the prune ran and only the uncontained rename survived.
+	r.stOK("checkout", "main")
+	r.stOK("create", "control")
+	r.writeFile("c.txt", "c\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "add c")
+
+	// Upstream keeps a.txt, copies it to b.txt, and adds c.txt: control's
+	// content lands, but only the destination half of the rename does.
+	r.stOK("checkout", "main")
+	preTrunk := r.rev("main")
+	r.writeFile("b.txt", "a\n")
+	r.writeFile("c.txt", "c\n")
+	r.git("add", "-A")
+	r.git("commit", "-q", "-m", "copy a to b and add c")
+	r.git("push", "-q", "origin", "main")
+	r.git("reset", "-q", "--hard", preTrunk)
+
+	res := r.stOK("sync")
+	wantStdoutContains(t, res, "sync complete")
+	wantStdoutContains(t, res, "deleted: control")
+	if strings.Contains(res.stdout, "deleted: renamer") {
+		t.Fatalf("renamer was pruned although its rename never landed:\n%s", res.stdout)
+	}
+	if r.branchExists("control") {
+		t.Fatal("control's content landed upstream; it should be pruned")
+	}
+	if !r.branchExists("renamer") {
+		t.Fatal("renamer must survive sync: upstream lacks its a.txt deletion")
+	}
+	if !r.fileOnBranch("renamer", "b.txt") || r.fileOnBranch("renamer", "a.txt") {
+		t.Fatal("renamer lost its rename")
+	}
+
+	res = r.stOK("log", "--json")
+	var root logNode
+	if err := json.Unmarshal([]byte(res.stdout), &root); err != nil {
+		t.Fatalf("log --json invalid: %v", err)
+	}
+	n := findNode(&root, "renamer")
+	if n == nil || n.Parent != "main" {
+		t.Fatalf("renamer should still be tracked under main: %+v", n)
+	}
+	r.stOK("validate")
+}
+
 // TestSyncFromLinkedWorktree proves the whole maintenance loop works from
 // inside a branch's own worktree: sync fast-forwards the trunk in the MAIN
 // worktree (its owner), prunes the landed branch, restacks the current branch,

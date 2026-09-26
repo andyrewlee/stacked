@@ -1126,6 +1126,94 @@ func TestChangesContainedIn(t *testing.T) {
 	if contained {
 		t.Fatal("main moved past feat's content; feat must NOT be contained")
 	}
+
+	// Rename-vs-copy: renamer renames r.txt to r-moved.txt, while main only
+	// copies r.txt to r-moved.txt and keeps r.txt. The branch's deletion of
+	// r.txt has not landed upstream, so the branch is NOT contained — a
+	// rename-collapsed path set that overlooks the source would wrongly prune
+	// it. Assert under diff.renames both enabled and disabled.
+	writeFile(t, "r.txt", "r\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "add r")
+	mustGit(t, "checkout", "-q", "-b", "renamer")
+	mustGit(t, "mv", "r.txt", "r-moved.txt")
+	mustGit(t, "commit", "-q", "-m", "rename r")
+	mustGit(t, "checkout", "-q", "main")
+	writeFile(t, "r-moved.txt", "r\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "copy r")
+	for _, renames := range []string{"true", "false"} {
+		mustGit(t, "config", "diff.renames", renames)
+		contained, err = ChangesContainedIn("main", "renamer")
+		if err != nil {
+			t.Fatalf("ChangesContainedIn rename-vs-copy (diff.renames=%s): %v", renames, err)
+		}
+		if contained {
+			t.Fatalf("renamer must NOT be contained (diff.renames=%s): upstream kept r.txt, the rename's source deletion never landed", renames)
+		}
+	}
+	mustGit(t, "config", "--unset", "diff.renames")
+
+	// A genuinely contained rename: upstream did the same rename — the source
+	// is gone there too and the destination is identical.
+	writeFile(t, "s.txt", "s\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "add s")
+	mustGit(t, "checkout", "-q", "-b", "same-rename")
+	mustGit(t, "mv", "s.txt", "s-moved.txt")
+	mustGit(t, "commit", "-q", "-m", "rename s")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "mv", "s.txt", "s-moved.txt")
+	mustGit(t, "commit", "-q", "-m", "rename s on main")
+	contained, err = ChangesContainedIn("main", "same-rename")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn same-rename: %v", err)
+	}
+	if !contained {
+		t.Fatal("upstream performed the identical rename; same-rename should be contained")
+	}
+
+	// Changed source: the branch renames t.txt away, but upstream modified
+	// t.txt instead of deleting it — not contained.
+	writeFile(t, "t.txt", "t\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "add t")
+	mustGit(t, "checkout", "-q", "-b", "moved-src")
+	mustGit(t, "mv", "t.txt", "t-moved.txt")
+	mustGit(t, "commit", "-q", "-m", "rename t")
+	mustGit(t, "checkout", "-q", "main")
+	writeFile(t, "t.txt", "t evolved\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "evolve t")
+	contained, err = ChangesContainedIn("main", "moved-src")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn moved-src: %v", err)
+	}
+	if contained {
+		t.Fatal("upstream kept a modified t.txt; moved-src must NOT be contained")
+	}
+
+	// Changed destination: the branch renames u.txt to u-moved.txt; upstream
+	// deleted u.txt but carries different content at u-moved.txt — not
+	// contained.
+	writeFile(t, "u.txt", "u\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "add u")
+	mustGit(t, "checkout", "-q", "-b", "moved-dst")
+	mustGit(t, "mv", "u.txt", "u-moved.txt")
+	mustGit(t, "commit", "-q", "-m", "rename u")
+	mustGit(t, "checkout", "-q", "main")
+	mustGit(t, "rm", "-q", "u.txt")
+	writeFile(t, "u-moved.txt", "u different\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "different u-moved")
+	contained, err = ChangesContainedIn("main", "moved-dst")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn moved-dst: %v", err)
+	}
+	if contained {
+		t.Fatal("upstream's u-moved.txt differs; moved-dst must NOT be contained")
+	}
 }
 
 func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
