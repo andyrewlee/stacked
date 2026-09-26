@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -878,7 +879,9 @@ func TestCopyWorktreeIncludesRefusesDestinationCollision(t *testing.T) {
 		if err == nil {
 			t.Fatalf("copyWorktreeIncludes error = nil, want a collision refusal for %q", rel)
 		}
-		if !strings.Contains(err.Error(), rel) {
+		// The refusal formats rel with %q, which escapes the separator as \\
+		// on Windows — needle on the quoted form so the check is literal.
+		if !strings.Contains(err.Error(), fmt.Sprintf("%q", rel)) {
 			t.Fatalf("error = %v, want it to name %q", err, rel)
 		}
 	}
