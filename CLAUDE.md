@@ -110,8 +110,11 @@ engine and these hold, the topology bookkeeping is sound.
   pointing at `st continue` (finishes + resumes) or `st abort` (rolls back). The
   fake git can model paused rebase conflicts (`conflictOn`) for fast engine tests;
   use real-git integration/e2e for worktree, index, and conflict-marker behavior.
-- `Onto` records the new parent in state **before** rebasing so `st continue`
-  computes the right base after a conflict.
+- `Onto` changes `Parent`/`ParentSHA` only after a successful rebase. A paused
+  conflict preserves the old parent and records `PendingReparent`; `st continue`
+  promotes that intent after the rebase completes, while `st abort` clears it
+  and keeps the old parent. See `TestOntoConflictRecordsPendingReparentWithoutChangingParent`
+  in `internal/stack/engine_test.go`.
 - Mutators take an advisory lock: flock on unix-like platforms
   (`internal/stack/lock_unix.go`), an exclusive lock file with stale-owner
   reclamation elsewhere (`internal/stack/lock_other.go`, `lock_stale.go`).
