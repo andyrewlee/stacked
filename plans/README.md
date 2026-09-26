@@ -22,7 +22,7 @@ The numbering is the recommended order. Audit IDs retain the original finding nu
 | [008](008-report-confirmed-partial-push-outcomes.md) | Report every confirmed push outcome without retrying the batch | 7 | P1 | M | LOW | DONE |
 | [009](009-refuse-abandoned-reclaim-guards.md) | Fail closed when the fallback reclaim guard is abandoned | 8 | P1 | M | HIGH | DONE |
 | [010](010-bound-log-history-materialization.md) | Answer log ancestry questions without loading the entire history | 10 | P2 | M | LOW | DONE |
-| [011](011-test-installer-signature-decisions.md) | Exercise installer signature acceptance and refusal in CI | 11 | P2 | M | LOW | TODO |
+| [011](011-test-installer-signature-decisions.md) | Exercise installer signature acceptance and refusal in CI | 11 | P2 | M | LOW | DONE |
 | [012](012-preserve-worktree-path-bytes.md) | Parse worktree paths losslessly with a guarded legacy fallback | 12 | P2 | M | MED | TODO |
 | [013](013-quote-manual-navigation-hints.md) | Print safe copyable navigation commands for ordinary paths | 13 | P3 | S | LOW | TODO |
 | [014](014-correct-onto-recovery-documentation.md) | Document pending Onto intent and its commit/abort behavior | 14 | P3 | S | LOW | TODO |

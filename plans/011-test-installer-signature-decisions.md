@@ -14,7 +14,19 @@
 - **Category:** tests
 - **Audit item:** 11
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/011-test-installer-signature-decisions` (stacked on `advisor/010`), commit `1d1b4f0` (restacked `a0e9fdb` — identical tree).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- install.sh scripts/ .github/workflows/ci.yml CONTRIBUTING.md plans/011-test-installer-signature-decisions.md plans/README.md` → only documented predecessor changes; `install.sh` itself untouched.
+- New `scripts/check-install-signatures.sh` (`set -euo pipefail`, bash): builds disposable release fixtures (archive + `checksums.txt` + `.minisig`) under a temp `ST_INSTALL_BASE` served over `file://`, generates ephemeral minisign keypairs per run (no release secrets), and drives the real `install.sh` through the full decision matrix — valid signature installs; missing signature refuses by default / installs with `ST_ALLOW_UNVERIFIED=1`; empty embedded key refuses / opt-in installs; minisign absent (restricted PATH, `/bin/sh` entry) refuses / opt-in installs; invalid signature refuses AND still refuses with `ST_ALLOW_UNVERIFIED=1`; changed archive fails checksum; missing checksum entry refuses. A sentinel file proves every refused install leaves an existing installation byte-identical. The script skips cleanly when minisign is unavailable.
+- CI integration: `.github/workflows/ci.yml` Ubuntu leg now installs `minisign` (apt) and runs `bash scripts/check-install-signatures.sh`; no release secrets involved.
+- `CONTRIBUTING.md` documents the matrix next to the signing runbook: disposable keys, no secrets, the covered cases.
+- Local run → all 11 assertions PASS (`OK: installer signature/checksum decision matrix passed`); `bash -n` clean; `shellcheck` not installed — script kept POSIX-clean with bash-only `pipefail` explicitly via shebang.
+- `make ci` on commit `1d1b4f0` in detached worktree `/private/tmp/st-ci-011` → exit 0 (lint 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 87.0% ≥ 75%).
+- `git diff --check` → exit 0; files all in Scope (`scripts/check-install-signatures.sh`, `.github/workflows/ci.yml`, `CONTRIBUTING.md`, this plan, `plans/README.md`). Production `install.sh` and its (empty placeholder) embedded key unchanged — the real release key remains a separate provisioning task.
 
 ## Why this matters
 
