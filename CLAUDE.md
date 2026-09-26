@@ -129,5 +129,10 @@ a tip shared by several on-path branches goes to the lowest sharer. Everything
 ambiguous is refused loudly: hunks spanning commits, pure additions, lines
 owned by trunk/history, non-tip or off-path targets, and unclassifiable
 staged records (binary/mode/rename/quoted paths) — splitting hunks or
-rewriting mid-branch commits is out of scope. The decision table lives in the
-doc comments in `internal/stack/absorb.go`.
+rewriting mid-branch commits is out of scope. The staged diff itself is
+captured with pinned flags (`--no-color --no-ext-diff --no-textconv
+--src-prefix=a/ --dst-prefix=b/`), so user diff config cannot reshape it, and
+every section must yield hunks or a refusal — metadata-only changes like
+empty added/deleted files are refused, and a rename-disabled path inventory
+cross-check refuses anything the parser could not account for. The decision
+table lives in the doc comments in `internal/stack/absorb.go`.
