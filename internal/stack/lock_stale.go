@@ -110,11 +110,30 @@ func malformedLockIsAbandoned(path, content string, now time.Time) bool {
 	return now.Sub(info.ModTime()) > malformedLockReclaimAfter
 }
 
+// abandonedReclaimGuardError reports an existing lock.reclaim whose recorded
+// owner is provably gone (or whose content is malformed past the conservative
+// age bound). The guard is never unlinked automatically: a
+// read/compare/remove sequence against it is not atomic — two contenders
+// could each remove a different generation and BOTH enter stale-lock
+// reclamation. Reclaiming lock.excl stays automatic only under a freshly
+// owned guard; an abandoned guard is a maintenance condition, so the error is
+// distinguishable from live contention (ErrLocked) and permission failures.
+type abandonedReclaimGuardError struct{ path string }
+
+func (e *abandonedReclaimGuardError) Error() string {
+	return fmt.Sprintf("stale-lock reclaim guard %s is abandoned (its recorded owner is gone); "+
+		"st never removes another process's guard automatically — stop every st process, "+
+		"verify no writer is active, then remove the guard file and retry", e.path)
+}
+
 // acquireReclaimGuard takes the lock.reclaim guard file that serializes stale
-// lock reclamation. On failure the returned func is nil; the error, when
-// non-nil, is the underlying cause (used by acquireExclLock to tell a real
-// permission problem from ordinary contention — a nil error means plain
-// contention).
+// lock reclamation, by O_CREATE|O_EXCL only — an existing guard is NEVER
+// removed to obtain ownership. On failure the returned func is nil and the
+// error classifies the outcome: nil means ordinary contention (a live or
+// freshly-malformed guard), an *abandonedReclaimGuardError means the guard is
+// abandoned and needs operator maintenance, and any other error is the
+// underlying cause (used by acquireExclLock to tell a real permission problem
+// from ordinary contention).
 func acquireReclaimGuard(dir string) (func(), error) {
 	path := filepath.Join(dir, "lock.reclaim")
 	token := newLockToken()
@@ -135,19 +154,22 @@ func acquireReclaimGuard(dir string) (func(), error) {
 				_ = removeLockFileIfContent(path, contents)
 			}, nil
 		}
-		if !lockCreateConflict(path, err) || attempt > 0 {
+		if !lockCreateConflict(path, err) {
 			return nil, err
 		}
 		existing, readErr := os.ReadFile(path)
 		if readErr != nil {
-			continue
+			// A guard that vanished between create-conflict and read frees the
+			// path for one retry; anything else is the underlying cause.
+			if os.IsNotExist(readErr) && attempt == 0 {
+				continue
+			}
+			return nil, readErr
 		}
 		if !lockOwnerIsGone(string(existing)) && !malformedLockIsAbandoned(path, string(existing), time.Now()) {
 			return nil, nil
 		}
-		if removed, rmErr := removeLockFileIfContentErr(path, string(existing)); !removed {
-			return nil, rmErr
-		}
+		return nil, &abandonedReclaimGuardError{path: path}
 	}
 	return nil, nil
 }
@@ -195,10 +217,19 @@ func acquireExclLock(dir string) (func(), error) {
 		}
 		gr, gerr := acquireReclaimGuard(dir)
 		if gr == nil {
-			// A guard failure is normally contention (another reclaimer, or a
-			// live holder). But when the recorded owner is provably gone and the
-			// failure classifies as access-denied, "wait for the other command"
-			// is a lie — the lock is stale and this process cannot act on it.
+			// An abandoned guard is a maintenance condition, distinct from
+			// live contention: propagate it unwrapped so callers never get a
+			// "wait for the other command" sentinel for a guard no process
+			// owns.
+			var abandoned *abandonedReclaimGuardError
+			if errors.As(gerr, &abandoned) {
+				return nil, abandoned
+			}
+			// A guard failure is otherwise normally contention (another
+			// reclaimer, or a live holder). But when the recorded owner is
+			// provably gone and the failure classifies as access-denied, "wait
+			// for the other command" is a lie — the lock is stale and this
+			// process cannot act on it.
 			if gerr != nil && lockAccessDeniedErr(gerr) && lockOwnerGoneAt(path) {
 				return nil, fmt.Errorf("cannot reclaim stale lock %s (owner is gone): %w — check directory permissions", path, gerr)
 			}

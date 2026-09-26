@@ -180,7 +180,11 @@ message.
   second one fails fast rather than corrupting state): flock on unix-like
   platforms, an exclusive lock file elsewhere. A contender exits 5
   (`"code": "locked"`), so the retry idiom is
-  `until st restack; do [ $? -eq 5 ] || break; sleep 1; done`.
+  `until st restack; do [ $? -eq 5 ] || break; sleep 1; done`. On non-flock
+  platforms an *abandoned* `lock.reclaim` guard (left by a dead process) is a
+  maintenance error instead — exit 70 naming the guard path; it is never
+  removed automatically, and the loop above correctly stops retrying. See
+  CONTRIBUTING's troubleshooting section for the operator procedure.
 
 ## Orchestrating parallel agents
 

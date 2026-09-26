@@ -38,6 +38,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tip — so the follow-up restack still recognizes the move and lands the
   parent's new commits on the child. A missing or unreadable target is an
   actionable error before the rebase is continued, never a silent guess.
+- **An abandoned `lock.reclaim` is no longer reclaimed automatically.** On
+  platforms without `flock`, `st` used to read/compare/unlink a stale
+  `lock.reclaim` guard — a non-atomic sequence that could admit two
+  contenders into stale `lock.excl` reclamation at once. Acquisition is now
+  exclusive-create only: a live or freshly-written guard stays ordinary
+  contention (exit 5), while a provably abandoned guard is a maintenance
+  error naming its path (exit 70). Stop every `st` process, verify no writer
+  is active, then remove the named file — see CONTRIBUTING's troubleshooting
+  section. Stale `lock.excl` reclamation under a freshly owned guard is
+  unchanged.
 - **`.worktreeinclude` copies can no longer overwrite or merge into occupied
   destination paths.** Before the first file is copied, every selected entry
   is preflighted against the destination worktree: a path that is tracked

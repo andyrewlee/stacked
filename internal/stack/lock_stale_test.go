@@ -119,7 +119,12 @@ func TestAcquireReclaimGuard(t *testing.T) {
 	}
 }
 
-func TestAcquireReclaimGuardRecoversMalformedOldFile(t *testing.T) {
+// TestAcquireReclaimGuardRefusesAbandonedMalformedFile: an old malformed
+// lock.reclaim is an abandoned guard — acquiring must refuse with the
+// maintenance error and leave the file's bytes untouched. Removing it
+// automatically was the non-atomic read/compare/unlink race that let two
+// reclaimers through.
+func TestAcquireReclaimGuardRefusesAbandonedMalformedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lock.reclaim")
 	if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
@@ -131,13 +136,29 @@ func TestAcquireReclaimGuardRecoversMalformedOldFile(t *testing.T) {
 	}
 
 	release, err := acquireReclaimGuard(dir)
-	if err != nil || release == nil {
-		t.Fatalf("reclaim guard should recover old malformed file: %v", err)
+	if release != nil {
+		release()
+		t.Fatal("acquireReclaimGuard must not reclaim an abandoned guard")
 	}
-	release()
+	var abandoned *abandonedReclaimGuardError
+	if !errors.As(err, &abandoned) {
+		t.Fatalf("err = %v, want an abandonedReclaimGuardError naming the guard", err)
+	}
+	msg := abandoned.Error()
+	if !strings.Contains(msg, path) {
+		t.Fatalf("maintenance error should name the guard path %q: %q", path, msg)
+	}
+	if !strings.Contains(msg, "never removes") || !strings.Contains(msg, "no writer") {
+		t.Fatalf("maintenance error should direct the operator to stop st and check writers: %q", msg)
+	}
+	if b, rerr := os.ReadFile(path); rerr != nil || string(b) != "partial" {
+		t.Fatalf("abandoned guard changed: %q, %v", b, rerr)
+	}
 }
 
-func TestAcquireReclaimGuardRecoversDeadOwner(t *testing.T) {
+// TestAcquireReclaimGuardRefusesDeadOwnerGuard: same refusal for a guard whose
+// recorded owner pid is provably gone — the bytes stay exactly as found.
+func TestAcquireReclaimGuardRefusesDeadOwnerGuard(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lock.reclaim")
 	deadOwner := lockFileContent(999999999, time.Now(), "dead")
@@ -146,10 +167,17 @@ func TestAcquireReclaimGuardRecoversDeadOwner(t *testing.T) {
 	}
 
 	release, err := acquireReclaimGuard(dir)
-	if err != nil || release == nil {
-		t.Fatalf("reclaim guard should recover dead owner: %v", err)
+	if release != nil {
+		release()
+		t.Fatal("acquireReclaimGuard must not reclaim a dead owner's guard")
 	}
-	release()
+	var abandoned *abandonedReclaimGuardError
+	if !errors.As(err, &abandoned) {
+		t.Fatalf("err = %v, want an abandonedReclaimGuardError naming the guard", err)
+	}
+	if b, rerr := os.ReadFile(path); rerr != nil || string(b) != deadOwner {
+		t.Fatalf("abandoned guard changed: %q, %v", b, rerr)
+	}
 }
 
 // The following exercise the composed exclusive-lock acquisition (the Lock body
@@ -326,5 +354,62 @@ func TestStaleLockSingleReclaimer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "lock.reclaim")); !os.IsNotExist(err) {
 		t.Fatalf("lock.reclaim should be removed after reclaim race, stat err = %v", err)
+	}
+}
+
+// TestAbandonedReclaimGuardRefusesAllContenders pins the fail-closed policy:
+// with BOTH a stale lock.excl and an abandoned lock.reclaim on disk, every
+// synchronized contender must refuse — the guard is never unlinked to let a
+// reclaimer through — and each refusal is the maintenance error, not the busy
+// sentinel. Neither file's bytes may change.
+func TestAbandonedReclaimGuardRefusesAllContenders(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "lock.excl")
+	guardPath := filepath.Join(dir, "lock.reclaim")
+	deadLock := lockFileContent(999999999, time.Now(), "dead")
+	deadGuard := lockFileContent(999999999, time.Now(), "dead")
+	if err := os.WriteFile(lockPath, []byte(deadLock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guardPath, []byte(deadGuard), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 8
+	start := make(chan struct{})
+	type result struct {
+		release func()
+		err     error
+	}
+	results := make(chan result, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			<-start
+			release, err := acquireExclLock(dir)
+			results <- result{release: release, err: err}
+		}()
+	}
+	close(start)
+
+	for i := 0; i < goroutines; i++ {
+		res := <-results
+		if res.release != nil {
+			res.release()
+			t.Fatalf("contender %d acquired the lock despite an abandoned guard", i)
+		}
+		var abandoned *abandonedReclaimGuardError
+		if !errors.As(res.err, &abandoned) {
+			t.Fatalf("contender %d err = %v, want the abandoned-guard maintenance error", i, res.err)
+		}
+		if isBusyLockErr(res.err) {
+			t.Fatalf("contender %d got the busy sentinel for a maintenance condition: %v", i, res.err)
+		}
+	}
+
+	if b, err := os.ReadFile(lockPath); err != nil || string(b) != deadLock {
+		t.Fatalf("lock.excl changed under refusal: %q, %v", b, err)
+	}
+	if b, err := os.ReadFile(guardPath); err != nil || string(b) != deadGuard {
+		t.Fatalf("lock.reclaim changed under refusal: %q, %v", b, err)
 	}
 }

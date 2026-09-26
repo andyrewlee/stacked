@@ -14,7 +14,21 @@
 - **Category:** bug
 - **Audit item:** 8
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/009-refuse-abandoned-reclaim-guards` (stacked on `advisor/008`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- internal/stack/lock_stale.go internal/stack/lock_stale_test.go internal/stack/lock_access_test.go internal/stack/lock_access_windows_test.go docs/AGENT.md CONTRIBUTING.md CHANGELOG.md plans/009-refuse-abandoned-reclaim-guards.md plans/README.md` → only documented predecessor changes; no unexplained source drift. `git status --short` clean at start.
+- `acquireReclaimGuard` now acquires strictly by `O_CREATE|O_EXCL` — no path unlinks another process's guard. An existing live or freshly-malformed guard stays ordinary contention (`(nil, nil)`); a guard whose owner is provably gone or whose malformed bytes are older than `malformedLockReclaimAfter` returns the new `*abandonedReclaimGuardError`, which names the guard path and tells the operator to stop all st processes, verify no writer is active, then remove the file. A guard vanishing between create-conflict and read still earns exactly one retry.
+- `acquireExclLock` propagates `abandonedReclaimGuardError` unwrapped instead of collapsing it to `ErrLocked` — it exits 70 (`internal`), distinct from live contention (exit 5) and from the access-denied stale-owner branch, which is preserved verbatim. `lock.excl` reclamation still runs only under a freshly owned guard, and a process's own guard is still removed on release/write failure via the token-checked `removeLockFileIfContent`.
+- Step-1 contract change: `TestAcquireReclaimGuardRecoversMalformedOldFile`/`...RecoversDeadOwner` replaced by `TestAcquireReclaimGuardRefusesAbandonedMalformedFile`/`...RefusesDeadOwnerGuard` — each asserts the typed error, the operator-facing message (names the path, "never removes", "no writer"), and that the guard's bytes are untouched.
+- New deterministic contention test `TestAbandonedReclaimGuardRefusesAllContenders`: stale `lock.excl` + dead-owner `lock.reclaim`, 8 synchronized contenders — every one refused with the maintenance error (not the busy sentinel), both files byte-identical afterward.
+- Focused verification: `go test ./internal/stack -run 'Test.*(Lock|Reclaim)' -race -count=1` → ok; `go test ./internal/stack -run 'Test(AbandonedReclaimGuard|StaleLockSingleReclaimer|AcquireExclLockMutualExclusion)' -race -count=20` → ok; `make test-fast` → ok; `make test` (race) → ok; `make e2e` → ok; `make build` → ok; `make fmt-check` + `make lint` (v2.12.2) → 0 issues; `make vet` + `make vet-cross` (windows, plan9) → ok.
+- `make ci` on commit `1608b18` in detached worktree `/private/tmp/st-ci-009` → exit 0 (lint 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 87.0% ≥ 75%, per-function floor holds). First CI run failed the 50% per-function floor on `abandonedReclaimGuardError.Error` — fixed by asserting the message content in the refusal tests rather than allowlisting new code.
+- `git diff --check` → exit 0; modified files all in Scope (`internal/stack/lock_stale.go`, `internal/stack/lock_stale_test.go`, `CONTRIBUTING.md`, `CHANGELOG.md`, `docs/AGENT.md`).
+- Docs: `CONTRIBUTING.md` gained a Troubleshooting section with the operator procedure (stop all st processes, verify no writer, then remove the named guard — no unconditional deletion command), the exit-70-vs-5 distinction, and Windows CI coverage notes; `docs/AGENT.md` tells agents the abandoned guard is non-retryable maintenance, not contention; `CHANGELOG.md` records the fail-closed policy. Unix `flock` behavior untouched (`lock_unix.go` unmodified).
 
 ## Why this matters
 
