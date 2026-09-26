@@ -78,6 +78,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   containment check now enumerates rename sources as well as destinations, so
   a branch that renames A to B is no longer pruned when upstream merely copied
   A to B while keeping A — the branch's deletion of A has not landed.
+- **`st log` no longer materializes the whole reachable history.** The
+  topCommit visibility question — "does this branch's tip hold commits its
+  parent's tip cannot reach" — is now answered by one bounded
+  `merge-base --is-ancestor` probe per distinct tip pair, cached for the
+  render, instead of a `git rev-list --parents` walk plus an in-memory graph
+  over every commit. Go-side memory and subprocess output no longer scale
+  with total commit count (git still walks internally, and a trunk-only log
+  asks no ancestry question at all). Output is unchanged.
 - **`st absorb` only attributes hunks to on-path tips.** A hunk whose owning
   commit is tipped only by a tracked branch *off* the current stack's path is
   now refused, naming that branch — previously it could be attributed to the

@@ -14,7 +14,20 @@
 - **Category:** perf
 - **Audit item:** 10
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/010-bound-log-history-materialization` (stacked on `advisor/009`), commit `6b47740`.
+
+- Drift check: `git diff --stat cb31f06..HEAD -- cmd/log.go cmd/commands_json_test.go cmd/log_bench_test.go CHANGELOG.md plans/010-bound-log-history-materialization.md plans/README.md` → only documented predecessor changes; no unexplained source drift.
+- `cmd/log.go` no longer builds `commitGraph`/`tipGraph`/`reachable` from `rev-list --parents`. Tip-reachability for the `topCommit` suppression is answered by `tipAncestors`: one `git merge-base --is-ancestor` per distinct child/parent tip pair, keyed by SHA pair for the invocation, invoked via fully-qualified `refs/heads/<name>` so `IsAncestor` runs a single subprocess per pair (branch-existence probes skipped). Missing tips, equal tips, and trunk-only output perform no ancestry queries; query errors propagate.
+- Step-1 coverage: `TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent` extended with behind/ahead/equal/diverged/merge-reachability/missing-tip cases; `TestLogDoesNotMaterializeHistory` records the git command stream and asserts no `rev-list` invocation, no ancestry probe for trunk-only output, and exactly one probe for a shared tip pair. Pre-fix the materialization assertions failed as designed (`rev-list --parents` ran even for trunk-only).
+- Benchmark: `BenchmarkLogHistory` (`cmd/log_bench_test.go`) builds each fixture with one `git fast-import` (setup excluded from timing) across a commits×branches matrix. Results documented in `plans/010-log-benchmark-results.md`: 20k commits / 50 branches went from ~59 MB/op (~25.5k allocs) to ~1.4 MB/op (~5.4k allocs); 20k commits / 0 branches from ~13 MB/op to ~0.2 MB/op. Documented tradeoff: many-branch runs pay one `merge-base` subprocess per distinct tip pair (50 branches ≈ 1.5–4.7 s); expected small stacks stay cheap (~80 ms at 1k/0). Go heap is now bounded by the rendered branch set, not history depth — the plan's goal.
+- CHANGELOG entry under `### Fixed` records the bound.
+- Verification: `go test ./cmd -run 'TestLog' -count=1` → ok (all semantic + golden shapes unchanged); `make test-fast` → ok; `make build` → ok; `make fmt-check`/`make lint` (v2.12.2) → 0 issues.
+- `make ci` on commit `6b47740` in detached worktree `/private/tmp/st-ci-010` → exit 0 (lint clean, native/windows/plan9 vet, build, race tests, e2e, merged coverage 87.0% ≥ 75%, per-function floor holds).
+- `git diff --check` → exit 0; modified files all in Scope (`cmd/log.go`, `cmd/commands_json_test.go`, `cmd/log_bench_test.go`, `CHANGELOG.md`, `plans/010-log-benchmark-results.md`, this plan).
 
 ## Why this matters
 
