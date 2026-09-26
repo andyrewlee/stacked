@@ -119,13 +119,28 @@ func TestGitFixtureEnvironmentIsolationChild(t *testing.T) {
 		t.Skip("helper for TestGitFixtureEnvironmentIsolation")
 	}
 	dir := initGitRepo(t)
-	gitDir := fixtureGit(t, dir, "rev-parse", "--absolute-git-dir")
-	if want := filepath.Join(dir, ".git"); gitDir != want {
+	// git prints forward-slash paths on Windows and both git and TempDir may
+	// traverse symlinked temp roots — resolve both sides before comparing.
+	wantDir := resolveFixturePath(t, dir)
+	gitDir := resolveFixturePath(t, fixtureGit(t, dir, "rev-parse", "--absolute-git-dir"))
+	if want := filepath.Join(wantDir, ".git"); gitDir != want {
 		t.Fatalf("fixture git dir = %q, want %q", gitDir, want)
 	}
-	if top := fixtureGit(t, dir, "rev-parse", "--show-toplevel"); top != dir {
-		t.Fatalf("fixture worktree = %q, want %q", top, dir)
+	if top := resolveFixturePath(t, fixtureGit(t, dir, "rev-parse", "--show-toplevel")); top != wantDir {
+		t.Fatalf("fixture worktree = %q, want %q", top, wantDir)
 	}
+}
+
+// resolveFixturePath resolves symlinks so a git-emitted path and a TempDir
+// path compare byte-exactly (t.TempDir may return a symlinked root on macOS,
+// and git reports forward slashes on Windows).
+func resolveFixturePath(t *testing.T, p string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", p, err)
+	}
+	return resolved
 }
 
 // fixtureGit runs git in dir (or the working directory when dir is empty) and

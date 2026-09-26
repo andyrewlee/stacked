@@ -79,6 +79,13 @@ func lockCreateConflict(path string, err error) bool {
 	if errors.Is(err, os.ErrExist) {
 		return true
 	}
+	// A directory squatting on the lock path fails O_CREATE|O_EXCL with EISDIR
+	// on unix and a non-ErrExist flavor on windows ("is a directory"). It is
+	// still a conflict: the path exists and its contents can never be read to
+	// prove an owner gone, so callers get ordinary busy semantics.
+	if info, statErr := os.Lstat(path); statErr == nil && info.IsDir() {
+		return true
+	}
 	return lockCreateConflictRetry(path, err)
 }
 
