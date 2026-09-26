@@ -12,7 +12,7 @@ The numbering is the recommended order. Audit IDs retain the original finding nu
 
 | Plan | Outcome | Audit ID | Priority | Effort | Risk | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| [001](001-isolate-git-test-environments.md) | Isolate real-Git fixtures from host configuration | 9 | P1 | S | LOW | TODO |
+| [001](001-isolate-git-test-environments.md) | Isolate real-Git fixtures from host configuration | 9 | P1 | S | LOW | DONE |
 | [002](002-include-rename-sources-in-containment.md) | Keep both sides of renames in the prune containment check | 1 | P1 | S | LOW | TODO |
 | [003](003-account-for-every-staged-absorb-change.md) | Account for every staged change before absorb can reset the index | 2 | P1 | M | MED | TODO |
 | [004](004-refuse-shifted-absorb-mappings.md) | Refuse absorb hunks whose ancestor coordinates cannot be applied safely | 3 | P1 | M | MED | TODO |

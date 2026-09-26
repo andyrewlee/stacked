@@ -14,7 +14,18 @@
 - **Category:** tests
 - **Audit item:** 9
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/001-isolate-git-test-environments` (stacked on `docs-round-6-plans`).
+
+- Step 1 expected-failure check: `go test ./internal/git ./internal/stack ./cmd -run '^TestGitFixtureEnvironmentIsolation$' -count=1` → all three regressions FAILED pre-fix (internal/git and cmd children broke on the commit; internal/stack asserted the decoy git dir). Assertions kept.
+- Step 2: added `TestMain` + `normalizeGitTestEnv` to `internal/git/testmain_test.go` and `internal/stack/testmain_test.go`; extended the existing cmd `TestMain` to call the helper in `cmd/testenv_test.go` (stdout silencing and `ST_TEST_DEBUG` preserved). Re-ran the focused regression → all three PASS, sentinels absent, decoy repo untouched.
+- Step 3: `GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=commit.gpgSign GIT_CONFIG_VALUE_0=true GIT_CONFIG_KEY_1=gpg.program GIT_CONFIG_VALUE_1=/usr/bin/false go test ./internal/git -run '^TestCurrentBranchAndExists$' -count=1` → PASS.
+- `go test ./internal/git ./internal/stack ./cmd -count=1` → ok (91s / 14s / 340s).
+- `make ci` → exit 0 (deps, pins, fmt-check, vet native+windows+plan9, build, golangci-lint v2.12.2 0 issues, race tests, e2e, merged coverage 86.9% ≥ 75%).
+- `git diff --check` → exit 0; modified files all in Scope.
 
 ## Why this matters
 
