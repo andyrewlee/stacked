@@ -14,7 +14,19 @@
 - **Category:** bug
 - **Audit item:** 4
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/005-enforce-undo-schema-compatibility` (stacked on `advisor/004`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- <scoped files>` → only documented predecessor changes (001 test-env isolation, 002–004 absorb/rename work) plus plan-file additions; no unexplained source drift.
+- Step 1: added `TestUndoRejectsFutureSnapshot` (engine: future snapshot with supported/nil current state, future nonnil current state, v0/v1 controls, malformed snapshot, no-mutation and no-Save assertions) plus cmd `TestUndoRejectsFutureCurrentState` and `TestUndoRejectsFutureSnapshotBeforeWorktreePreparation` (state/journal bytes, refs, worktree presence, cwd, and index all preserved). Pre-fix run failed as specified: all three future-schema cases returned nil error (undo proceeded); the worktree-ordering case errored through the shim path instead of the schema barrier.
+- Step 2: factored a shared `decodeState` into `internal/stack/store.go` — `Load`, `Undo`, and the new `ValidateUndoState(data []byte) error` adapter all enforce the same barrier (malformed → plain parse error, version > schema → wrapped `ErrStateTooNew`, absent version → v0 legacy accepted, `Branches` always non-nil). `stack.Undo` validates the supplied current `State` and the snapshot before any git call or Save. `cmd.runUndo` returns `ErrStateTooNew` from the current-state load instead of taking the nil-state fallback (other load errors keep the existing snapshot recovery), and calls `stack.ValidateUndoState(entry.State)` before `prepareUndoCurrentCreatedWorktree` — so refusal happens before any chdir/worktree removal.
+- Step 3: `go test ./cmd -run '^TestUndoRestoresSnapshotWhenCurrentStateIsMalformed$'` → PASS (malformed-current-state recovery unchanged); `go test ./internal/stack ./cmd -run 'Test.*(Undo|StateTooNew|Schema)'` → ok; `make test-fast` → ok; `make test` (race) → ok. One test-side fix during bring-up: the strict `create --worktree` JSON decoder needed the full emitted shape (`branch/parent/worktree/switched/summary`).
+- `make ci` on commit `8e2e11c` in detached worktree `/private/tmp/st-ci-005` → exit 0 (golangci-lint v2.12.2 0 issues, vet native/windows/plan9, build, race tests, e2e, merged coverage 86.9% ≥ 75%). The first attempt failed on `golangci-lint not found` because the worktree shell lacked `$HOME/go/bin` on PATH; rerun with it passed — environmental, not a regression.
+- `git diff --check` → exit 0; modified files all in Scope (`internal/stack/store.go`, `undo_op.go`, `undo_op_test.go`, `cmd/undo.go`, `commands_mutation_test.go`, `CHANGELOG.md`, plan files).
+- Docs: `CHANGELOG.md` notes the refuse-before-mutating schema barrier for state and undo snapshots.
 
 ## Why this matters
 

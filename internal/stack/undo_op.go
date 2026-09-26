@@ -1,7 +1,6 @@
 package stack
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -18,8 +17,16 @@ import (
 // not dropped — that is the caller's job after a successful undo.
 func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	g := env.Git
-	var prev State
-	if err := json.Unmarshal(entry.State, &prev); err != nil {
+	// Both schema barriers run before ANY git call, Save, or bookkeeping: a
+	// snapshot written by a newer st may record fields this build would
+	// misapply, and a supplied nonnil current State is held to the same rule
+	// as a defensive engine boundary (cmd already refuses the same file at
+	// Load, but the engine must not rely on the caller having done so).
+	if s != nil && s.Version > stateSchemaVersion {
+		return nil, fmt.Errorf("current state: %w (schema v%d; this st understands v%d) — upgrade st or check for a downgrade", ErrStateTooNew, s.Version, stateSchemaVersion)
+	}
+	prev, err := decodeState(entry.State)
+	if err != nil {
 		return nil, fmt.Errorf("parsing undo state: %w", err)
 	}
 
@@ -103,7 +110,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	}
 
 	if s != nil {
-		*s = prev
+		*s = *prev
 		if s.Branches == nil {
 			s.Branches = make(map[string]*Branch)
 		}

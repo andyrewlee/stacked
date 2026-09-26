@@ -31,6 +31,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was renamed are refused — the apply lands a zero-context patch at HEAD line
   numbers on the ancestor's tree, where shifted coordinates could hit the
   wrong occurrence of repeated text.
+- **`st undo` refuses state written by a newer `st` before mutating anything.**
+  Both the current `state.json` and the newest undo journal snapshot are
+  schema-checked up front — a file or snapshot with a schema version newer
+  than this binary understands now fails with "state file written by newer
+  st" before any branch deletion, worktree removal, ref restore, checkout,
+  or save, leaving state, journal, refs, index, and cwd untouched. Legacy
+  (version-less) and current snapshots still undo, and the supported
+  malformed-current-state recovery path is unchanged.
 - **Squash-merge detection keeps both sides of a rename.** `st sync`'s
   containment check now enumerates rename sources as well as destinations, so
   a branch that renames A to B is no longer pruned when upstream merely copied
