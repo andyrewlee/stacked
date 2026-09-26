@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,11 +23,10 @@ func TestMain(m *testing.M) {
 	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil && os.Getenv("ST_TEST_DEBUG") == "" {
 		os.Stdout = devnull
 	}
-	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	os.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	os.Setenv("GIT_TERMINAL_PROMPT", "0")
-	os.Setenv("GIT_PAGER", "cat")
-	os.Setenv("GIT_EDITOR", "true")
+	if err := normalizeGitTestEnv(); err != nil {
+		fmt.Fprintln(os.Stderr, "normalize git test env:", err)
+		os.Exit(1)
+	}
 	os.Exit(m.Run())
 }
 
