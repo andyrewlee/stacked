@@ -14,7 +14,18 @@
 - **Category:** bug
 - **Audit item:** 1
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/002-include-rename-sources-in-containment` (stacked on `advisor/001`).
+
+- Drift check: `git diff --stat cb31f06..HEAD -- internal/git/git.go internal/git/git_test.go e2e/e2e_journey_test.go CHANGELOG.md plans/002-*.md plans/README.md` → only plan-file additions from the docs base commit; no source drift.
+- Step 1: extended `TestChangesContainedIn` with rename-vs-copy (both `diff.renames=true` and `=false`), identical-rename, changed-source and changed-destination cases. Pre-fix run: `renamer must NOT be contained (diff.renames=true)` FAILED as specified; `diff.renames=false` was already correct.
+- Step 2: added `--no-renames` to the `--name-only -z` enumeration in `ChangesContainedIn`; endpoint comparison, triple-dot range, `-z` and `GIT_LITERAL_PATHSPECS` retained. Post-fix: `go test ./internal/git -run '^TestChangesContainedIn' -count=1` → ok.
+- Step 3: added `TestSyncPreservesUncontainedRename` to `e2e/e2e_journey_test.go` (uncontained rename retained, contained sibling pruned, refs + `st log --json` metadata + `st validate` asserted) → PASS. CHANGELOG entry under Unreleased/Fixed.
+- `make ci` on commit 2a474a7 in detached worktree → exit 0 (golangci-lint v2.12.2 0 issues, race tests, e2e, merged coverage 86.8% ≥ 75%).
+- `git diff --check` → exit 0; modified files all in Scope.
 
 ## Why this matters
 

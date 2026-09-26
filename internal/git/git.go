@@ -237,9 +237,13 @@ func MergedInto(ref string) (map[string]bool, error) {
 // add nothing.
 //
 // The check is exact tree-content equality, not a patch-id heuristic: P is the
-// path set of `git diff upstream...branch` (three-dot = merge-base to branch),
-// and branch is contained iff `git diff --quiet upstream branch -- P` finds no
-// disagreement on exactly those paths. Equivalently, the three-way merge of
+// path set of `git diff --no-renames upstream...branch` (three-dot =
+// merge-base to branch), and branch is contained iff `git diff --quiet
+// upstream branch -- P` finds no disagreement on exactly those paths.
+// --no-renames keeps BOTH sides of a rename in P: a branch renaming A to B
+// also deletes A, and a path set listing only B would overlook that deletion
+// when upstream merely copied A to B while keeping A. Equivalently, the
+// three-way merge of
 // branch into upstream would yield upstream's exact tree: at every contested
 // path ours==theirs, so no conflict is possible and upstream's other changes
 // are untouched. A branch whose squash-merge landed in a trunk that later
@@ -255,7 +259,7 @@ func ChangesContainedIn(upstream, branch string) (bool, error) {
 	}
 	up := localBranchRef(upstream)
 	br := localBranchRef(branch)
-	out, err := run("diff", "--name-only", "-z", up+"..."+br)
+	out, err := run("diff", "--name-only", "--no-renames", "-z", up+"..."+br)
 	if err != nil {
 		return false, err
 	}
