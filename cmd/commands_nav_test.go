@@ -112,6 +112,10 @@ func TestUpToLeafInWorktreeTeleports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve worktree path %q: %v", wt.Path, err)
 	}
+	// The rendered hints echo the path bytes exactly as `git worktree list`
+	// reported them — forward slashes on Windows. After resolving symlinks
+	// (macOS /var -> /private/var), spell the expectation the same way.
+	wtPath = filepath.ToSlash(wtPath)
 
 	// No shim: report where feat-b lives plus the cd hint; HEAD stays put.
 	out = captureStdout(t, func() {
