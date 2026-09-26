@@ -1,0 +1,156 @@
+[
+  {
+    "scenario": "checkout_tracked_and_trunk",
+    "_note": "checkout's positional accepts trunk + tracked branches; sorted bytewise. PROPOSED: endpoint + candidate list.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a", "feat-b"], "trunk": "main", "localUntracked": ["scratch"] },
+    "expected": ["feat-a", "feat-b", "main"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["scratch", "git subprocess for refs other than for-each-ref/worktree list"]
+  },
+  {
+    "scenario": "checkout_alias_co",
+    "_note": "Alias word-1 token resolves the same candidate set.",
+    "command": "co",
+    "words": ["st", "co", "fe"],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a", "fix-1"], "trunk": "main" },
+    "expected": ["feat-a", "fix-1", "main"],
+    "proposed": ["expected"],
+    "mustNotHappen": []
+  },
+  {
+    "scenario": "onto_excludes_moving_subtree",
+    "_note": "Current branch feat-b (child feat-c): neither is a legal onto target; trunk and feat-a are. PROPOSED.",
+    "command": "onto",
+    "words": ["st", "onto", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a", "feat-b", "feat-c"], "trunk": "main", "parentOf": { "feat-c": "feat-b" }, "current": "feat-b" },
+    "expected": ["feat-a", "main"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["feat-b", "feat-c"]
+  },
+  {
+    "scenario": "track_untracked_only",
+    "_note": "track's positional takes a LOCAL untracked branch; tracked and trunk are excluded.",
+    "command": "track",
+    "words": ["st", "track", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a"], "trunk": "main", "localUntracked": ["scratch", "wip"] },
+    "expected": ["scratch", "wip"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["feat-a", "main"]
+  },
+  {
+    "scenario": "track_parent_flag_value",
+    "_note": "After --parent, the next word completes TRACKED branches (the flag consumes a value), not untracked names.",
+    "command": "track",
+    "words": ["st", "track", "--parent", ""],
+    "cursor": 3,
+    "setup": { "tracked": ["feat-a", "feat-b"], "trunk": "main", "localUntracked": ["scratch"] },
+    "expected": ["feat-a", "feat-b", "main"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["scratch"]
+  },
+  {
+    "scenario": "double_dash_terminator",
+    "_note": "After --, words are positional even when they look like flags; positional index already consumed -> no second branch.",
+    "command": "checkout",
+    "words": ["st", "checkout", "feat-a", "--", ""],
+    "cursor": 4,
+    "setup": { "tracked": ["feat-a", "feat-b"], "trunk": "main" },
+    "expected": [],
+    "proposed": ["expected"],
+    "mustNotHappen": ["--json as a positional candidate"]
+  },
+  {
+    "scenario": "worktree_create_candidates",
+    "_note": "worktree <branch> offers tracked branches lacking a worktree; trunk and owning branches excluded.",
+    "command": "worktree",
+    "words": ["st", "worktree", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a", "feat-b"], "trunk": "main", "worktreeOwners": ["feat-b"] },
+    "expected": ["feat-a"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["feat-b", "main"]
+  },
+  {
+    "scenario": "worktree_rm_owners",
+    "_note": "After rm/remove sub-verb the positional completes owning branches only.",
+    "command": "worktree",
+    "words": ["st", "worktree", "rm", ""],
+    "cursor": 3,
+    "setup": { "tracked": ["feat-a", "feat-b"], "trunk": "main", "worktreeOwners": ["feat-b"] },
+    "expected": ["feat-b"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["feat-a", "flags"]
+  },
+  {
+    "scenario": "punctuation_and_unicode",
+    "_note": "Legal refname punctuation and Unicode pass through byte-exact; newline/control bytes cannot exist in refs and need no escaping path.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat/a{b},c[d]", "dasher--name", "ユニコード"], "trunk": "main" },
+    "expected": ["dasher--name", "feat/a{b},c[d]", "main", "ユニコード"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["shell evaluation of candidate text", "mangling of { } [ ] bytes"]
+  },
+  {
+    "scenario": "detached_head",
+    "_note": "Detached HEAD still offers checkout candidates (no current branch needed); onto degenerates to all tracked + trunk.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a"], "trunk": "main", "detached": true },
+    "expected": ["feat-a", "main"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["stderr output", "nonzero exit"]
+  },
+  {
+    "scenario": "no_repository",
+    "_note": "Outside any git repo: silent empty.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "gitRepo": false },
+    "expected": [],
+    "proposed": ["expected"],
+    "mustNotHappen": ["stderr output", "nonzero exit"]
+  },
+  {
+    "scenario": "uninitialized_state",
+    "_note": "Git repo without st state: silent empty.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "gitRepo": true, "initialized": false },
+    "expected": [],
+    "proposed": ["expected"],
+    "mustNotHappen": ["stderr output", "state file creation"]
+  },
+  {
+    "scenario": "future_state_schema",
+    "_note": "State written by a newer st: silent empty — the endpoint does not guess at fields it cannot parse.",
+    "command": "checkout",
+    "words": ["st", "checkout", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a"], "trunk": "main", "stateVersion": "future" },
+    "expected": [],
+    "proposed": ["expected"],
+    "mustNotHappen": ["stderr output", "speculative candidates"]
+  },
+  {
+    "scenario": "thousands_of_branches",
+    "_note": "5000 local branches: O(N) output, bounded process count — no per-branch subprocess, no history walk.",
+    "command": "track",
+    "words": ["st", "track", ""],
+    "cursor": 2,
+    "setup": { "tracked": ["feat-a"], "trunk": "main", "localUntrackedCount": 5000 },
+    "expected": ["<5000 sorted untracked names>"],
+    "proposed": ["expected"],
+    "mustNotHappen": ["more than 4 git subprocesses", "rev-list/fetch/ls-remote", "any network call"]
+  }
+]

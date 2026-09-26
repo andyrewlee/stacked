@@ -14,7 +14,19 @@
 - **Category:** direction
 - **Audit item:** D3
 - **Planned at:** commit `cb31f06`, 2026-09-26
-- **Implementation status:** TODO
+- **Implementation status:** DONE
+
+## Execution record
+
+Executed on branch `advisor/017-design-branch-aware-completion` (stacked on `advisor/016-design-undo-impact-preview`).
+
+- Step 1 trace: mapped `runCompletion`/`commandCompletions`/`casePattern`/`commandNames`/`subVerbs` (`cmd/completion.go`) and the positional grammars of `checkout`/`co` (`[name]`, tracked+trunk), `onto`/`move` (`<target>`, valid alternative parents), `track` (`[name]` untracked, `--parent` consumes a value), and `worktree`/`wt` (`<branch>` | `ls|list` | `rm|remove <branch>` | `--all`). Value-taking flags derive from `IsBoolFlag` on the declared FlagSet — no hand-maintained list; Go's flag parser stopping at the first non-flag word and at `--` is reproduced in the protocol.
+- Step 2 chose ONE endpoint: hidden `st __complete <command-or-alias> <word-index> -- <prior words...>` — one validated branch name per line on stdout, no descriptions, exit 0 (silent empty) for no-repo/uninitialized/future-state/detached-HEAD/unknown-command/flag-value positions; no lock, no Save, no fetch, no mutation. Never in `commandNames()`/help/word-1 candidates. Scripts resolve `st` on PATH at completion time (`ST_COMPLETE_BIN` override). bash `compgen -W`, zsh `compadd` with `${(f)}` splitting, fish native `-a` substitution — candidates always argv data, never evaluated.
+- Step 3 bounded performance: ≤3 git probes inside one endpoint process (`for-each-ref`, `worktree list`, `rev-parse`-family), no network, no history traversal, O(branches) output; acceptance asserts process COUNT via PATH shim rather than flaky millisecond gates.
+- Artifacts: `plans/design/017-branch-completion.md` (8 required sections + positional-grammar table), `017-completion-cases.json` (14 scenarios incl. punctuation/Unicode names, `--` terminator, `--parent` value, dirty set boundaries, detached HEAD, no-repo, uninitialized, future schema, 5000-branch bound), `017-completion-acceptance.md` (endpoint tests + real-shell sentinel-execution tests + structural perf assertions + compatibility invariants), `check-completion.py` (stdlib validator: scenarios, registry commands/aliases, words/cursor shape, sorted-unique expectations, silence assertions, acceptance cross-refs).
+- Verify commands: `rg -n '^## (Current contract|Candidate policy|Endpoint protocol|Shell integration|Performance and failures|Examples|Acceptance|Deferred work)$' plans/design/017-branch-completion.md` → all 8 sections; `python3 plans/design/check-completion.py` → `check-completion: OK` (exit 0); `rg -c 'argv|newline|detached|uninitialized|future|stderr|bash|zsh|fish' plans/design/017-branch-completion.md` → 22.
+- Baseline: `go test ./cmd -run '^Test(CommandCompletions|CompletionScriptsParse|CompletionShells)$' -count=1` → ok.
+- `git diff --check` → exit 0; created files all in Scope. No runtime scripts, shell config, or source files changed.
 
 ## Why this matters
 
