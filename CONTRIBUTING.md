@@ -111,6 +111,15 @@ tracks latest, so check `goreleaser --version`, or pin exactly with
 `go install github.com/goreleaser/goreleaser/v2@v2.17.0`). It is not a Go
 dependency.
 
+`bash scripts/check-install-signatures.sh` exercises the installer's
+signature/checksum decisions end-to-end against a disposable signed fixture —
+valid install, missing signature, empty embedded key, absent minisign, invalid
+signature (refused even under `ST_ALLOW_UNVERIFIED=1`), and tampered
+archive/checksum-entry cases, each verified against a pre-placed sentinel. It
+needs `minisign` plus `curl`/`tar`/the platform sha256 tool locally, no release
+secrets (keys are generated per run), and skips cleanly when minisign is
+absent. CI runs it on the Ubuntu leg, which installs minisign via apt.
+
 ### Signing runbook (minisign)
 
 Every release signs `checksums.txt` with minisign (the `signs:` pipe in
