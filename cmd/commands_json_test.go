@@ -172,19 +172,9 @@ func TestLogNeedsRestackFlag(t *testing.T) {
 	}
 }
 
-func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	if err := runCreate([]string{"feat-b"}); err != nil {
-		t.Fatalf("create feat-b: %v", err)
-	}
-
-	mustCheckout(t, "feat-a")
-	write(t, "a2.txt", "a2\n")
-	mustRun(t, "git", "add", "-A")
-	mustRun(t, "git", "commit", "-q", "-m", "a2")
-
+// logTopCommit renders `log --json` and returns branch's topCommit field.
+func logTopCommit(t *testing.T, branch string) string {
+	t.Helper()
 	jsonOut := captureStdout(t, func() {
 		if err := runLog([]string{"--json"}); err != nil {
 			t.Fatalf("log --json: %v", err)
@@ -194,10 +184,263 @@ func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
 	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
 	}
-	b := root.Children[0].Children[0]
-	if b.TopCommit != "" {
-		t.Fatalf("feat-b topCommit = %q, want empty for branch behind parent", b.TopCommit)
+	var find func(n *logNode) *logNode
+	find = func(n *logNode) *logNode {
+		if n.Name == branch {
+			return n
+		}
+		for _, c := range n.Children {
+			if got := find(c); got != nil {
+				return got
+			}
+		}
+		return nil
 	}
+	node := find(&root)
+	if node == nil {
+		t.Fatalf("branch %q not rendered in log tree: %s", branch, jsonOut)
+	}
+	return node.TopCommit
+}
+
+// TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent pins the topCommit
+// visibility rule: a subject is shown only when the branch's tip holds commits
+// its parent's tip does not reach (the old `git log parent..branch` question,
+// now answered by a bounded ancestry query per distinct tip pair).
+func TestLogOmitsTopCommitWhenBranchTipIsReachableFromParent(t *testing.T) {
+	t.Run("child behind parent", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		if err := runCreate([]string{"feat-b"}); err != nil {
+			t.Fatalf("create feat-b: %v", err)
+		}
+
+		mustCheckout(t, "feat-a")
+		write(t, "a2.txt", "a2\n")
+		mustRun(t, "git", "add", "-A")
+		mustRun(t, "git", "commit", "-q", "-m", "a2")
+
+		if got := logTopCommit(t, "feat-b"); got != "" {
+			t.Fatalf("feat-b topCommit = %q, want empty for branch behind parent", got)
+		}
+	})
+
+	t.Run("child ahead of parent", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+		if got := logTopCommit(t, "feat-b"); got != "b" {
+			t.Fatalf("feat-b topCommit = %q, want %q", got, "b")
+		}
+	})
+
+	t.Run("equal tips", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustRun(t, "git", "branch", "feat-b", "feat-a")
+		if err := runTrack([]string{"feat-b", "--parent", "feat-a"}); err != nil {
+			t.Fatalf("track feat-b: %v", err)
+		}
+
+		if got := logTopCommit(t, "feat-b"); got != "" {
+			t.Fatalf("feat-b topCommit = %q, want empty for a tip equal to its parent", got)
+		}
+	})
+
+	t.Run("diverged child shows its subject", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+		// Move feat-a past feat-b's base while feat-b keeps its own commit.
+		mustCheckout(t, "feat-a")
+		write(t, "a2.txt", "a2\n")
+		mustRun(t, "git", "add", "-A")
+		mustRun(t, "git", "commit", "-q", "-m", "a2")
+
+		if got := logTopCommit(t, "feat-b"); got != "b" {
+			t.Fatalf("feat-b topCommit = %q, want %q for a diverged tip", got, "b")
+		}
+	})
+
+	t.Run("tip reachable through a merge", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+		// feat-a merges feat-b: b's tip is reachable from a's tip through the
+		// merge parent, so b has no commits beyond its parent.
+		mustCheckout(t, "feat-a")
+		mustRun(t, "git", "merge", "-q", "-m", "merge b", "feat-b")
+
+		if got := logTopCommit(t, "feat-b"); got != "" {
+			t.Fatalf("feat-b topCommit = %q, want empty for a tip reachable via merge", got)
+		}
+	})
+
+	t.Run("missing branch tip", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+		mustCheckout(t, "main")
+		mustRun(t, "git", "branch", "-D", "feat-b")
+
+		if got := logTopCommit(t, "feat-b"); got != "" {
+			t.Fatalf("feat-b topCommit = %q, want empty for a missing tip", got)
+		}
+	})
+
+	t.Run("missing parent tip", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+		mustCheckout(t, "main")
+		mustRun(t, "git", "update-ref", "-d", "refs/heads/feat-a")
+
+		if got := logTopCommit(t, "feat-b"); got != "" {
+			t.Fatalf("feat-b topCommit = %q, want empty when the parent tip is missing", got)
+		}
+	})
+}
+
+// recordGitCommands prepends a logging git shim to PATH. Every spawned git
+// appends its argv (space-joined, one line) to the returned log file while
+// GIT_CMD_LOG is set; setup commands run before recording starts stay out.
+func recordGitCommands(t *testing.T) (logPath string, start func()) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	logPath = filepath.Join(t.TempDir(), "git-commands.log")
+	shimDir := t.TempDir()
+	var shimName, shim string
+	if runtime.GOOS == "windows" {
+		// Windows cannot exec an extensionless sh script, and a "git" file
+		// would win the LookPath race over every PATHEXT suffix. git.cmd is
+		// resolved and run via cmd by os/exec instead.
+		shimName, shim = "git.cmd", "@echo off\r\nif defined GIT_CMD_LOG echo %*>> \"%GIT_CMD_LOG%\"\r\n\""+realGit+"\" %*\r\n"
+	} else {
+		shimName, shim = "git", fmt.Sprintf("#!/bin/sh\n[ -n \"$GIT_CMD_LOG\" ] && echo \"$@\" >> \"$GIT_CMD_LOG\"\nexec %q \"$@\"\n", realGit)
+	}
+	if err := os.WriteFile(filepath.Join(shimDir, shimName), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath, func() { t.Setenv("GIT_CMD_LOG", logPath) }
+}
+
+func gitCommandLog(t *testing.T, logPath string) []string {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read git command log: %v", err)
+	}
+	// The Windows shim echoes CRLF-terminated lines; normalize before use.
+	return strings.Split(strings.TrimRight(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n"), "\n")
+}
+
+// TestLogDoesNotMaterializeHistory: log must never ask git for an unbounded
+// `rev-list --parents` history walk; ancestry questions go through bounded
+// merge-base probes, once per distinct tip pair. A trunk-only render asks no
+// ancestry question at all.
+func TestLogDoesNotMaterializeHistory(t *testing.T) {
+	t.Run("trunk only asks no ancestry question", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		logPath, start := recordGitCommands(t)
+		start()
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+		for _, line := range gitCommandLog(t, logPath) {
+			if strings.HasPrefix(line, "rev-list") || strings.HasPrefix(line, "merge-base") {
+				t.Fatalf("trunk-only log spawned a history query: %q", line)
+			}
+		}
+	})
+
+	t.Run("no unbounded rev-list for a stack", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+		mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+		mustCreate(t, "feat-c", "c.txt", "c\n", "c")
+		logPath, start := recordGitCommands(t)
+		start()
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+		for _, line := range gitCommandLog(t, logPath) {
+			if strings.HasPrefix(line, "rev-list") {
+				t.Fatalf("log materialized history via %q", line)
+			}
+		}
+	})
+
+	t.Run("shared tip pair is queried once", func(t *testing.T) {
+		newRepo(t)
+		mustInit(t)
+		// feat-a sits at Y on main; feat-b and feat-c BOTH sit at X (a commit
+		// on top of Y) and BOTH track feat-a — the same (childTip, parentTip)
+		// pair, which must cost exactly one merge-base probe.
+		mustRun(t, "git", "checkout", "-q", "-b", "feat-a")
+		write(t, "a.txt", "a\n")
+		mustRun(t, "git", "add", "-A")
+		mustRun(t, "git", "commit", "-q", "-m", "a")
+		mustRun(t, "git", "checkout", "-q", "-b", "feat-b")
+		write(t, "b.txt", "b\n")
+		mustRun(t, "git", "add", "-A")
+		mustRun(t, "git", "commit", "-q", "-m", "b")
+		mustRun(t, "git", "branch", "feat-c", "feat-b")
+		mustCheckout(t, "main")
+		if err := runTrack([]string{"feat-a", "--parent", "main"}); err != nil {
+			t.Fatalf("track feat-a: %v", err)
+		}
+		if err := runTrack([]string{"feat-b", "--parent", "feat-a"}); err != nil {
+			t.Fatalf("track feat-b: %v", err)
+		}
+		if err := runTrack([]string{"feat-c", "--parent", "feat-a"}); err != nil {
+			t.Fatalf("track feat-c: %v", err)
+		}
+		logPath, start := recordGitCommands(t)
+		start()
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+		// Either feat-b or feat-c issues the shared pair's single probe —
+		// map order is not deterministic — but feat-a's pair is always asked.
+		shared, total := 0, 0
+		for _, line := range gitCommandLog(t, logPath) {
+			if strings.HasPrefix(line, "rev-list") {
+				t.Fatalf("log materialized history via %q", line)
+			}
+			if strings.HasPrefix(line, "merge-base") {
+				total++
+				if line == "merge-base --is-ancestor refs/heads/feat-b refs/heads/feat-a" ||
+					line == "merge-base --is-ancestor refs/heads/feat-c refs/heads/feat-a" {
+					shared++
+				}
+			}
+		}
+		if shared != 1 {
+			t.Fatalf("shared pair probed %d times, want 1; log:\n%s", shared, strings.Join(gitCommandLog(t, logPath), "\n"))
+		}
+		if total != 2 {
+			t.Fatalf("merge-base probes = %d, want 2 (feat-a's pair + the shared pair)", total)
+		}
+	})
 }
 
 func TestLogJSONOmitsUnrelatedLocalBranch(t *testing.T) {
