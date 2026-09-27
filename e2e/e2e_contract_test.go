@@ -3,6 +3,7 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -184,6 +185,53 @@ func TestNavigationEdges(t *testing.T) {
 	res = r.st("down", "0")
 	wantExit(t, res, 1)
 	wantStderrContains(t, res, "at least 1")
+}
+
+// TestManualNavigationQuotedPath pins the manual-navigation contract: without
+// the shell shim, a teleport hint must be a paste-safe shell command even when
+// the worktree path contains spaces and shell metacharacters — the path is
+// single-quoted behind `cd --` — while JSON output keeps the exact path bytes.
+func TestManualNavigationQuotedPath(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("single-quote cd spelling targets POSIX shells")
+	}
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so a worktree can check it out
+
+	wt := filepath.Join(t.TempDir(), "wt dir 'q' $x")
+	if err := exec.Command("git", "-C", r.dir, "worktree", "add", "-q", wt, "feat-a").Run(); err != nil {
+		t.Skipf("filesystem/git cannot host the path: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", wt, err)
+	}
+	quoted := "run: cd -- '" + strings.ReplaceAll(want, "'", `'\''`) + "'"
+
+	// Text mode: the offered command is the quoted, copyable spelling.
+	res := r.stOK("checkout", "feat-a")
+	wantStdoutContains(t, res, quoted)
+
+	// JSON mode: no false "switched" claim, and the worktree field keeps the
+	// exact raw path bytes.
+	out := r.stOK("checkout", "feat-a", "--json").stdout
+	var payload struct {
+		Branch   string `json:"branch"`
+		Switched bool   `json:"switched"`
+		Worktree string `json:"worktree"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("decode checkout json: %v\n%s", err, out)
+	}
+	if payload.Worktree != want {
+		t.Fatalf("checkout json worktree = %q, want exact path %q", payload.Worktree, want)
+	}
+	if payload.Switched {
+		t.Fatalf("checkout without the shim must not claim a switch: %+v", payload)
+	}
 }
 
 func TestLogEscapesControlBytesInSubject(t *testing.T) {

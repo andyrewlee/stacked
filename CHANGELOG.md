@@ -48,6 +48,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is active, then remove the named file — see CONTRIBUTING's troubleshooting
   section. Stale `lock.excl` reclamation under a freshly owned guard is
   unchanged.
+- **Manual worktree navigation hints are paste-safe shell commands.** Without
+  the `st shell install` integration, teleport output used to print
+  `run: cd <path>` with the raw path — a path containing spaces pasted wrong,
+  and one containing `;`/`$(...)`/backticks executed as shell syntax. The hint
+  now emits `run: cd -- '<path>'` (POSIX single-quoting, so embedded
+  apostrophes are handled too); when the path contains terminal control bytes
+  no executable command is offered — the output points at the shell
+  integration or the `--json` `worktree` field instead, since an escaped
+  spelling would not name the real directory.
 - **Worktree paths are parsed byte-exactly.** `git worktree list` now uses
   the NUL-framed `--porcelain -z` grammar on git ≥ 2.36, so a path containing
   a newline (or text that would look like a record field) can no longer
