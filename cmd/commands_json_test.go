@@ -322,8 +322,16 @@ func recordGitCommands(t *testing.T) (logPath string, start func()) {
 	}
 	logPath = filepath.Join(t.TempDir(), "git-commands.log")
 	shimDir := t.TempDir()
-	shim := fmt.Sprintf("#!/bin/sh\n[ -n \"$GIT_CMD_LOG\" ] && echo \"$@\" >> \"$GIT_CMD_LOG\"\nexec %q \"$@\"\n", realGit)
-	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+	var shimName, shim string
+	if runtime.GOOS == "windows" {
+		// Windows cannot exec an extensionless sh script, and a "git" file
+		// would win the LookPath race over every PATHEXT suffix. git.cmd is
+		// resolved and run via cmd by os/exec instead.
+		shimName, shim = "git.cmd", "@echo off\r\nif defined GIT_CMD_LOG echo %*>> \"%GIT_CMD_LOG%\"\r\n\""+realGit+"\" %*\r\n"
+	} else {
+		shimName, shim = "git", fmt.Sprintf("#!/bin/sh\n[ -n \"$GIT_CMD_LOG\" ] && echo \"$@\" >> \"$GIT_CMD_LOG\"\nexec %q \"$@\"\n", realGit)
+	}
+	if err := os.WriteFile(filepath.Join(shimDir, shimName), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -339,7 +347,8 @@ func gitCommandLog(t *testing.T, logPath string) []string {
 	if err != nil {
 		t.Fatalf("read git command log: %v", err)
 	}
-	return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// The Windows shim echoes CRLF-terminated lines; normalize before use.
+	return strings.Split(strings.TrimRight(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n"), "\n")
 }
 
 // TestLogDoesNotMaterializeHistory: log must never ask git for an unbounded
