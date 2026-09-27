@@ -187,11 +187,14 @@ func TestTeleportHintQuotedPath(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s -c %q failed: %v\n%s", sh, line, err, out)
 				}
-				got := strings.TrimSuffix(string(out), "\n")
-				want, _ := filepath.EvalSymlinks(dir)
-				if runtime.GOOS == "windows" {
-					got, want = filepath.ToSlash(got), filepath.ToSlash(want)
+				// EvalSymlinks canonicalizes both spellings of the landing
+				// dir: t.TempDir may hand back an 8.3 short name (RUNNER~1)
+				// while `pwd -W` reports the long-name form.
+				got, err := filepath.EvalSymlinks(strings.TrimSuffix(string(out), "\n"))
+				if err != nil {
+					t.Fatalf("%s: cd landed at unresolvable %q: %v", sh, out, err)
 				}
+				want, _ := filepath.EvalSymlinks(dir)
 				if !strings.EqualFold(got, want) {
 					t.Errorf("%s: cd landed at %q, want %q (hint line %q)", sh, got, want, line)
 				}
