@@ -5,6 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1098,10 +1101,11 @@ func TestParseWorktreesZMalformed(t *testing.T) {
 }
 
 // installGitShim prepends a `git` shim directory to PATH. The shim logs every
-// invocation (one line per call) to the file GIT_SHIM_LOG points at, runs zFail
-// when the arguments are exactly `worktree list --porcelain -z`, and delegates
-// everything else to the real git binary. It returns the call-log path.
-func installGitShim(t *testing.T, zFail string) string {
+// invocation (one line per call) to the file GIT_SHIM_LOG points at, prints
+// zFailMsg to stderr and exits zFailCode when the arguments are exactly
+// `worktree list --porcelain -z`, and delegates everything else to the real
+// git binary. It returns the call-log path.
+func installGitShim(t *testing.T, zFailMsg string, zFailCode int) string {
 	t.Helper()
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -1110,17 +1114,52 @@ func installGitShim(t *testing.T, zFail string) string {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls.log")
 	t.Setenv("GIT_SHIM_LOG", log)
-	script := "#!/bin/sh\n" +
-		"printf '%s\\n' \"$*\" >> \"$GIT_SHIM_LOG\"\n" +
-		"if [ \"$1\" = worktree ] && [ \"$2\" = list ] && [ \"$3\" = --porcelain ] && [ \"$4\" = -z ]; then\n" +
-		zFail + "\n" +
-		"fi\n" +
-		"exec '" + realGit + "' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+	var name, script string
+	if runtime.GOOS == "windows" {
+		// Windows cannot exec an extensionless sh script, and a "git" file
+		// would win the LookPath race over every PATHEXT suffix. git.cmd is
+		// resolved and run via cmd by os/exec instead.
+		name = "git.cmd"
+		script = "@echo off\r\n" +
+			"echo %*>> \"%GIT_SHIM_LOG%\"\r\n" +
+			"if \"%~1\"==\"worktree\" if \"%~2\"==\"list\" if \"%~3\"==\"--porcelain\" if \"%~4\"==\"-z\" (\r\n" +
+			"  echo " + zFailMsg + " 1>&2\r\n" +
+			"  exit /b " + strconv.Itoa(zFailCode) + "\r\n" +
+			")\r\n" +
+			"\"" + realGit + "\" %*\r\n" +
+			"exit /b %errorlevel%\r\n"
+	} else {
+		name = "git"
+		script = "#!/bin/sh\n" +
+			"printf '%s\\n' \"$*\" >> \"$GIT_SHIM_LOG\"\n" +
+			"if [ \"$1\" = worktree ] && [ \"$2\" = list ] && [ \"$3\" = --porcelain ] && [ \"$4\" = -z ]; then\n" +
+			"echo " + strconv.Quote(zFailMsg) + " >&2\n" +
+			"exit " + strconv.Itoa(zFailCode) + "\n" +
+			"fi\n" +
+			"exec '" + realGit + "' \"$@\"\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return log
+}
+
+// shimCalls reads the call log as trimmed lines (the Windows cmd shim writes
+// CRLF, and echo %* can trail a space).
+func shimCalls(t *testing.T, log string) []string {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("read shim log: %v", err)
+	}
+	var lines []string
+	for _, l := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
 }
 
 // TestWorktreesLegacyFallback pins the old-git path: when
@@ -1133,7 +1172,7 @@ func TestWorktreesLegacyFallback(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "feat-wt")
 	mustGit(t, "worktree", "add", "-q", linked, "feat")
 
-	log := installGitShim(t, "echo \"error: unknown option 'z'\" >&2\nexit 129")
+	log := installGitShim(t, "error: unknown option 'z'", 129)
 	wts, err := Worktrees()
 	if err != nil {
 		t.Fatalf("Worktrees via legacy fallback: %v", err)
@@ -1151,15 +1190,12 @@ func TestWorktreesLegacyFallback(t *testing.T) {
 	if resolveSymlinks(t, feat.Path) != resolveSymlinks(t, linked) {
 		t.Errorf("feat worktree path = %q, want %q", feat.Path, linked)
 	}
-	calls, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatalf("read shim log: %v", err)
+	calls := shimCalls(t, log)
+	if !slices.Contains(calls, "worktree list --porcelain -z") {
+		t.Errorf("expected the -z probe first; calls:\n%s", strings.Join(calls, "\n"))
 	}
-	if !strings.Contains(string(calls), "worktree list --porcelain -z\n") {
-		t.Errorf("expected the -z probe first; calls:\n%s", calls)
-	}
-	if !strings.Contains(string(calls), "worktree list --porcelain\n") {
-		t.Errorf("expected a legacy `worktree list --porcelain` retry; calls:\n%s", calls)
+	if !slices.Contains(calls, "worktree list --porcelain") {
+		t.Errorf("expected a legacy `worktree list --porcelain` retry; calls:\n%s", strings.Join(calls, "\n"))
 	}
 }
 
@@ -1168,18 +1204,15 @@ func TestWorktreesLegacyFallback(t *testing.T) {
 // unsupported-option diagnostic only.
 func TestWorktreesDoesNotFallbackOnError(t *testing.T) {
 	newRepo(t)
-	log := installGitShim(t, "echo 'disk exploded' >&2\nexit 1")
+	log := installGitShim(t, "disk exploded", 1)
 	_, err := Worktrees()
 	if err == nil || !strings.Contains(err.Error(), "disk exploded") {
 		t.Fatalf("Worktrees error = %v, want propagated 'disk exploded'", err)
 	}
-	calls, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatalf("read shim log: %v", err)
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+	calls := shimCalls(t, log)
+	for _, line := range calls {
 		if line == "worktree list --porcelain" {
-			t.Fatalf("legacy retry ran after an unrelated -z failure; calls:\n%s", calls)
+			t.Fatalf("legacy retry ran after an unrelated -z failure; calls:\n%s", strings.Join(calls, "\n"))
 		}
 	}
 }
@@ -1194,7 +1227,7 @@ func TestWorktreesLegacyGuardRejectsUnsafeMetadata(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "feat-wt")
 	mustGit(t, "worktree", "add", "-q", linked, "feat")
 
-	installGitShim(t, "echo \"error: unknown option 'z'\" >&2\nexit 129")
+	installGitShim(t, "error: unknown option 'z'", 129)
 	common := mustGit(t, "rev-parse", "--git-common-dir")
 	regs, err := filepath.Glob(filepath.Join(common, "worktrees", "*", "gitdir"))
 	if err != nil || len(regs) != 1 {
