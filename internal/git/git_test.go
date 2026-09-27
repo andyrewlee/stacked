@@ -5,6 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -957,7 +960,10 @@ func TestParseWorktreesBareAndLocked(t *testing.T) {
 		"detached\n" +
 		"locked reason for the lock\n"
 
-	wts := parseWorktrees(fixture)
+	wts, err := parseWorktreesLegacy(fixture)
+	if err != nil {
+		t.Fatalf("parseWorktreesLegacy: %v", err)
+	}
 	if len(wts) != 3 {
 		t.Fatalf("parsed %d worktrees, want 3: %+v", len(wts), wts)
 	}
@@ -984,6 +990,308 @@ func TestParseWorktreesBareAndLocked(t *testing.T) {
 	}
 	if pinned.Branch != "" {
 		t.Errorf("detached worktree should have no branch: %+v", pinned)
+	}
+}
+
+// TestParseWorktreesZ exercises the NUL-terminated variant of
+// `git worktree list --porcelain`: attributes are NUL-separated, records are
+// separated by an empty attribute, and a path may carry bytes that would be
+// structure (newlines, "worktree ", "HEAD ") in the line-based grammar.
+func TestParseWorktreesZ(t *testing.T) {
+	head1 := "1111111111111111111111111111111111111111"
+	head2 := "2222222222222222222222222222222222222222"
+	// The second path contains a full fake worktree record — under the NUL
+	// grammar those bytes are just path content.
+	evilPath := "/wt/evil\nworktree /fake\nHEAD deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\nbranch refs/heads/x"
+	fixture := "worktree /repo\x00" +
+		"HEAD " + head1 + "\x00" +
+		"branch refs/heads/main\x00" +
+		"\x00" +
+		"worktree " + evilPath + "\x00" +
+		"HEAD " + head2 + "\x00" +
+		"detached\x00" +
+		"locked reason for the lock\x00" +
+		"\x00" +
+		"worktree /repo-bare\x00" +
+		"bare\x00" +
+		"\x00" +
+		"worktree /gone\x00" +
+		"HEAD " + head2 + "\x00" +
+		"detached\x00" +
+		"prunable gitdir file points to non-existent location\x00" +
+		"\x00"
+
+	wts, err := parseWorktreesZ(fixture)
+	if err != nil {
+		t.Fatalf("parseWorktreesZ: %v", err)
+	}
+	if len(wts) != 4 {
+		t.Fatalf("parsed %d worktrees, want 4: %+v", len(wts), wts)
+	}
+	main := wts[0]
+	if main.Path != "/repo" || main.Head != head1 || main.Branch != "main" {
+		t.Errorf("main entry = %+v", main)
+	}
+	evil := wts[1]
+	if evil.Path != evilPath {
+		t.Errorf("path bytes mangled: got %q, want %q", evil.Path, evilPath)
+	}
+	if !evil.Detached || !evil.Locked || evil.Head != head2 {
+		t.Errorf("evil entry = %+v, want detached+locked head %s", evil, head2)
+	}
+	bare := wts[2]
+	if bare.Path != "/repo-bare" || !bare.Bare || bare.Branch != "" || bare.Head != "" {
+		t.Errorf("bare entry = %+v", bare)
+	}
+	gone := wts[3]
+	if gone.Path != "/gone" || !gone.Detached {
+		t.Errorf("prunable entry = %+v, want detached record for /gone", gone)
+	}
+	for _, wt := range wts {
+		if wt.Path == "/fake" {
+			t.Fatalf("embedded fake record escaped into a real worktree: %+v", wts)
+		}
+	}
+}
+
+// TestParseWorktreesLegacyMalformed asserts the strict legacy parser refuses
+// structurally invalid or ambiguous listings — including path fragments that
+// superficially resemble valid records — instead of fabricating worktrees.
+func TestParseWorktreesLegacyMalformed(t *testing.T) {
+	for name, fixture := range map[string]string{
+		// A newline-containing path splits into a field-looking fragment; the
+		// unknown continuation key must be refused.
+		"split path fragment": "worktree /repo/a\nb c\n" +
+			"HEAD 1111111111111111111111111111111111111111\n",
+		// A worktree line inside an open record (no blank separator) is a path
+		// fragment or corruption, never a new record.
+		"worktree inside record": "worktree /a\nworktree /b\n" +
+			"HEAD 1111111111111111111111111111111111111111\n",
+		"unknown line":        "worktree /x\nbogus v\n",
+		"attr before record":  "HEAD 1111111111111111111111111111111111111111\nworktree /x\n",
+		"worktree empty path": "worktree \nHEAD 1111111111111111111111111111111111111111\n",
+		"missing head":        "worktree /x\ndetached\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if wts, err := parseWorktreesLegacy(fixture); err == nil {
+				t.Errorf("parseWorktreesLegacy(%q) = %+v, want error", fixture, wts)
+			}
+		})
+	}
+}
+
+// TestParseWorktreesZMalformed asserts the NUL grammar refuses structurally
+// invalid input instead of silently fabricating or dropping records.
+func TestParseWorktreesZMalformed(t *testing.T) {
+	for name, fixture := range map[string]string{
+		"attribute before record": "HEAD 1111111111111111111111111111111111111111\x00worktree /x\x00",
+		"worktree without path":   "worktree\x00HEAD 1111111111111111111111111111111111111111\x00",
+		"worktree empty path":     "worktree \x00HEAD 1111111111111111111111111111111111111111\x00",
+		"unknown attribute":       "worktree /x\x00bogusfield v\x00",
+		"HEAD without value":      "worktree /x\x00HEAD\x00",
+		"second worktree inline":  "worktree /x\x00HEAD 1111111111111111111111111111111111111111\x00worktree /y\x00",
+		"no HEAD and not bare":    "worktree /x\x00detached\x00",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if wts, err := parseWorktreesZ(fixture); err == nil {
+				t.Errorf("parseWorktreesZ(%q) = %+v, want error", fixture, wts)
+			}
+		})
+	}
+}
+
+// installGitShim prepends a `git` shim directory to PATH. The shim logs every
+// invocation (one line per call) to the file GIT_SHIM_LOG points at, prints
+// zFailMsg to stderr and exits zFailCode when the arguments are exactly
+// `worktree list --porcelain -z`, and delegates everything else to the real
+// git binary. It returns the call-log path.
+func installGitShim(t *testing.T, zFailMsg string, zFailCode int) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls.log")
+	t.Setenv("GIT_SHIM_LOG", log)
+	var name, script string
+	if runtime.GOOS == "windows" {
+		// Windows cannot exec an extensionless sh script, and a "git" file
+		// would win the LookPath race over every PATHEXT suffix. git.cmd is
+		// resolved and run via cmd by os/exec instead.
+		name = "git.cmd"
+		script = "@echo off\r\n" +
+			"echo %*>> \"%GIT_SHIM_LOG%\"\r\n" +
+			"if \"%~1\"==\"worktree\" if \"%~2\"==\"list\" if \"%~3\"==\"--porcelain\" if \"%~4\"==\"-z\" (\r\n" +
+			"  echo " + zFailMsg + " 1>&2\r\n" +
+			"  exit /b " + strconv.Itoa(zFailCode) + "\r\n" +
+			")\r\n" +
+			"\"" + realGit + "\" %*\r\n" +
+			"exit /b %errorlevel%\r\n"
+	} else {
+		name = "git"
+		script = "#!/bin/sh\n" +
+			"printf '%s\\n' \"$*\" >> \"$GIT_SHIM_LOG\"\n" +
+			"if [ \"$1\" = worktree ] && [ \"$2\" = list ] && [ \"$3\" = --porcelain ] && [ \"$4\" = -z ]; then\n" +
+			"echo " + strconv.Quote(zFailMsg) + " >&2\n" +
+			"exit " + strconv.Itoa(zFailCode) + "\n" +
+			"fi\n" +
+			"exec '" + realGit + "' \"$@\"\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+// shimCalls reads the call log as trimmed lines (the Windows cmd shim writes
+// CRLF, and echo %* can trail a space).
+func shimCalls(t *testing.T, log string) []string {
+	t.Helper()
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("read shim log: %v", err)
+	}
+	var lines []string
+	for _, l := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// TestWorktreesLegacyFallback pins the old-git path: when
+// `worktree list --porcelain -z` fails with the C-locale unsupported-option
+// diagnostic (exit 129), Worktrees retries with the plain line-based listing
+// and returns the real records.
+func TestWorktreesLegacyFallback(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "feat")
+	linked := filepath.Join(t.TempDir(), "feat-wt")
+	mustGit(t, "worktree", "add", "-q", linked, "feat")
+
+	log := installGitShim(t, "error: unknown option 'z'", 129)
+	wts, err := Worktrees()
+	if err != nil {
+		t.Fatalf("Worktrees via legacy fallback: %v", err)
+	}
+	byBranch := map[string]Worktree{}
+	for _, wt := range wts {
+		if wt.Branch != "" {
+			byBranch[wt.Branch] = wt
+		}
+	}
+	feat, ok := byBranch["feat"]
+	if !ok {
+		t.Fatalf("missing feat worktree in %+v", wts)
+	}
+	if resolveSymlinks(t, feat.Path) != resolveSymlinks(t, linked) {
+		t.Errorf("feat worktree path = %q, want %q", feat.Path, linked)
+	}
+	calls := shimCalls(t, log)
+	if !slices.Contains(calls, "worktree list --porcelain -z") {
+		t.Errorf("expected the -z probe first; calls:\n%s", strings.Join(calls, "\n"))
+	}
+	if !slices.Contains(calls, "worktree list --porcelain") {
+		t.Errorf("expected a legacy `worktree list --porcelain` retry; calls:\n%s", strings.Join(calls, "\n"))
+	}
+}
+
+// TestWorktreesDoesNotFallbackOnError asserts a failure unrelated to -z support
+// is propagated untouched — the legacy retry is reserved for the recognized
+// unsupported-option diagnostic only.
+func TestWorktreesDoesNotFallbackOnError(t *testing.T) {
+	newRepo(t)
+	log := installGitShim(t, "disk exploded", 1)
+	_, err := Worktrees()
+	if err == nil || !strings.Contains(err.Error(), "disk exploded") {
+		t.Fatalf("Worktrees error = %v, want propagated 'disk exploded'", err)
+	}
+	calls := shimCalls(t, log)
+	for _, line := range calls {
+		if line == "worktree list --porcelain" {
+			t.Fatalf("legacy retry ran after an unrelated -z failure; calls:\n%s", strings.Join(calls, "\n"))
+		}
+	}
+}
+
+// TestWorktreesLegacyGuardRejectsUnsafeMetadata pins Step 3's precondition: on
+// the legacy path, raw worktrees/*/gitdir registration files must prove no
+// registered path carries CR/LF bytes — otherwise the line grammar cannot be
+// trusted and Worktrees must refuse with an actionable error.
+func TestWorktreesLegacyGuardRejectsUnsafeMetadata(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "branch", "feat")
+	linked := filepath.Join(t.TempDir(), "feat-wt")
+	mustGit(t, "worktree", "add", "-q", linked, "feat")
+
+	installGitShim(t, "error: unknown option 'z'", 129)
+	common := mustGit(t, "rev-parse", "--git-common-dir")
+	regs, err := filepath.Glob(filepath.Join(common, "worktrees", "*", "gitdir"))
+	if err != nil || len(regs) != 1 {
+		t.Fatalf("gitdir registrations = %v (err %v), want exactly 1", regs, err)
+	}
+
+	// A newline inside the registered path would split the legacy `worktree`
+	// record in two — the guard must refuse rather than parse ambiguity.
+	if err := os.WriteFile(regs[0], []byte("/tmp/one\n/tmp/two/.git\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Worktrees()
+	if err == nil || !strings.Contains(err.Error(), "gitdir") {
+		t.Fatalf("Worktrees error = %v, want an actionable gitdir metadata refusal", err)
+	}
+}
+
+// TestWorktreesPreservesPathBytes adds a real linked worktree at a path whose
+// bytes would corrupt the line-based porcelain grammar — newline, tab,
+// trailing space, quote, non-ASCII, and a fully fake embedded record — and
+// asserts Worktrees returns the exact path bytes.
+func TestWorktreesPreservesPathBytes(t *testing.T) {
+	newRepo(t)
+	if err := exec.Command("git", "worktree", "list", "--porcelain", "-z").Run(); err != nil {
+		t.Skipf("git worktree list -z unsupported (git <2.36): %v", err)
+	}
+	sha := mustGit(t, "rev-parse", "HEAD")
+	leaves := []string{
+		"wt\nnewline",
+		"wt\ttab",
+		"wt trail ",
+		"wt'quote",
+		"wt-☃-unicode",
+		"wt\nworktree /fake\nHEAD deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\nbranch refs/heads/x",
+	}
+	for i, leaf := range leaves {
+		p := filepath.Join(t.TempDir(), leaf)
+		err := exec.Command("git", "worktree", "add", "-q", "--detach", p, sha).Run()
+		if err != nil {
+			t.Logf("leaf %d (%q): filesystem/git cannot create it, skipping", i, leaf)
+			continue
+		}
+		wts, err := Worktrees()
+		if err != nil {
+			t.Fatalf("Worktrees with path %q: %v", leaf, err)
+		}
+		var got *Worktree
+		for j := range wts {
+			if strings.HasSuffix(wts[j].Path, leaf) {
+				g := wts[j]
+				got = &g
+			}
+		}
+		if got == nil {
+			t.Fatalf("leaf %d (%q): no worktree record ending in those bytes: %+v", i, leaf, wts)
+		}
+		if resolveSymlinks(t, got.Path) != resolveSymlinks(t, p) {
+			t.Errorf("leaf %d: worktree path = %q, want canonical %q", i, got.Path, p)
+		}
+		for _, wt := range wts {
+			if wt.Path == "/fake" {
+				t.Fatalf("embedded fake record escaped into a real worktree: %+v", wts)
+			}
+		}
 	}
 }
 

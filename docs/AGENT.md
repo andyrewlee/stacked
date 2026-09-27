@@ -214,6 +214,15 @@ One stack, N agents, one worktree per branch:
    ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
    `st undo` after a `create --worktree` also removes the worktree it created.
 
+   Worktree paths are byte-exact: on git ≥ 2.36 the listing uses the
+   NUL-framed `worktree list --porcelain -z` grammar, so paths containing
+   newlines or other control bytes round-trip losslessly through JSON. On
+   older git the line-based listing is used only when the repository's
+   worktree metadata provably contains no CR/LF path bytes; a repo whose
+   worktree paths need them fails with an actionable error naming git ≥ 2.36
+   rather than returning a corrupted ownership map. Terminal output always
+   escapes control bytes in paths.
+
 ## Discoverability
 
 - `st --help` lists every command; `st help <command>` prints its summary, usage,

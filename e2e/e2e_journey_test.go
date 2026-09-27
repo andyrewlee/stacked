@@ -146,6 +146,73 @@ func TestWorktreeCommand(t *testing.T) {
 	}
 }
 
+// TestWorktreeNewlinePathRoundTrip pins the NUL-framed worktree listing end to
+// end: a linked worktree whose path contains bytes that are structure in the
+// line-based grammar must come back through `st worktree ls --json` and the
+// log ownership annotation with its exact path bytes, while terminal output
+// still escapes the control characters.
+func TestWorktreeNewlinePathRoundTrip(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("newline paths are not representable on windows filesystems")
+	}
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main") // free feat-a so a worktree can check it out
+
+	leaf := "wt\nnl\ttab'q ☃"
+	wt := filepath.Join(t.TempDir(), leaf)
+	if err := exec.Command("git", "-C", r.dir, "worktree", "add", "-q", wt, "feat-a").Run(); err != nil {
+		t.Skipf("filesystem/git cannot host a newline worktree path: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", wt, err)
+	}
+
+	// JSON must carry the exact path bytes.
+	out := r.stOK("worktree", "ls", "--json").stdout
+	var entries []struct {
+		Path   string `json:"path"`
+		Branch string `json:"branch"`
+	}
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("decode worktree ls json: %v\n%s", err, out)
+	}
+	var got string
+	for _, e := range entries {
+		if e.Branch == "feat-a" {
+			got = e.Path
+		}
+		if strings.Contains(e.Path, "\x00") || e.Path == "/fake" {
+			t.Fatalf("corrupted worktree record in %+v", entries)
+		}
+	}
+	if got != want {
+		t.Fatalf("worktree ls json path = %q, want exact bytes %q", got, want)
+	}
+
+	// The read-only ownership/navigation annotation must resolve the same path.
+	var root logNode
+	if err := json.Unmarshal([]byte(r.stOK("log", "--json").stdout), &root); err != nil {
+		t.Fatalf("decode log json: %v", err)
+	}
+	feat := findNode(&root, "feat-a")
+	if feat == nil || feat.Worktree != want {
+		t.Fatalf("log worktree annotation = %+v, want path %q", feat, want)
+	}
+
+	// Terminal output escapes the control bytes instead of emitting them raw.
+	text := r.stOK("worktree", "ls").stdout
+	if strings.Contains(text, want) {
+		t.Fatalf("terminal output contains the raw newline path %q:\n%s", want, text)
+	}
+	if !strings.Contains(text, "feat-a") {
+		t.Fatalf("worktree ls missing feat-a:\n%s", text)
+	}
+}
+
 func TestCreateWorktreeFlagJourney(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
