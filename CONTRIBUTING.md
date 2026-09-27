@@ -150,3 +150,39 @@ old key — rotate only alongside a new release, and note it in the changelog.
 
 `ST_ALLOW_UNVERIFIED=1` remains the escape hatch — post-signing it is for
 snapshot/dev installs only, and it never bypasses an actual signature mismatch.
+
+## Troubleshooting
+
+### `stale-lock reclaim guard … is abandoned`
+
+On platforms without `flock` (Windows, plan9, js/wasm) `st` serializes mutating
+commands with two lock files in the stack metadata directory: `lock.excl` (the
+exclusive lock) and `lock.reclaim` (a short-lived guard that serializes
+reclaiming a stale `lock.excl`). A stale `lock.excl` is still reclaimed
+automatically — but only under a freshly acquired `lock.reclaim`. If the guard
+itself is left behind by a dead process (`lock.reclaim` exists and its recorded
+owner is provably gone, or its contents are malformed and older than the
+conservative 10-minute bound), `st` refuses to remove it: a
+read/compare/unlink against a file another process may replace is not atomic,
+and getting it wrong can admit two writers. Availability is traded for
+integrity — the condition needs an operator.
+
+The error is a maintenance condition, not contention: it exits 70
+(`"code": "internal"`) rather than 5 (`"code": "locked"`). To recover:
+
+1. Stop every `st` process against the repository.
+2. Verify no writer is active — a `lock.excl` whose recorded owner pid is alive
+   means a command is really running; let it finish rather than deleting locks
+   underneath it.
+3. Only then remove the named `lock.reclaim` file and retry.
+
+The error names the exact path; do not delete it while any `st` command could
+still be running. A live or freshly-written malformed guard stays ordinary
+contention (exit 5) — that case means another `st` is mid-reclaim and the retry
+idiom applies.
+
+Coverage note: the stale-lock code paths are exercised by the native test
+suite on every platform (`internal/stack/lock_stale_test.go` runs the real
+file operations in temp dirs regardless of `GOOS`); the Windows CI job covers
+the composed `Lock`/`Unlock` pair against a real filesystem. Timing races are
+deterministic in tests — synchronized contenders, not sleeps.
