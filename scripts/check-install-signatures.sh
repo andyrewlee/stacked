@@ -122,7 +122,7 @@ run_install() {
 no_minisign_path() {
 	rm -rf "$FIXT/tools"
 	mkdir -p "$FIXT/tools"
-	for t in uname tr curl mktemp grep awk sed tar mv chmod rm ls mkdir cp cat head shasum sha256sum; do
+	for t in uname tr curl mktemp grep awk sed tar gzip mv chmod rm ls mkdir cp cat head install shasum sha256sum; do
 		src="$(command -v "$t" 2>/dev/null || true)"
 		[ -n "$src" ] && ln -sf "$src" "$FIXT/tools/$t"
 	done
