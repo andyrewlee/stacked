@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -132,9 +133,12 @@ func TestTeleportHintQuotedPath(t *testing.T) {
 		"parens":     filepath.Join(base, "paren(dir)"),
 		"utf8":       filepath.Join(base, "☃ dir"),
 		// A path that is itself a command injection attempt: when quoted it
-		// must just be a directory name; unquoted it would run `touch`.
-		"injection":  filepath.Join(base, "x;touch "+sentinel),
-		"dollar-sub": filepath.Join(base, "x$(touch "+sentinel+")"),
+		// must just be a directory name; unquoted it would run `touch`. The
+		// payloads name PWNED relatively — an absolute path's `C:` would make
+		// the directory name itself illegal on Windows — and the probe runs
+		// with Dir=base so a broken quote lands touch where Stat looks.
+		"injection":  filepath.Join(base, "x;touch PWNED"),
+		"dollar-sub": filepath.Join(base, "x$(touch PWNED)"),
 	}
 	for name, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -171,13 +175,24 @@ func TestTeleportHintQuotedPath(t *testing.T) {
 				if _, err := exec.LookPath(sh); err != nil {
 					continue
 				}
-				out, err := exec.Command(sh, "-c", line+"; pwd -P").CombinedOutput()
+				// -W is the MSYS/git-bash spelling that prints the Windows
+				// path form; on Unix `pwd -P` already prints it.
+				pwdFlag := "-P"
+				if runtime.GOOS == "windows" {
+					pwdFlag = "-W"
+				}
+				probe := exec.Command(sh, "-c", line+"; pwd "+pwdFlag)
+				probe.Dir = base
+				out, err := probe.CombinedOutput()
 				if err != nil {
 					t.Fatalf("%s -c %q failed: %v\n%s", sh, line, err, out)
 				}
 				got := strings.TrimSuffix(string(out), "\n")
 				want, _ := filepath.EvalSymlinks(dir)
-				if got != want {
+				if runtime.GOOS == "windows" {
+					got, want = filepath.ToSlash(got), filepath.ToSlash(want)
+				}
+				if !strings.EqualFold(got, want) {
 					t.Errorf("%s: cd landed at %q, want %q (hint line %q)", sh, got, want, line)
 				}
 			}
