@@ -857,9 +857,9 @@ func TestSubmitPRHintsUnknownRemoteJSON(t *testing.T) {
 }
 
 // TestSubmitPartialFailureJSON asserts that when a push fails partway up the
-// stack, --json still reports the branches pushed so far plus the one that
-// failed, so a machine consumer can observe the partial state (the command
-// still returns a non-zero error).
+// stack, --json still reports the branches confirmed pushed plus the one the
+// remote rejected, so a machine consumer can observe the partial state (the
+// command still returns a non-zero error).
 func TestSubmitPartialFailureJSON(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -869,9 +869,10 @@ func TestSubmitPartialFailureJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 
-	// A server-side hook rejects feat-b, so feat-a is pushed but feat-b fails.
-	hook := filepath.Join(remoteDir, "hooks", "pre-receive")
-	script := "#!/bin/sh\nwhile read _ _ ref; do\n\t[ \"$ref\" = refs/heads/feat-b ] && exit 1\ndone\nexit 0\n"
+	// A per-ref update hook rejects feat-b while feat-a lands in the same
+	// batch (a pre-receive hook would refuse the whole push atomically).
+	hook := filepath.Join(remoteDir, "hooks", "update")
+	script := "#!/bin/sh\n[ \"$1\" = refs/heads/feat-b ] && exit 1\nexit 0\n"
 	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -901,6 +902,9 @@ func TestSubmitPartialFailureJSON(t *testing.T) {
 	}
 }
 
+// TestSubmitPartialFailureJSONFirstBranchKeepsPushedArray: a pre-receive hook
+// refuses the whole push atomically, so every requested ref is a confirmed
+// rejection — failed names the FIRST one and pushed stays present-but-empty.
 func TestSubmitPartialFailureJSONFirstBranchKeepsPushedArray(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -937,6 +941,82 @@ func TestSubmitPartialFailureJSONFirstBranchKeepsPushedArray(t *testing.T) {
 	}
 	if got.Pushed == nil || len(got.Pushed) != 0 {
 		t.Fatalf("partial result Pushed = %v, want present-but-empty", got.Pushed)
+	}
+}
+
+// TestSubmitReportsNonPrefixPartialPush: one batch push can update feat-a and
+// feat-c while the remote rejects feat-b — a partial outcome that is NOT a
+// prefix. Submit must report every confirmed outcome (pushed [a,c], failed b)
+// in stack order from that single push's per-ref statuses, without retrying
+// the failed batch branch-by-branch (the old fallback stopped at b and hid
+// c's confirmed update).
+func TestSubmitReportsNonPrefixPartialPush(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
+
+	// An update hook runs once per ref: reject feat-b while feat-a and feat-c
+	// land in the same batch — unlike pre-receive, which refuses atomically.
+	hook := filepath.Join(remoteDir, "hooks", "update")
+	script := "#!/bin/sh\n[ \"$1\" = refs/heads/feat-b ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Count push invocations server-side: post-receive fires once per push
+	// that lands at least one ref. A per-branch retry would push a, then c,
+	// and bump this twice — the single batch must bump it exactly once. (A
+	// PATH shim cannot intercept git on Windows; hooks run through git's own
+	// sh everywhere.)
+	pushLog := filepath.Join(t.TempDir(), "pushes.log")
+	counter := "#!/bin/sh\necho push >> \"" + filepath.ToSlash(pushLog) + "\"\nexit 0\n"
+	postReceive := filepath.Join(remoteDir, "hooks", "post-receive")
+	if err := os.WriteFile(postReceive, []byte(counter), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(postReceive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runSubmit([]string{"--json"})
+	})
+	if runErr == nil {
+		t.Fatal("submit with a rejected middle branch should return a non-nil error")
+	}
+
+	logBytes, err := os.ReadFile(pushLog)
+	if err != nil {
+		t.Fatalf("push log unreadable: %v", err)
+	}
+	if n := strings.Count(strings.TrimSpace(string(logBytes))+"\n", "\n"); n != 1 {
+		t.Fatalf("git push ran %d times; want exactly 1 (no per-branch retry):\n%s", n, logBytes)
+	}
+
+	// The remote itself confirms the non-prefix outcome: a and c landed, b
+	// did not.
+	mustRun(t, "git", "-C", remoteDir, "rev-parse", "--verify", "-q", "refs/heads/feat-a")
+	mustRun(t, "git", "-C", remoteDir, "rev-parse", "--verify", "-q", "refs/heads/feat-c")
+	if err := exec.Command("git", "-C", remoteDir, "rev-parse", "--verify", "-q", "refs/heads/feat-b").Run(); err == nil {
+		t.Fatal("remote refs/heads/feat-b exists — the hook-rejected ref was pushed")
+	}
+
+	var got submitResult
+	decodeStrictJSON(t, "non-prefix partial submit", out, &got)
+	if !reflect.DeepEqual(got.Pushed, []string{"feat-a", "feat-c"}) {
+		t.Fatalf("partial result Pushed = %v, want [feat-a feat-c] in stack order", got.Pushed)
+	}
+	if got.Failed != "feat-b" {
+		t.Fatalf("partial result Failed = %q, want feat-b", got.Failed)
 	}
 }
 

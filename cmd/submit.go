@@ -29,8 +29,10 @@ type submitResult struct {
 	RepoURL string   `json:"repoURL,omitempty"`
 	PRHints []prHint `json:"prHints,omitempty"`
 	Summary string   `json:"summary,omitempty"`
-	// Failed names the branch whose push failed; set only on a partial failure,
-	// alongside the branches that were pushed before it (in Pushed).
+	// Failed names the first branch (in stack order) the remote confirmed
+	// rejected; set only on a partial failure, alongside every branch
+	// confirmed pushed (in Pushed). A ref whose outcome is unconfirmed is
+	// never reported as pushed or failed.
 	Failed string `json:"failed,omitempty"`
 }
 
@@ -107,18 +109,42 @@ func runSubmit(args []string) error {
 			}
 		}
 	} else {
-		if err := git.PushBranches(remote, stackBranches, true); err != nil {
-			pushed, err = pushSubmitBranchesIndividually(remote, stackBranches, asJSON)
-			if err != nil {
-				return err
+		pushRes, pushErr := git.PushBranches(remote, stackBranches, true)
+		// Report only what the remote confirmed, in stack order: a batch push
+		// can land A and C while rejecting B, so pushed is not a prefix.
+		for _, name := range stackBranches {
+			switch pushRes.Status[name] {
+			case git.PushUpdated, git.PushUpToDate:
+				pushed = append(pushed, name)
 			}
-		} else {
-			pushed = append(pushed, stackBranches...)
-			if !asJSON {
-				for _, name := range pushed {
-					out("pushed %s\n", sanitizeForTerminal(name))
+		}
+		var failed string
+		for _, name := range stackBranches {
+			if pushRes.Status[name] == git.PushRejected {
+				failed = name
+				break
+			}
+		}
+		if !asJSON {
+			for _, name := range pushed {
+				out("pushed %s\n", sanitizeForTerminal(name))
+			}
+		}
+		if pushErr != nil || failed != "" {
+			// Emit the confirmed partial result on stdout before returning the
+			// error — a machine consumer sees exactly what landed; the
+			// non-zero exit and stderr envelope still signal the failure.
+			if asJSON {
+				_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: failed}, func() {})
+			}
+			if failed != "" {
+				if pushErr == nil {
+					return fmt.Errorf("pushing %q: the remote rejected the ref", failed)
 				}
+				return fmt.Errorf("pushing %q (pushed %d of %d): %w", failed, len(pushed), len(stackBranches), pushErr)
 			}
+			return fmt.Errorf("push to %q did not confirm every ref outcome (%d of %d pushed): %w",
+				remote, len(pushed), len(stackBranches), pushErr)
 		}
 	}
 
@@ -151,28 +177,6 @@ func runSubmit(args []string) error {
 			}
 		}
 	})
-}
-
-func pushSubmitBranchesIndividually(remote string, branches []string, asJSON bool) ([]string, error) {
-	pushed := []string{}
-	for _, name := range branches {
-		if err := git.PushRemote(remote, name, true); err != nil {
-			// Earlier branches were already pushed to the remote. In --json mode
-			// the per-branch lines are suppressed, so emit a partial result (the
-			// branches pushed so far plus the one that failed) before returning,
-			// so a machine consumer can see the partial state — the non-zero exit
-			// and error envelope on stderr still signal the failure.
-			if asJSON {
-				_ = emit(true, submitResult{Remote: remote, Pushed: pushed, Failed: name}, func() {})
-			}
-			return pushed, fmt.Errorf("pushing %q (pushed %d of %d): %w", name, len(pushed), len(branches), err)
-		}
-		pushed = append(pushed, name)
-		if !asJSON {
-			out("pushed %s\n", sanitizeForTerminal(name))
-		}
-	}
-	return pushed, nil
 }
 
 func buildPRHints(state *stack.State, branches []string, repoURL, host string) []prHint {
