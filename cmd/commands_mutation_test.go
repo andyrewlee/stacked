@@ -1266,3 +1266,36 @@ func TestInitRejectsPositionalArgs(t *testing.T) {
 		t.Fatalf("state after failed init = %v, want ErrNotInitialized", err)
 	}
 }
+
+// TestSubmitInvalidBranchNameCleanError pins the nil-PushResult path: a state
+// file naming a branch git can never have ("--evil" fails refname rules) makes
+// PushBranches return (nil, err); submit must surface that error, not panic
+// dereferencing the empty result.
+func TestSubmitInvalidBranchNameCleanError(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	// Rewrite state so the stack path carries a refname-illegal branch:
+	// consistent key/name (passes the decodeState check) but "-" -leading.
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJSONFile(t, filepath.Join(gitDir, "stacked", "state.json"), map[string]any{
+		"version": 1,
+		"trunk":   "main",
+		"branches": map[string]any{
+			"--evil": map[string]any{"name": "--evil", "parent": "main"},
+			"feat-a": map[string]any{"name": "feat-a", "parent": "--evil"},
+		},
+	})
+
+	err = runSubmit(nil)
+	if err == nil || !strings.Contains(err.Error(), "not a valid git ref name") {
+		t.Fatalf("submit with an invalid branch name = %v, want a clean usage-class error", err)
+	}
+}

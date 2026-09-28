@@ -130,6 +130,23 @@ func decodeState(data []byte) (*State, error) {
 	if s.Branches == nil {
 		s.Branches = make(map[string]*Branch)
 	}
+	// A hand-edited or corrupted file can disagree with itself: the map key
+	// is the identity every topology helper keys on, while Branch.Name is
+	// what messages display. A divergence reads as phantom "different name"
+	// claims downstream — refuse it at the single entry point all state
+	// bytes pass through. A missing Name is a legacy-v0 file: backfill it.
+	for key, b := range s.Branches {
+		if b == nil {
+			return nil, fmt.Errorf("state file is corrupted: branch %q has no record", key)
+		}
+		if b.Name == "" {
+			b.Name = key
+			continue
+		}
+		if b.Name != key {
+			return nil, fmt.Errorf("state file is corrupted: branch map key %q does not match its recorded name %q (run `st validate` / `st repair`, or fix and reload)", key, b.Name)
+		}
+	}
 	return &s, nil
 }
 

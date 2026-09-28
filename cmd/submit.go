@@ -110,6 +110,12 @@ func runSubmit(args []string) error {
 		}
 	} else {
 		pushRes, pushErr := git.PushBranches(remote, stackBranches, true)
+		// Argument-validation failures return a nil result: nothing was
+		// attempted, so there is no per-ref status to report — surface the
+		// error instead of dereferencing the empty result.
+		if pushRes == nil {
+			return fmt.Errorf("push to %q: %w", remote, pushErr)
+		}
 		// Report only what the remote confirmed, in stack order: a batch push
 		// can land A and C while rejecting B, so pushed is not a prefix.
 		for _, name := range stackBranches {
