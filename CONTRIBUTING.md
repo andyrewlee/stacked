@@ -91,20 +91,21 @@ A historical manual-QA snapshot lives at `docs/qa/FEATURE_STORIES.csv`
 
 ## Releasing
 
-Releases are cut from a tag:
+Releases are cut locally from a tag:
 
 ```sh
 git tag vX.Y.Z            # must match defaultVersion in cmd/root.go
-git push origin vX.Y.Z    # pushing the tag runs the release workflow (GoReleaser)
-# or publish / dry-run locally:
-make release              # build and publish the release (needs a publish token)
+git push origin vX.Y.Z    # the GitHub release attaches to this tag
+make release              # build, sign, and publish (needs GITHUB_TOKEN and
+                          #  MINISIGN_KEY_FILE; check-release-ready gates the
+                          #  embedded pubkey and the key file first)
 make snapshot             # build the release artifacts without publishing
 ```
 
 Before tagging: fold `CHANGELOG.md`'s `[Unreleased]` into the new `[x.y.z]`
 heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
-`make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (the release
-workflow enforces it too). `make release`/`make snapshot` need the external
+`make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (`make
+release` runs it). `make release`/`make snapshot` need the external
 `goreleaser` binary — match the version pinned in
 `.github/workflows/ci.yml` (currently `v2.17.0`; `brew install goreleaser`
 tracks latest, so check `goreleaser --version`, or pin exactly with
@@ -126,32 +127,32 @@ Every release signs `checksums.txt` with minisign (the `signs:` pipe in
 `.goreleaser.yaml`), producing `checksums.txt.minisig` as a release asset.
 `install.sh` downloads that signature and verifies it against the public key
 embedded in the script (`MINISIGN_PUBKEY`), **failing closed** when it cannot
-verify — so a release must never go out unsigned, and the release job hard-fails
-when the `MINISIGN_KEY` secret is absent rather than skipping the signature.
+verify — so a release must never go out unsigned, and `make release`
+hard-fails when the embedded pubkey is still a placeholder or the signing key
+file is absent (`check-release-ready`).
 
 **One-time provisioning (operator; the key is never committed):**
 
 ```sh
-# Unencrypted key: CI cannot answer a password prompt (the signs pipe passes -W).
+# Unencrypted key: `make release` cannot answer a password prompt (the signs
+# pipe passes -W).
 minisign -G -W -p stacked.pub -s stacked.key
-
-# GitHub secret = base64 of the whole key file (a single line that pastes
-# cleanly into the web UI too):
-base64 < stacked.key | gh secret set MINISIGN_KEY
 
 # Embed the public key: copy the "RW…" line from stacked.pub into install.sh's
 # MINISIGN_PUBKEY and commit. Optionally commit stacked.pub itself so the key
 # can be cross-checked out-of-band.
-rm -f stacked.key   # the secret now lives only in GitHub
+
+# Store stacked.key OUTSIDE the repo, chmod 600 — e.g. ~/.config/stacked/
+# or a password manager attachment. It is never committed.
+mv stacked.key ~/.config/stacked/stacked.key && chmod 600 ~/.config/stacked/stacked.key
 ```
 
-The release job decodes the secret to a `0600` file under `$RUNNER_TEMP` and
-exports its path as `MINISIGN_KEY_FILE`, which `.goreleaser.yaml` passes to
-`minisign -s`. To publish from a clone (`make release`), install minisign and
-point `MINISIGN_KEY_FILE` at a local copy of the key; `make snapshot`
+`make release` reads the key file path from `MINISIGN_KEY_FILE`
+(`export MINISIGN_KEY_FILE=~/.config/stacked/stacked.key`), which
+`.goreleaser.yaml` passes to `minisign -s`. `make snapshot`
 (`goreleaser build`) never reaches the sign pipe, so it needs neither.
 
-**Rotation:** generate a new pair, update the `MINISIGN_KEY` secret, update
+**Rotation:** generate a new pair, replace the local key file, update
 `MINISIGN_PUBKEY` (and `stacked.pub` if committed) in the same commit, then cut
 a new release. Caveat: `install.sh` always embeds the *current* public key, so
 after rotation it can no longer verify signatures of releases signed with the
