@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // Navigation commands over real git: up/down/top/bottom edge cases and the
@@ -299,5 +301,36 @@ func TestNavSummaryForTerminalEscapesPathControls(t *testing.T) {
 	top := topSummaryForTerminal("feat", "/tmp/evil\npath\twt")
 	if !strings.Contains(top, `\x0a`) || strings.Count(top, "\n") != 1 {
 		t.Fatalf("topSummary = %q, want escaped path with one structural newline", top)
+	}
+}
+
+// TestTopRefusesParentCycle pins the corrupted-state guard: a state file
+// recording a single-child cycle (a<->b) must error naming the cycle and the
+// repair path, never spin forever. The engine's own invariants keep produced
+// states acyclic; this covers hand-edited/recovered files, the same input
+// class validate's ParentCycle problem kind reports.
+func TestTopRefusesParentCycle(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJSONFile(t, filepath.Join(gitDir, "stacked", "state.json"), map[string]any{
+		"version": 1,
+		"trunk":   "main",
+		"branches": map[string]any{
+			"feat-a": map[string]any{"name": "feat-a", "parent": "feat-b"},
+			"feat-b": map[string]any{"name": "feat-b", "parent": "feat-a"},
+		},
+	})
+
+	err = runTop(nil)
+	if err == nil || !strings.Contains(err.Error(), "parent cycle") {
+		t.Fatalf("top on cyclic state = %v, want a parent-cycle error pointing at validate/repair", err)
 	}
 }

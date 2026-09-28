@@ -31,7 +31,11 @@ func runTop(args []string) error {
 		return fmt.Errorf("branch %q is not tracked by stacked", cur)
 	}
 
+	// The walk is unbounded over corrupted metadata: guard the cycle the
+	// same way the stack.go topology helpers do — every other reader of
+	// Children carries a seen set for exactly this case.
 	leaf := cur
+	seen := map[string]bool{cur: true}
 	for {
 		children := s.Children(leaf)
 		switch len(children) {
@@ -45,7 +49,12 @@ func runTop(args []string) error {
 			}
 			return navEmitText(asJSON, leaf, navSummary("moved to top of stack:", leaf, dest), navSummaryForTerminal("moved to top of stack:", leaf, dest))
 		case 1:
-			leaf = children[0].Name
+			next := children[0].Name
+			if seen[next] {
+				return fmt.Errorf("stack metadata contains a parent cycle at %q; run `st validate` to inspect and `st repair` to fix", next)
+			}
+			seen[next] = true
+			leaf = next
 		default:
 			return fmt.Errorf("%s is a branch point with %d children; use st checkout to pick one", leaf, len(children))
 		}

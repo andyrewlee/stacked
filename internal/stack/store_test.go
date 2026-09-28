@@ -466,3 +466,40 @@ func TestAtomicWriteFileRenameFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeStateBranchNameIntegrity pins the key/name invariant at the single
+// entry point all serialized state flows through (state file AND undo journal
+// snapshots): a map key disagreeing with its recorded Name is corruption that
+// must fail the decode, while a missing Name (a legacy v0 document) backfills.
+func TestDecodeStateBranchNameIntegrity(t *testing.T) {
+	t.Run("mismatched name is corruption", func(t *testing.T) {
+		_, err := decodeState([]byte(`{"version":1,"trunk":"main","branches":{"feat-a":{"name":"renamed","parent":"main"}}}`))
+		if err == nil || !strings.Contains(err.Error(), "corrupted") {
+			t.Fatalf("decodeState mismatch = %v, want a corruption error", err)
+		}
+	})
+	t.Run("missing name backfills from key", func(t *testing.T) {
+		s, err := decodeState([]byte(`{"version":1,"trunk":"main","branches":{"feat-a":{"parent":"main"}}}`))
+		if err != nil {
+			t.Fatalf("decodeState missing-name: %v", err)
+		}
+		if got := s.Branches["feat-a"].Name; got != "feat-a" {
+			t.Fatalf("backfilled name = %q, want feat-a", got)
+		}
+	})
+	t.Run("null branch record is corruption", func(t *testing.T) {
+		_, err := decodeState([]byte(`{"version":1,"trunk":"main","branches":{"feat-a":null}}`))
+		if err == nil || !strings.Contains(err.Error(), "corrupted") {
+			t.Fatalf("decodeState null record = %v, want a corruption error", err)
+		}
+	})
+	t.Run("matching name loads", func(t *testing.T) {
+		s, err := decodeState([]byte(`{"version":1,"trunk":"main","branches":{"feat-a":{"name":"feat-a","parent":"main"}}}`))
+		if err != nil {
+			t.Fatalf("decodeState consistent: %v", err)
+		}
+		if s.Branches["feat-a"].Parent != "main" {
+			t.Fatalf("parent = %q, want main", s.Branches["feat-a"].Parent)
+		}
+	})
+}
