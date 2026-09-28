@@ -117,6 +117,13 @@ func malformedLockIsAbandoned(path, content string, now time.Time) bool {
 	return now.Sub(info.ModTime()) > malformedLockReclaimAfter
 }
 
+// ErrReclaimGuardAbandoned classifies an abandoned lock.reclaim guard for
+// exit-code mapping: a lock-family condition (exit 5, "locked") needing
+// operator maintenance — distinct from live contention (ErrLocked, worth a
+// plain retry) and from internal failure. It deliberately does NOT unwrap to
+// ErrLocked so callers can tell "wait and retry" from "operator step needed".
+var ErrReclaimGuardAbandoned = errors.New("abandoned stale-lock reclaim guard")
+
 // abandonedReclaimGuardError reports an existing lock.reclaim whose recorded
 // owner is provably gone (or whose content is malformed past the conservative
 // age bound). The guard is never unlinked automatically: a
@@ -126,6 +133,10 @@ func malformedLockIsAbandoned(path, content string, now time.Time) bool {
 // owned guard; an abandoned guard is a maintenance condition, so the error is
 // distinguishable from live contention (ErrLocked) and permission failures.
 type abandonedReclaimGuardError struct{ path string }
+
+func (e *abandonedReclaimGuardError) Is(target error) bool {
+	return target == ErrReclaimGuardAbandoned
+}
 
 func (e *abandonedReclaimGuardError) Error() string {
 	return fmt.Sprintf("stale-lock reclaim guard %s is abandoned (its recorded owner is gone); "+

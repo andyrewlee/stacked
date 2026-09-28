@@ -176,8 +176,9 @@ read/compare/unlink against a file another process may replace is not atomic,
 and getting it wrong can admit two writers. Availability is traded for
 integrity — the condition needs an operator.
 
-The error is a maintenance condition, not contention: it exits 70
-(`"code": "internal"`) rather than 5 (`"code": "locked"`). To recover:
+The error is a maintenance condition, not contention: it exits 5 like
+contention but carries `"code": "locked_guard"` rather than `"locked"`, so a
+retry loop can tell it apart. To recover:
 
 1. Stop every `st` process against the repository.
 2. Verify no writer is active — a `lock.excl` whose recorded owner pid is alive

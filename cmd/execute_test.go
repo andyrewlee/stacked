@@ -619,6 +619,8 @@ func TestExitCodeAndErrorCodeMapping(t *testing.T) {
 		{stack.ErrConflict, 2, "conflict"},
 		{stack.ErrDirty, 4, "dirty"},
 		{stack.ErrLocked, 5, "locked"},
+		// Abandoned reclaim guard: same exit as live contention, distinct code.
+		{stack.ErrReclaimGuardAbandoned, 5, "locked_guard"},
 		{errors.New("boom"), 1, "error"},
 		{fmt.Errorf("wrapped: %w", stack.ErrConflict), 2, "conflict"},
 	}

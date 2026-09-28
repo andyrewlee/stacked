@@ -144,6 +144,15 @@ func TestAcquireReclaimGuardRefusesAbandonedMalformedFile(t *testing.T) {
 	if !errors.As(err, &abandoned) {
 		t.Fatalf("err = %v, want an abandonedReclaimGuardError naming the guard", err)
 	}
+	// The sentinel classifies it for exit-code mapping (exit 5,
+	// "locked_guard") — and must NOT collapse into ErrLocked, whose
+	// retry-once-it-finishes semantics are wrong for a maintenance condition.
+	if !errors.Is(err, ErrReclaimGuardAbandoned) {
+		t.Fatalf("err = %v, want errors.Is(..., ErrReclaimGuardAbandoned)", err)
+	}
+	if errors.Is(err, ErrLocked) {
+		t.Fatalf("err = %v must not match ErrLocked (abandoned guard is not retryable contention)", err)
+	}
 	msg := abandoned.Error()
 	if !strings.Contains(msg, path) {
 		t.Fatalf("maintenance error should name the guard path %q: %q", path, msg)
