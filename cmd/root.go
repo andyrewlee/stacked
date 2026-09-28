@@ -368,6 +368,10 @@ var errorClasses = []struct {
 	{stack.ErrNotInitialized, 3, "not_initialized"},
 	{stack.ErrDirty, 4, "dirty"},
 	{stack.ErrLocked, 5, "locked"},
+	// An abandoned reclaim guard is a lock-family condition needing operator
+	// action — exit 5 like live contention, but a distinct JSON code so
+	// retry-on-locked agents can tell it apart without parsing the message.
+	{stack.ErrReclaimGuardAbandoned, 5, "locked_guard"},
 }
 
 // exitCode maps an error to a stable exit status so agents can branch on the

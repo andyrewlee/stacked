@@ -44,7 +44,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   contenders into stale `lock.excl` reclamation at once. Acquisition is now
   exclusive-create only: a live or freshly-written guard stays ordinary
   contention (exit 5), while a provably abandoned guard is a maintenance
-  error naming its path (exit 70). Stop every `st` process, verify no writer
+  error naming its path (exit 5, code `"locked_guard"`). Stop every `st` process, verify no writer
   is active, then remove the named file — see CONTRIBUTING's troubleshooting
   section. Stale `lock.excl` reclamation under a freshly owned guard is
   unchanged.

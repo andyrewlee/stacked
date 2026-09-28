@@ -26,7 +26,7 @@ Branch on the exit code; do not parse messages.
 | 2 | rebase conflict in progress | resolve + `git add`, then `st continue` (or `st abort`) |
 | 3 | repo not initialized | run `st init` |
 | 4 | working tree is dirty | commit or stash, then retry |
-| 5 | another `st` command holds the repo lock | retry once it finishes |
+| 5 | another `st` command holds the repo lock, **or** an abandoned `lock.reclaim` guard needs an operator | `"locked"`: retry once it finishes; `"locked_guard"`: stop — a human must remove the guard file (see CONTRIBUTING) |
 | 70 | internal error (a bug in `st`) | not self-recoverable; report it |
 
 ## JSON output
@@ -44,7 +44,8 @@ code above:
 ```
 
 `error.code` is one of: `error` (1), `conflict` (2), `not_initialized` (3),
-`dirty` (4), `locked` (5), `internal` (70, a recovered panic). So an agent can read stdout for
+`dirty` (4), `locked` (5), `locked_guard` (5 — an abandoned `lock.reclaim`
+guard; operator action required, do not retry), `internal` (70, a recovered panic). So an agent can read stdout for
 the result, stderr for the error envelope, and the exit code for the category.
 On a `conflict` the envelope also carries `branch` (the branch whose rebase
 stopped) and `onto` (its parent), so you can re-orient without parsing the
@@ -181,10 +182,11 @@ message.
   platforms, an exclusive lock file elsewhere. A contender exits 5
   (`"code": "locked"`), so the retry idiom is
   `until st restack; do [ $? -eq 5 ] || break; sleep 1; done`. On non-flock
-  platforms an *abandoned* `lock.reclaim` guard (left by a dead process) is a
-  maintenance error instead — exit 70 naming the guard path; it is never
-  removed automatically, and the loop above correctly stops retrying. See
-  CONTRIBUTING's troubleshooting section for the operator procedure.
+  platforms an *abandoned* `lock.reclaim` guard (left by a dead process) is
+  also exit 5 but carries `"code": "locked_guard"` — a maintenance error
+  naming the guard path; it is never removed automatically, and a retry loop
+  must stop on that code. See CONTRIBUTING's troubleshooting section for the
+  operator procedure.
 
 ## Orchestrating parallel agents
 
