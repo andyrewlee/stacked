@@ -102,7 +102,10 @@ func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 	}
 }
 
-func TestTrackBranchInferParentUsesScopedTipsForStateBranches(t *testing.T) {
+// TestTrackBranchInferParentUsesMergedRefScans pins inferParent's spawn
+// shape: two bounded `for-each-ref --merged` scans (MergedInto) instead of
+// unbounded `rev-list` history walks (AncestorSet) or a per-branch TipsFor.
+func TestTrackBranchInferParentUsesMergedRefScans(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
@@ -128,12 +131,11 @@ func TestTrackBranchInferParentUsesScopedTipsForStateBranches(t *testing.T) {
 	if spy.tipsCalls != 0 {
 		t.Fatalf("Tips calls = %d, want 0", spy.tipsCalls)
 	}
-	if spy.tipsForCalls != 1 {
-		t.Fatalf("TipsFor calls = %d, want 1", spy.tipsForCalls)
+	if spy.tipsForCalls != 0 {
+		t.Fatalf("TipsFor calls = %d, want 0 — inferParent answers via MergedInto now", spy.tipsForCalls)
 	}
-	wantNames := []string{"main", "a", "b"}
-	if got := spy.tipsForNames[0]; !reflect.DeepEqual(got, wantNames) {
-		t.Fatalf("TipsFor names = %v, want %v", got, wantNames)
+	if f.mergedIntoCalls != 2 {
+		t.Fatalf("MergedInto calls = %d, want 2 (one for the adopted branch, one for the trunk)", f.mergedIntoCalls)
 	}
 	if b, ok := s.Get("manual"); !ok || b.Parent != "a" {
 		t.Fatalf("tracked manual = %+v, want parent a", b)

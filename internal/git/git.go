@@ -813,27 +813,22 @@ func AmendTipWithPatch(branch string, patch []byte) (string, error) {
 		return "", err
 	}
 	ref := localBranchNameRef(branch)
-	tip, err := RevParse(ref)
+	// One log call reads everything: %H is the tip (replacing RevParse), %P
+	// the space-separated parents (rev-list --parents preserved merge tips —
+	// commit-tree -p per parent — though stack tips are single-parent in
+	// practice), then author name/email/date and the raw message for reuse.
+	metaOut, err := run("log", "-1", "--format=%H%x00%P%x00%an%x00%ae%x00%aD%x00%B", ref)
 	if err != nil {
 		return "", err
 	}
-	// rev-list --parents preserves merge tips (commit-tree -p per parent),
-	// though stack tips are single-parent in practice.
-	parentsOut, err := run("rev-list", "--parents", "-n1", tip)
-	if err != nil {
-		return "", err
+	meta := strings.SplitN(metaOut, "\x00", 6)
+	if len(meta) != 6 {
+		return "", fmt.Errorf("unexpected commit metadata for %s", ref)
 	}
-	parents := strings.Fields(parentsOut)[1:]
+	tip := meta[0]
+	parents := strings.Fields(meta[1])
 	if len(parents) == 0 {
 		return "", fmt.Errorf("branch %q's tip is a root commit; cannot amend it via absorb", branch)
-	}
-	metaOut, err := run("log", "-1", "--format=%an%x00%ae%x00%aD%x00%B", tip)
-	if err != nil {
-		return "", err
-	}
-	meta := strings.SplitN(metaOut, "\x00", 4)
-	if len(meta) != 4 {
-		return "", fmt.Errorf("unexpected commit metadata for %s", tip)
 	}
 
 	tmp, err := os.CreateTemp("", "st-absorb-index-")
@@ -857,15 +852,15 @@ func AmendTipWithPatch(branch string, patch []byte) (string, error) {
 		return "", err
 	}
 	commitEnv := []string{
-		"GIT_AUTHOR_NAME=" + meta[0],
-		"GIT_AUTHOR_EMAIL=" + meta[1],
-		"GIT_AUTHOR_DATE=" + meta[2],
+		"GIT_AUTHOR_NAME=" + meta[2],
+		"GIT_AUTHOR_EMAIL=" + meta[3],
+		"GIT_AUTHOR_DATE=" + meta[4],
 	}
 	commitArgs := []string{"commit-tree", strings.TrimSpace(treeOut)}
 	for _, p := range parents {
 		commitArgs = append(commitArgs, "-p", p)
 	}
-	newTipOut, err := runWith(commitEnv, []byte(meta[3]), commitArgs...)
+	newTipOut, err := runWith(commitEnv, []byte(meta[5]), commitArgs...)
 	if err != nil {
 		return "", err
 	}
@@ -1443,7 +1438,9 @@ func RevParse(ref string) (string, error) {
 // work) and matches at slash boundaries, so it would need an exact-match
 // post-filter just to preserve today's semantics.
 func localBranchRef(ref string) string {
-	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") {
+	// A 40-hex value can never be a branch name (refname rules forbid it), so
+	// it skips the show-ref probe outright.
+	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") || isHex40(ref) {
 		return ref
 	}
 	if BranchExists(ref) {
@@ -1915,26 +1912,11 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestorRef, descendantRef, err)
 }
 
-// AncestorSet returns the set of commit SHAs reachable from ref (ref itself and
-// all its ancestors) in one git invocation, so a caller can answer many
-// ancestry questions about the same ref with map lookups instead of one
-// `merge-base --is-ancestor` spawn per question.
-func AncestorSet(ref string) (map[string]bool, error) {
-	if err := validRefArg("ref", ref); err != nil {
-		return nil, err
-	}
-	out, err := Run("rev-list", localBranchRef(ref))
-	if err != nil {
-		return nil, err
-	}
-	return revListSet(out), nil
-}
-
 // CommitRange returns the set of commit SHAs reachable from include but not
 // from exclude — `git rev-list include ^exclude`, i.e. exclude..include — in
-// one bounded invocation. Unlike AncestorSet the walk stops at the excluded
-// history, so the cost is O(range size), not O(repo history). The "^" prefix
-// on the exclude ref also means it can never be parsed as an option.
+// one bounded invocation. The walk stops at the excluded history, so the cost
+// is O(range size), not O(repo history). The "^" prefix on the exclude ref
+// also means it can never be parsed as an option.
 func CommitRange(exclude, include string) (map[string]bool, error) {
 	if err := validRefArg("ref", exclude); err != nil {
 		return nil, err

@@ -588,8 +588,8 @@ func TestAbsorbPlanSpawnDiet(t *testing.T) {
 	if spy.currentBranchCalls != 1 {
 		t.Fatalf("currentBranchCalls = %d, want exactly the single currentTracked read", spy.currentBranchCalls)
 	}
-	if spy.ancestorSetCalls != 0 || spy.commitRangeCalls != 1 {
-		t.Fatalf("ancestorSet/commitRange = %d/%d, want 0/1 (the bounded range walk)", spy.ancestorSetCalls, spy.commitRangeCalls)
+	if spy.commitRangeCalls != 1 {
+		t.Fatalf("commitRangeCalls = %d, want 1 (the bounded range walk)", spy.commitRangeCalls)
 	}
 	if spy.tipsForCalls != 1 {
 		t.Fatalf("tipsForCalls = %d, want 1 (one bulk read for the attribution maps)", spy.tipsForCalls)

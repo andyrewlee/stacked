@@ -1069,7 +1069,7 @@ func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
 		if merged[name] {
 			continue
 		}
-		contained, err := g.ChangesContainedIn(trunkRef, name)
+		contained, err := g.ChangesContainedIn(trunkRef, branchTipRef(name))
 		if err != nil {
 			return nil, fmt.Errorf("check whether %q's changes are contained in %q: %w", name, trunkRef, err)
 		}
@@ -1130,22 +1130,20 @@ func TrackBranch(env Env, s *State, name, parent string) (*OpResult, error) {
 // inferParent picks the closest tracked ancestor (or the trunk) of name — the
 // branch being adopted, current or not. The two per-candidate ancestry
 // questions ("is c an ancestor of name?" and "is c merged into trunk?") are
-// answered from precomputed reachability sets — one rev-list for name and one
-// for the trunk — instead of a `merge-base --is-ancestor` spawn per candidate.
-// Only the closest-ancestor tie-break still spawns, and just for the few
-// candidates that are actual ancestors of name.
+// answered by two bounded `for-each-ref --merged` scans: tip(c) is an ancestor
+// of name iff c ∈ MergedInto(name), and is merged into the trunk iff
+// c ∈ MergedInto(trunk). A branch missing from the merged set (e.g. deleted)
+// simply fails the ancestor test — it cannot be a parent. Only the
+// closest-ancestor tie-break still spawns, and just for the few candidates
+// that are actual ancestors of name.
 func inferParent(g Git, s *State, name string) (string, error) {
-	ancestors, err := g.AncestorSet(name)
+	mergedIntoName, err := g.MergedInto(name)
 	if err != nil {
-		return "", fmt.Errorf("list ancestors of %q: %w", name, err)
+		return "", fmt.Errorf("list branches merged into %q: %w", name, err)
 	}
-	trunkAncestors, err := g.AncestorSet(s.Trunk)
+	mergedIntoTrunk, err := g.MergedInto(s.Trunk)
 	if err != nil {
-		return "", fmt.Errorf("list ancestors of %q: %w", s.Trunk, err)
-	}
-	tips, err := g.TipsFor(stateTipNames(s))
-	if err != nil {
-		return "", fmt.Errorf("read branch tips: %w", err)
+		return "", fmt.Errorf("list branches merged into %q: %w", s.Trunk, err)
 	}
 
 	best := s.Trunk
@@ -1163,18 +1161,14 @@ func inferParent(g Git, s *State, name string) (string, error) {
 		if c == name || c == best {
 			continue
 		}
-		tip, ok := tips[c]
-		if !ok {
-			continue // candidate's git branch is gone; it cannot be a parent
+		if !mergedIntoName[c] {
+			continue // not an ancestor of name (or the git branch is gone)
 		}
-		if !ancestors[tip] {
-			continue // not an ancestor of name
-		}
-		if trunkAncestors[tip] {
+		if mergedIntoTrunk[c] {
 			continue // already merged into the trunk
 		}
 		if best != s.Trunk {
-			bestIsAncestor, err := g.IsAncestor(best, c)
+			bestIsAncestor, err := g.IsAncestor(branchTipRef(best), branchTipRef(c))
 			if err != nil {
 				return "", fmt.Errorf("check whether %q is an ancestor of %q: %w", best, c, err)
 			}

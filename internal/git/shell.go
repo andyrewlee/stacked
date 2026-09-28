@@ -53,13 +53,12 @@ func (Shell) HasStagedChanges() (bool, error) { return HasStagedChanges() }
 func (Shell) HasUnstagedChanges() (bool, error) {
 	return HasUnstagedChanges()
 }
-func (Shell) IsClean() (bool, error)                          { return IsClean() }
-func (Shell) RebaseInProgress() (bool, error)                 { return RebaseInProgress() }
-func (Shell) RebaseHeadName() (string, error)                 { return RebaseHeadName() }
-func (Shell) RebaseOntoSHA() (string, error)                  { return RebaseOntoSHA() }
-func (Shell) RebaseContinue() error                           { return RebaseContinue() }
-func (Shell) RebaseAbort() error                              { return RebaseAbort() }
-func (Shell) AncestorSet(ref string) (map[string]bool, error) { return AncestorSet(ref) }
+func (Shell) IsClean() (bool, error)          { return IsClean() }
+func (Shell) RebaseInProgress() (bool, error) { return RebaseInProgress() }
+func (Shell) RebaseHeadName() (string, error) { return RebaseHeadName() }
+func (Shell) RebaseOntoSHA() (string, error)  { return RebaseOntoSHA() }
+func (Shell) RebaseContinue() error           { return RebaseContinue() }
+func (Shell) RebaseAbort() error              { return RebaseAbort() }
 func (Shell) CommitRange(exclude, include string) (map[string]bool, error) {
 	return CommitRange(exclude, include)
 }

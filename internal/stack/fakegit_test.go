@@ -183,7 +183,6 @@ type tipReadSpyGit struct {
 	tipsCalls          int
 	tipsForCalls       int
 	currentBranchCalls int
-	ancestorSetCalls   int
 	commitRangeCalls   int
 	blameCalls         int
 	worktreesCalls     int
@@ -209,11 +208,6 @@ func (g *tipReadSpyGit) TipsFor(names []string) (map[string]string, error) {
 	g.tipsForCalls++
 	g.tipsForNames = append(g.tipsForNames, append([]string(nil), names...))
 	return g.Git.TipsFor(names)
-}
-
-func (g *tipReadSpyGit) AncestorSet(ref string) (map[string]bool, error) {
-	g.ancestorSetCalls++
-	return g.Git.AncestorSet(ref)
 }
 
 func (g *tipReadSpyGit) CommitRange(exclude, include string) (map[string]bool, error) {
@@ -743,20 +737,6 @@ func (f *fakeGit) RebaseAbort() error {
 	}
 	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase = false, "", "", ""
 	return nil
-}
-
-// AncestorSet returns the commit ids reachable from ref (ref and its ancestors),
-// mirroring "git rev-list ref" over the in-memory DAG.
-func (f *fakeGit) AncestorSet(ref string) (map[string]bool, error) {
-	start := f.resolve(ref)
-	if start == "" {
-		return nil, fmt.Errorf("unknown revision %q", ref)
-	}
-	set := map[string]bool{}
-	for cur := start; cur != ""; cur = f.commits[cur].parent {
-		set[cur] = true
-	}
-	return set, nil
 }
 
 // CommitRange mirrors `rev-list include ^exclude` over the fake's linear

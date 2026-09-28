@@ -2639,3 +2639,29 @@ func TestParseBlamePorcelain(t *testing.T) {
 		}
 	})
 }
+
+// TestLocalBranchRefSkipsProbeForQualifiedAndSHA pins the spawn-count contract:
+// localBranchRef must not spawn `show-ref --verify` for arguments that are
+// already unambiguous — HEAD, refs/…-qualified refs, and full 40-hex SHAs (a
+// hex value can never be a branch name). Only a bare name costs a probe.
+func TestLocalBranchRefSkipsProbeForQualifiedAndSHA(t *testing.T) {
+	newRepo(t)
+	sha := mustGit(t, "rev-parse", "HEAD")
+	log := installGitShim(t, "", 0)
+
+	if _, err := IsAncestor(sha, "HEAD"); err != nil {
+		t.Fatalf("IsAncestor: %v", err)
+	}
+	if _, err := MergeBase(sha, "HEAD"); err != nil {
+		t.Fatalf("MergeBase: %v", err)
+	}
+	if _, err := MergedInto("refs/heads/main"); err != nil {
+		t.Fatalf("MergedInto: %v", err)
+	}
+	for _, call := range shimCalls(t, log) {
+		if strings.HasPrefix(call, "show-ref") {
+			t.Fatalf("SHA/qualified refs must not spawn show-ref probes; calls:\n%s",
+				strings.Join(shimCalls(t, log), "\n"))
+		}
+	}
+}
