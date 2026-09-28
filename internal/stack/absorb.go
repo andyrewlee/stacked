@@ -98,9 +98,8 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	}
 
 	// Stack set = commits reachable from the current branch but not from the
-	// trunk — one bounded `git rev-list trunk..cur` (CommitRange). The old
-	// two-AncestorSet subtraction walked the ENTIRE trunk history for the
-	// same set.
+	// trunk — one bounded `git rev-list trunk..cur` (CommitRange), not two
+	// unbounded history walks subtracted afterward.
 	stackSet, err := g.CommitRange(branchTipRef(s.Trunk), branchTipRef(cur))
 	if err != nil {
 		return nil, "", fmt.Errorf("walk %s..%s: %w", s.Trunk, cur, err)
