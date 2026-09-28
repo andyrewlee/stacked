@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -81,7 +82,11 @@ func needsSanitizing(s string, isControl func(rune) bool) bool {
 }
 
 func isTerminalControl(r rune) bool {
-	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+	// C0, DEL, C1 — plus Unicode format chars (Cf): bidi overrides,
+	// zero-width spaces, word joiners, BOM, and tag chars render invisibly
+	// or reorder display, a paste-hijack vector in branch/commit text that
+	// git refname rules otherwise allow.
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || unicode.Is(unicode.Cf, r)
 }
 
 // isErrorTerminalControl is isTerminalControl minus the whitespace that is

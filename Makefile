@@ -13,7 +13,7 @@ GOLANGCI_VERSION := v2.12.2
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-golangci check-goreleaser-version check-release-version golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-golangci check-goreleaser-version check-release-version check-release-ready golden test test-fast e2e cover hooks clean release snapshot
 
 # Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
 # Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
@@ -207,8 +207,14 @@ check-release-version:
 	fi; \
 	echo "release pin: defaultVersion $$have matches tag $$tag"
 
+# Preflight before publishing: refuses to ship artifacts install.sh cannot
+# verify — the embedded minisign public key must be real and the signing
+# secret key file present. Releases are cut locally; no CI job gates this.
+check-release-ready:
+	@sh scripts/check-release-ready.sh
+
 # Cut a release from the current git tag with GoReleaser (needs GITHUB_TOKEN).
-release: check-release-version
+release: check-release-version check-release-ready
 	goreleaser release --clean
 
 # Build release artifacts locally without publishing (dry run).

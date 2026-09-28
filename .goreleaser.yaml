@@ -32,10 +32,11 @@ checksum:
 # fetches that .minisig and verifies it (minisign -V, fail-closed) before
 # trusting any checksum, so a release must never publish unsigned.
 #
-# The secret key is a GitHub secret (MINISIGN_KEY, base64 of the key file)
-# materialized by the release job in .github/workflows/ci.yml to a 0600 temp
-# file whose path is exported as MINISIGN_KEY_FILE. It is never committed to
-# the repo — see the signing runbook in CONTRIBUTING.md's Releasing section.
+# The secret key lives OUTSIDE the repo (never committed): `make release`
+# reads its path from MINISIGN_KEY_FILE, and the check-release-ready
+# preflight fails first when it is unset or when install.sh still carries a
+# placeholder public key — see the signing runbook in CONTRIBUTING.md's
+# Releasing section.
 # Only `goreleaser release` reaches this pipe: `goreleaser build` doesn't run
 # it, and snapshot rehearsals pass --skip=sign (scripts/check-install-assets.sh).
 # With MINISIGN_KEY_FILE unset the template expansion itself fails the release
