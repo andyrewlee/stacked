@@ -2150,3 +2150,72 @@ func CommitSubjects(base, branch string) ([]string, error) {
 	}
 	return strings.Split(out, "\n"), nil
 }
+
+// MinVersion is the minimum git version st requires: the documented floor
+// (README/CONTRIBUTING promise "Git 2.17+"). Worktree `-z` porcelain (2.36)
+// and common-dir path resolution (2.31) have graceful fallbacks, so they are
+// NOT part of the floor — bumping this is a docs-visible contract change.
+var MinVersion = [3]int{2, 17, 0}
+
+// RequireMinVersion verifies the git on PATH meets MinVersion, so an
+// unsupported git fails at startup with a clear message rather than
+// mid-command on an unrecognized flag or grammar.
+func RequireMinVersion() error {
+	out, err := Run("version")
+	if err != nil {
+		return fmt.Errorf("git version: %w", err)
+	}
+	found, err := parseGitVersion(out)
+	if err != nil {
+		return err
+	}
+	if !versionAtLeast(found, MinVersion) {
+		return fmt.Errorf("st requires git >= %d.%d.%d (found %d.%d.%d)",
+			MinVersion[0], MinVersion[1], MinVersion[2], found[0], found[1], found[2])
+	}
+	return nil
+}
+
+// parseGitVersion extracts the dotted numeric version from `git version`
+// output ("git version 2.46.0", and distro-suffixed forms like
+// "git version 2.39.5 (Apple Git-154)").
+func parseGitVersion(out string) ([3]int, error) {
+	fields := strings.Fields(strings.TrimSpace(out))
+	for _, f := range fields {
+		if f[0] < '0' || f[0] > '9' {
+			continue
+		}
+		var v [3]int
+		parts := strings.SplitN(f, ".", 4)
+		if len(parts) < 2 {
+			continue
+		}
+		ok := true
+		for i := 0; i < 3; i++ {
+			if i >= len(parts) {
+				break
+			}
+			n, err := strconv.Atoi(parts[i])
+			if err != nil {
+				ok = false
+				break
+			}
+			v[i] = n
+		}
+		if ok {
+			return v, nil
+		}
+	}
+	return [3]int{}, fmt.Errorf("cannot parse git version from %q", out)
+}
+
+// versionAtLeast reports whether found >= want, comparing major, minor, patch
+// in order.
+func versionAtLeast(found, want [3]int) bool {
+	for i := 0; i < 3; i++ {
+		if found[i] != want[i] {
+			return found[i] > want[i]
+		}
+	}
+	return true
+}

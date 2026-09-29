@@ -13,6 +13,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -120,6 +121,14 @@ func Execute() (rc int) {
 		// Report through the standard error path so --json gets the structured
 		// envelope on stderr and stdout stays clean for machine parsing.
 		err := unknownCommandErr(name)
+		renderError(err, jsonRequested(args[1:]))
+		return exitCode(err)
+	}
+
+	// Every real command needs a supported git on PATH; fail before dispatch
+	// rather than mid-mutation on an unrecognized flag. Builtins (help,
+	// version) stay exempt — they answer without git.
+	if err := git.RequireMinVersion(); err != nil {
 		renderError(err, jsonRequested(args[1:]))
 		return exitCode(err)
 	}

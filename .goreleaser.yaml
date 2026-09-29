@@ -46,7 +46,7 @@ signs:
     signature: "${artifact}.minisig"
     args:
       - "-S"
-      - "-W" # never prompt for a key password — the CI key is stored unencrypted
+      - "-W" # never prompt for a key password — the release key is stored unencrypted
       - "-s"
       - "{{ .Env.MINISIGN_KEY_FILE }}"
       - "-x"

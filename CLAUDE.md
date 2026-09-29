@@ -19,14 +19,15 @@ stores stack topology locally — no host API.
 
 ```
 make test-fast   # about a second: the stack engine package over the fake git (./internal/stack)
-make ci          # full gate = pre-push hook = CI: check-deps + fmt-check + lint + vet
-                 #   + build + race tests + e2e + merged-coverage gate (>=75%)
+make ci          # THE gate — there is no remote CI: check-deps + pin checks +
+                 #   fmt-check + lint + vet + vet-cross + build + race tests +
+                 #   e2e + merged-coverage gate (>=75%) + installer checks
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
-`make ci` is the single source of truth — the pre-push hook and CI run the exact
-same target. If `make ci` is green, you can commit/refactor without
-manual testing. The inner loop you hit constantly is `make test-fast`.
+`make ci` is the single source of truth — the pre-push hook runs the exact same
+target and nothing else does. If `make ci` is green, you can commit/refactor
+without manual testing. The inner loop you hit constantly is `make test-fast`.
 
 ## Architecture (why the loop is fast)
 
