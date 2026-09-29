@@ -179,6 +179,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   --all` (materialize every tracked branch's worktree) also shipped in 0.0.1
   but were omitted from its notes.
 
+### Changed
+- **CI stays local; a minimal Windows leg returns to Actions.** `make ci`
+  remains the whole pipeline and the pre-push gate. The restored
+  `.github/workflows/ci.yml` is a single `windows-latest` job running
+  `go vet` + the full test suite — the one thing a darwin/Linux dev box
+  cannot do: execute the windows-only lock code (`lock_other.go`,
+  `lock_owner_windows.go`) that `vet-cross` only type-checks. No lint,
+  coverage, or release jobs moved back; publishing stays a local
+  `make release` flow.
+
 
 ## [0.0.1] - 2026-07-12
 
