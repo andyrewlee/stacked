@@ -15,7 +15,7 @@ func init() {
 	register(&Command{
 		Name:       "undo",
 		Summary:    "Undo the last stack-mutating command",
-		Usage:      "st undo [--list] [--json]",
+		Usage:      "st undo [--list | --dry-run] [--json]",
 		Run:        runUndo,
 		NewFlagSet: undoFlagSet,
 	})
@@ -36,8 +36,14 @@ func runUndo(args []string) error {
 	if err := rejectArgs("undo", fs.Args()); err != nil {
 		return err
 	}
+	if o.list && o.dryRun {
+		return fmt.Errorf("--list and --dry-run are mutually exclusive")
+	}
 	if o.list {
 		return runUndoList(o.asJSON)
+	}
+	if o.dryRun {
+		return runUndoDryRun(o.asJSON)
 	}
 
 	release, err := acquireLock()
@@ -182,6 +188,94 @@ type undoListEntry struct {
 	CreatedBranches  []string          `json:"createdBranches,omitempty"`
 	CreatedWorktrees map[string]string `json:"createdWorktrees,omitempty"`
 	Refs             map[string]string `json:"refs"`
+}
+
+// runUndoDryRun previews the NEXT journal entry under the advisory lock —
+// consistent reads, zero writes: no state/journal bytes change, no ref moves,
+// no worktree removal. Blockers are data (a real undo's refusals, in its gate
+// order), not errors; the command still exits 0. Previewing reserves nothing:
+// a later real `st undo` revalidates everything.
+func runUndoDryRun(asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	entry, ok, err := stack.PeekUndo()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return emit(asJSON, struct {
+			DryRun bool `json:"dryRun"`
+			Undone bool `json:"undone"`
+		}{true, false}, func() { out("nothing to undo\n") })
+	}
+
+	// Like the real run: an unloadable state degrades (the snapshot is what
+	// undo restores) — except ErrStateTooNew, which is a blocker row rather
+	// than the real run's fatal error.
+	s, loadErr := stack.Load()
+	if errors.Is(loadErr, stack.ErrStateTooNew) {
+		res := &stack.UndoPreviewResult{
+			DryRun:   true,
+			Label:    entry.Label,
+			Blockers: []string{"state_too_new"},
+		}
+		return renderUndoPreview(res, asJSON)
+	}
+	if loadErr != nil {
+		s = nil
+	}
+
+	res, err := stack.UndoPreview(stack.Env{Git: gitShell}, s, entry, shimActive())
+	if err != nil {
+		return err
+	}
+	return renderUndoPreview(res, asJSON)
+}
+
+// renderUndoPreview mirrors the JSON payload in text: the op being previewed,
+// the per-ref restores, the created-branch deletions, the checkout target, and
+// every blocker — all names/paths terminal-sanitized.
+func renderUndoPreview(res *stack.UndoPreviewResult, asJSON bool) error {
+	return emit(asJSON, res, func() {
+		out("would undo: %s\n", sanitizeForTerminal(res.Label))
+		for _, r := range res.WouldRestore {
+			lost := "unknown"
+			if n, ok := r.CommitsLostFromRef.(int); ok {
+				lost = fmt.Sprintf("%d", n)
+			}
+			out("  restores: %s %s→%s (%s commits lost from ref)\n",
+				sanitizeForTerminal(r.Branch), r.From, r.To, lost)
+		}
+		for _, d := range res.WouldDelete {
+			line := "  deletes: " + sanitizeForTerminal(d.Branch)
+			var bits []string
+			if d.Worktree != "" {
+				bits = append(bits, "worktree "+sanitizeForTerminal(d.Worktree))
+			}
+			if d.WorktreeDirty {
+				bits = append(bits, "dirty")
+			}
+			if d.IsCurrentWorktree {
+				bits = append(bits, "current worktree")
+			}
+			if len(bits) > 0 {
+				line += " (" + strings.Join(bits, "; ") + ")"
+			}
+			out("%s\n", line)
+		}
+		if res.WouldCheckout != nil {
+			out("  checkout: %s\n", sanitizeForTerminal(*res.WouldCheckout))
+		} else if len(res.Blockers) == 0 {
+			out("  checkout: (recorded branch no longer exists)\n")
+		}
+		for _, b := range res.Blockers {
+			out("  blocked: %s\n", sanitizeForTerminal(b))
+		}
+	})
 }
 
 // runUndoList prints the undo journal newest-first without touching it. The

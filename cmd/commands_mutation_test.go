@@ -1759,3 +1759,265 @@ func TestSyncNoFetchUsesExistingRemoteRef(t *testing.T) {
 		t.Fatalf("local main moved under --no-fetch: %s → %s", localMain, got)
 	}
 }
+
+// --- undo --dry-run ---------------------------------------------------------
+
+// The preview changes nothing observable: state.json and undo.json are
+// byte-identical afterwards, every ref and worktree survives, cwd is
+// unmoved, and a following real undo still reverts the same entry.
+func TestUndoDryRunMutatesNothing(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatalf("git common dir: %v", err)
+	}
+	stBytes, err := os.ReadFile(filepath.Join(gitDir, "stacked", "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	journalBytes, err := os.ReadFile(filepath.Join(gitDir, "stacked", "undo.json"))
+	if err != nil {
+		t.Fatalf("read undo journal: %v", err)
+	}
+	headBefore := mustRun(t, "git", "rev-parse", "HEAD")
+	tipBefore := mustRun(t, "git", "rev-parse", "feat-a")
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("undo --dry-run: %v", err)
+		}
+	})
+	var res map[string]any
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode preview: %v\n%s", err, out)
+	}
+	if res["dryRun"] != true || res["journalDrop"] != true {
+		t.Fatalf("preview = %v", res)
+	}
+	deleted, _ := res["wouldDelete"].([]any)
+	if len(deleted) != 1 {
+		t.Fatalf("wouldDelete = %v, want [feat-a]", res["wouldDelete"])
+	}
+	if res["wouldCheckout"] != "main" {
+		t.Fatalf("wouldCheckout = %v, want main", res["wouldCheckout"])
+	}
+	if bl, _ := res["blockers"].([]any); len(bl) != 0 {
+		t.Fatalf("blockers = %v, want []", res["blockers"])
+	}
+
+	stBytes2, err := os.ReadFile(filepath.Join(gitDir, "stacked", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalBytes2, err := os.ReadFile(filepath.Join(gitDir, "stacked", "undo.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stBytes) != string(stBytes2) {
+		t.Fatal("preview rewrote state.json")
+	}
+	if string(journalBytes) != string(journalBytes2) {
+		t.Fatal("preview rewrote the undo journal")
+	}
+	if got := mustRun(t, "git", "rev-parse", "HEAD"); got != headBefore {
+		t.Fatal("preview moved HEAD")
+	}
+	if got := mustRun(t, "git", "rev-parse", "feat-a"); got != tipBefore {
+		t.Fatal("preview moved feat-a")
+	}
+	if curBranch(t) != "feat-a" {
+		t.Fatalf("cwd branch = %q, want feat-a", curBranch(t))
+	}
+
+	// Non-reservation: the real undo still applies the entry afterwards.
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("real undo after preview: %v", err)
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() == nil {
+		t.Fatal("real undo did not delete feat-a")
+	}
+}
+
+func TestUndoDryRunEmptyJournal(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("undo --dry-run on empty journal: %v", err)
+		}
+	})
+	var res struct {
+		DryRun bool `json:"dryRun"`
+		Undone bool `json:"undone"`
+	}
+	decodeStrictJSON(t, "undo --dry-run (empty)", out, &res)
+	if !res.DryRun || res.Undone {
+		t.Fatalf("empty preview = %+v, want {dryRun:true, undone:false}", res)
+	}
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run"}); err != nil {
+			t.Fatalf("undo --dry-run text on empty journal: %v", err)
+		}
+	})
+	if !strings.Contains(out, "nothing to undo") {
+		t.Fatalf("text = %q", out)
+	}
+}
+
+func TestUndoDryRunMutuallyExclusiveWithList(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	if err := runUndo([]string{"--dry-run", "--list"}); err == nil {
+		t.Fatal("--dry-run --list should be a usage error")
+	}
+}
+
+func TestUndoDryRunModifyShowsRestore(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	recorded := mustRun(t, "git", "rev-parse", "feat-a")
+	write(t, "a.txt", "a2\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	live := mustRun(t, "git", "rev-parse", "feat-a")
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("undo --dry-run: %v", err)
+		}
+	})
+	var res struct {
+		DryRun       bool   `json:"dryRun"`
+		Label        string `json:"label"`
+		WouldRestore []struct {
+			Branch             string `json:"branch"`
+			From               string `json:"from"`
+			To                 string `json:"to"`
+			CommitsLostFromRef any    `json:"commitsLostFromRef"`
+		} `json:"wouldRestore"`
+		WouldCheckout string `json:"wouldCheckout"`
+		JournalDrop   bool   `json:"journalDrop"`
+		Observed      struct {
+			EntryIndex int                `json:"entryIndex"`
+			Tips       map[string]*string `json:"tips"`
+		} `json:"observed"`
+		Blockers []string `json:"blockers"`
+	}
+	decodeStrictJSON(t, "undo --dry-run", out, &res)
+	if !strings.HasPrefix(res.Label, "modify") {
+		t.Fatalf("label = %q", res.Label)
+	}
+	var featA *struct {
+		Branch             string `json:"branch"`
+		From               string `json:"from"`
+		To                 string `json:"to"`
+		CommitsLostFromRef any    `json:"commitsLostFromRef"`
+	}
+	for i := range res.WouldRestore {
+		if res.WouldRestore[i].Branch == "feat-a" {
+			featA = &res.WouldRestore[i]
+		}
+	}
+	if featA == nil {
+		t.Fatalf("wouldRestore = %+v, want a feat-a row", res.WouldRestore)
+	}
+	if featA.From != live || featA.To != recorded {
+		t.Fatalf("feat-a restore = %s→%s, want %s→%s", featA.From, featA.To, live, recorded)
+	}
+	if n, ok := featA.CommitsLostFromRef.(float64); !ok || n != 1 {
+		t.Fatalf("commitsLostFromRef = %v, want 1", featA.CommitsLostFromRef)
+	}
+}
+
+// Text-mode preview mirrors the JSON: restores/deletes/checkout lines and a
+// blocker row (a paused rebase is a data row, not an error).
+func TestUndoDryRunTextOutput(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	// A modify so the entry records restores; the create adds a delete.
+	write(t, "a.txt", "a2\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run"}); err != nil {
+			t.Fatalf("undo --dry-run: %v", err)
+		}
+	})
+	if !strings.Contains(out, "would undo: modify") {
+		t.Fatalf("missing would-undo line:\n%s", out)
+	}
+	if !strings.Contains(out, "restores: feat-a") || !strings.Contains(out, "commits lost") {
+		t.Fatalf("missing restores line:\n%s", out)
+	}
+	if !strings.Contains(out, "checkout: feat-a") {
+		t.Fatalf("missing checkout line:\n%s", out)
+	}
+
+	// A rename leaves the entry's recorded currentBranch name deleted: the
+	// preview reports "(recorded branch no longer exists)" for the checkout
+	// and lists the renamed-to branch as a delete (it is entry-created).
+	if err := runRename([]string{"feat-renamed"}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run"}); err != nil {
+			t.Fatalf("undo --dry-run (rename): %v", err)
+		}
+	})
+	if !strings.Contains(out, "deletes: feat-renamed") {
+		t.Fatalf("missing deletes line:\n%s", out)
+	}
+	if !strings.Contains(out, "no longer exists") {
+		t.Fatalf("expected the missing-checkout-target hint:\n%s", out)
+	}
+}
+
+// A paused rebase is a blocker row, not an exit code: the preview still
+// reports the recorded intent and mutates nothing.
+func TestUndoDryRunDuringRebase(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "conf-a", "f.txt", "A\n", "a")
+	mustCreate(t, "conf-b", "f.txt", "A\nB\n", "b")
+	mustCheckout(t, "conf-a")
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatal("expected a conflict restacking conf-b")
+	}
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("undo --dry-run during rebase: %v", err)
+		}
+	})
+	var res struct {
+		DryRun        bool     `json:"dryRun"`
+		Label         string   `json:"label"`
+		WouldCheckout *string  `json:"wouldCheckout"`
+		Blockers      []string `json:"blockers"`
+	}
+	decodeStrictJSON(t, "undo --dry-run during rebase", out, &res)
+	found := false
+	for _, b := range res.Blockers {
+		if b == "rebase_in_progress" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("blockers = %v, want rebase_in_progress", res.Blockers)
+	}
+	// The rebase is untouched — abort must still work.
+	if err := runAbort(nil); err != nil {
+		t.Fatalf("abort after preview: %v", err)
+	}
+}

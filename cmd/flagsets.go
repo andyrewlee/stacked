@@ -59,11 +59,13 @@ func absorbFlagSet() *flag.FlagSet { return newAbsorbFlags(&absorbOpts{}) }
 type undoOpts struct {
 	asJSON bool
 	list   bool
+	dryRun bool
 }
 
 func newUndoFlags(o *undoOpts) *flag.FlagSet {
 	fs := newFlagSet("undo", &o.asJSON)
 	fs.BoolVar(&o.list, "list", false, "show the undo journal without reverting anything")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview what the next undo would restore/delete without changing anything")
 	return withDefaults(fs, "undo")
 }
 

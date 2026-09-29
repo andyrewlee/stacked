@@ -1806,6 +1806,9 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "op-a", "a.txt", "a\n", "add a")
 	collect("repair --json", func() error { return runRepair([]string{"--json"}) })
+	// `undo --dry-run --json` is intentionally NOT collected: its
+	// `observed.tips` map keys off branch names, which would surface here as
+	// undocumented "keys" — same reason `undo --list`'s `refs` map stays out.
 	collect("undo --json", func() error { return runUndo([]string{"--json"}) })
 
 	for k := range keys {

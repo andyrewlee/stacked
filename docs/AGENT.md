@@ -172,6 +172,30 @@ message.
     created and undo would remove (both `omitempty`, as is `currentBranch`);
     the internal state snapshot is never emitted. An empty journal emits
     `{ "entries": [] }` (exit 0; text prints `nothing to undo`).
+  - `undo --dry-run --json` previews what the NEXT entry would revert —
+    unlike `--list` it diffs the journal against live refs and worktrees:
+    ```json
+    { "dryRun": true, "label": "…",
+      "wouldRestore": [{"branch","from","to","commitsLostFromRef"}],
+      "wouldDelete":  [{"branch","worktree","worktreeDirty","isCurrentWorktree"}],
+      "wouldCheckout": "main", "journalDrop": true,
+      "observed": {"entryIndex": 1, "tips": {}}, "blockers": [] }
+    ```
+    `commitsLostFromRef` counts commits reachable from the live tip but not
+    the recorded one (per-ref — other refs may still reach them); it is the
+    string `"unknown"` when either object is missing, and `from` is the zero
+    SHA / `tips.<branch>` is `null` when the live ref is gone. `worktree` is
+    the LIVE owning path (discovered even when the journal recorded none).
+    `blockers` lists, in the real undo's gate order, everything a real run
+    would refuse on: `rebase_in_progress`, `state_too_new`,
+    `malformed_snapshot`, `cwd_inside_created_worktree:<b>`,
+    `worktree_dirty:<b>`, `recorded_worktree_mismatch:<b>` — a missing ref is
+    NOT a blocker (undo restores it). A computed preview exits 0 even with
+    blockers (they are data); an empty journal emits
+    `{ "dryRun": true, "undone": false }`. `--dry-run` and `--list` are
+    mutually exclusive (exit 1). The preview holds the advisory lock but
+    mutates nothing — state, journal, refs, worktrees, and cwd are unchanged,
+    and a later real `st undo` revalidates everything (no reservation).
   - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
     `fixes` is non-empty; both are present on every run).
 
