@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
@@ -13,8 +14,8 @@ func init() {
 	register(&Command{
 		Name:       "submit",
 		Aliases:    []string{"ss"},
-		Summary:    "Push every branch in the current stack to the remote (no PRs — login-free)",
-		Usage:      "st submit [--remote <name>] [--dry-run] [--json]",
+		Summary:    "Push the stack's branches to the remote (no PRs — login-free); --all pushes the whole forest",
+		Usage:      "st submit [--all] [--remote <name>] [--dry-run] [--json]",
 		Run:        runSubmit,
 		NewFlagSet: submitFlagSet,
 	})
@@ -44,12 +45,13 @@ type prHint struct {
 	CompareURL string `json:"compareURL,omitempty"`
 }
 
-// runSubmit pushes every branch on the current stack — from the bottom branch
-// (just above trunk) up to and including the currently checked-out branch — to
-// the configured remote using --force-with-lease. stacked is login-free and does
-// not talk to any host API, so it never opens pull requests; the user can create
-// PRs on their host afterwards. With --dry-run no branches are pushed and the
-// planned pushes are printed instead.
+// runSubmit pushes branches to the configured remote using --force-with-lease:
+// with --all, every tracked branch in the forest in topological order; without
+// it, every branch on the current stack — from the bottom branch (just above
+// trunk) up to and including the currently checked-out branch. stacked is
+// login-free and does not talk to any host API, so it never opens pull
+// requests; the user can create PRs on their host afterwards. With --dry-run no
+// branches are pushed and the planned pushes are printed instead.
 func runSubmit(args []string) error {
 	var o submitOpts
 	fs := newSubmitFlags(&o)
@@ -70,35 +72,62 @@ func runSubmit(args []string) error {
 		return fmt.Errorf("remote %q does not exist", remote)
 	}
 
-	cur, err := currentBranch()
-	if err != nil {
-		return err
-	}
-
-	if cur == state.Trunk {
-		payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: []string{}, Summary: "at trunk; nothing to submit"}
-		return emit(asJSON, payload, func() {
-			out("at trunk; nothing to submit\n")
-		})
-	}
-	if !state.IsTracked(cur) {
-		return fmt.Errorf("branch %q is not tracked by stacked", cur)
-	}
-
-	// Build the ordered list of branches on the path bottom..current. Ancestors
-	// gives the parents nearest-first up to and including the trunk; the tracked
-	// branches among them, reversed, form the bottom-up prefix, and the current
-	// branch is the top of the path.
 	var stackBranches []string
-	ancestors := state.Ancestors(cur)
-	for i := len(ancestors) - 1; i >= 0; i-- {
-		name := ancestors[i]
-		if name == state.Trunk {
-			continue
+	if o.all {
+		// The whole forest is exactly the trunk's descendants, in the same
+		// sorted parents-first order restack --all uses. A tracked branch
+		// missing from that walk means corrupt state (a cycle or a dangling
+		// parent) — name it rather than silently skip it.
+		stackBranches = state.Descendants(state.Trunk)
+		if len(stackBranches) != len(state.Branches) {
+			reached := make(map[string]bool, len(stackBranches))
+			for _, name := range stackBranches {
+				reached[name] = true
+			}
+			var missing []string
+			for name := range state.Branches {
+				if !reached[name] {
+					missing = append(missing, name)
+				}
+			}
+			sort.Strings(missing)
+			return fmt.Errorf("tracked branches %v do not descend from trunk %q (run st repair)", missing, state.Trunk)
 		}
-		stackBranches = append(stackBranches, name)
+		if len(stackBranches) == 0 {
+			payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: []string{}, Summary: "nothing tracked"}
+			return emit(asJSON, payload, func() {
+				out("nothing tracked\n")
+			})
+		}
+	} else {
+		cur, err := currentBranch()
+		if err != nil {
+			return err
+		}
+		if cur == state.Trunk {
+			payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: []string{}, Summary: "at trunk; nothing to submit"}
+			return emit(asJSON, payload, func() {
+				out("at trunk; nothing to submit\n")
+			})
+		}
+		if !state.IsTracked(cur) {
+			return fmt.Errorf("branch %q is not tracked by stacked", cur)
+		}
+
+		// Build the ordered list of branches on the path bottom..current.
+		// Ancestors gives the parents nearest-first up to and including the
+		// trunk; the tracked branches among them, reversed, form the bottom-up
+		// prefix, and the current branch is the top of the path.
+		ancestors := state.Ancestors(cur)
+		for i := len(ancestors) - 1; i >= 0; i-- {
+			name := ancestors[i]
+			if name == state.Trunk {
+				continue
+			}
+			stackBranches = append(stackBranches, name)
+		}
+		stackBranches = append(stackBranches, cur)
 	}
-	stackBranches = append(stackBranches, cur)
 
 	pushed := []string{}
 	if dryRun {

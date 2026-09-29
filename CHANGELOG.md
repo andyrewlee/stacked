@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st submit --all` pushes the whole tracked forest.** In dependency
+  order (parents before children), from any branch — including trunk and
+  detached HEAD — with the same confirmed-per-ref partial-failure contract
+  as a single-path submit. `st submit` without the flag is unchanged.
+- **`ST_LOCK_WAIT` waits out lock contention.** Set it to a Go duration
+  (`10s`) or bare seconds (`10`) and lock acquisition retries every 100ms
+  up to the budget; exhaustion still exits 5. Malformed or negative values
+  fail fast naming the variable; the abandoned `lock.reclaim` guard is
+  never retried.
 - **`st absorb` applies multi-target plans.** A staged set whose hunks belong
   to different stack branches now lands as one amend per owning tip (each
   with only its own hunks, post-image line numbers corrected for same-file

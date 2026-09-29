@@ -160,12 +160,14 @@ func trackFlagSet() *flag.FlagSet { return newTrackFlags(&trackOpts{}) }
 
 type submitOpts struct {
 	asJSON bool
+	all    bool
 	remote string
 	dryRun bool
 }
 
 func newSubmitFlags(o *submitOpts) *flag.FlagSet {
 	fs := newFlagSet("submit", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "push every tracked branch, not just the current stack path")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to push to")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed without pushing")
 	return fs
