@@ -122,7 +122,10 @@ message.
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
 - **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip dirty/main-worktree branches into `skipped`. `st shell install` emits a shell script, not JSON.
-- **`submit --json`** — one shape for every outcome:
+- **`submit --json`** — `submit` pushes the current stack path
+  (trunk→current); `submit --all` pushes the whole tracked forest in
+  dependency order (parents before children) and works from any branch,
+  including trunk or detached HEAD. One shape for every outcome:
   `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "summary", "failed" }`
   (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
   `pushed` is empty and `summary` explains why). On successful non-trunk submits,

@@ -24,7 +24,7 @@ commands:
   shell              Print the shell integration that teleports into a branch's worktree
   squash             Squash all of the current branch's commits into one
   status (stat)      Show current branch, its parent/children, and restack state
-  submit (ss)        Push every branch in the current stack to the remote (no PRs — login-free)
+  submit (ss)        Push the stack's branches to the remote (no PRs — login-free); --all pushes the whole forest
   sync (s)           Fetch trunk, fast-forward it, restack everything, and prune merged branches
   top (t)            Jump to the top of the current stack
   track              Start tracking a git branch in the stack

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1319,5 +1320,199 @@ func TestSubmitInvalidBranchNameCleanError(t *testing.T) {
 	err = runSubmit(nil)
 	if err == nil || !strings.Contains(err.Error(), "not a valid git ref name") {
 		t.Fatalf("submit with an invalid branch name = %v, want a clean usage-class error", err)
+	}
+}
+
+// --- submit --all -----------------------------------------------------------
+
+// newStackedForest builds two tracked stacks — a→b→c and x→y — plus a bare
+// "origin" remote, returning the remote's path.
+func newStackedForest(t *testing.T) string {
+	t.Helper()
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustCreate(t, "a", "a.txt", "a\n", "a")
+	mustCreate(t, "b", "b.txt", "b\n", "b")
+	mustCreate(t, "c", "c.txt", "c\n", "c")
+	mustCheckout(t, "main")
+	mustCreate(t, "x", "x.txt", "x\n", "x")
+	mustCreate(t, "y", "y.txt", "y\n", "y")
+	return remoteDir
+}
+
+// remoteHasRef reports whether refs/heads/name exists on the remote repo.
+func remoteHasRef(remoteDir, name string) bool {
+	return exec.Command("git", "--git-dir", remoteDir, "show-ref", "--verify", "refs/heads/"+name).Run() == nil
+}
+
+// TestSubmitAllPushesForest pins the scope flag: from a mid-stack checkout the
+// whole forest lands on the remote — every tracked branch, siblings included —
+// and a second run is idempotent.
+func TestSubmitAllPushesForest(t *testing.T) {
+	remoteDir := newStackedForest(t)
+	mustCheckout(t, "b")
+
+	if err := runSubmit([]string{"--all"}); err != nil {
+		t.Fatalf("submit --all: %v", err)
+	}
+	for _, name := range []string{"a", "b", "c", "x", "y"} {
+		if !remoteHasRef(remoteDir, name) {
+			t.Fatalf("submit --all did not create refs/heads/%s on the remote", name)
+		}
+	}
+	if err := runSubmit([]string{"--all"}); err != nil {
+		t.Fatalf("second submit --all: %v", err)
+	}
+}
+
+// TestSubmitAllDryRunTopoOrder pins parents-before-children ordering: the dry
+// run lists every tracked branch with each parent ahead of its children and
+// pushes nothing.
+func TestSubmitAllDryRunTopoOrder(t *testing.T) {
+	remoteDir := newStackedForest(t)
+	mustCheckout(t, "b")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--all", "--dry-run"}); err != nil {
+			t.Fatalf("submit --all --dry-run: %v", err)
+		}
+	})
+	for _, name := range []string{"a", "b", "c", "x", "y"} {
+		if !strings.Contains(out, "would push "+name) {
+			t.Fatalf("dry run omitted %s:\n%s", name, out)
+		}
+	}
+	pos := map[string]int{}
+	for _, name := range []string{"a", "b", "c", "x", "y"} {
+		pos[name] = strings.Index(out, "would push "+name)
+	}
+	ordered := pos["a"] < pos["b"] && pos["b"] < pos["c"] && pos["x"] < pos["y"]
+	if !ordered {
+		t.Fatalf("dry-run order not parents-first: %v\n%s", pos, out)
+	}
+	for _, name := range []string{"a", "b", "c", "x", "y"} {
+		if remoteHasRef(remoteDir, name) {
+			t.Fatalf("dry run pushed %s", name)
+		}
+	}
+}
+
+// TestSubmitAllFromTrunk pins that the trunk early-return does not fire under
+// --all: there may be nothing on the current path but a whole forest to push.
+func TestSubmitAllFromTrunk(t *testing.T) {
+	remoteDir := newStackedForest(t)
+	mustCheckout(t, "main")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--all", "--dry-run"}); err != nil {
+			t.Fatalf("submit --all from trunk: %v", err)
+		}
+	})
+	if strings.Contains(out, "at trunk; nothing to submit") {
+		t.Fatalf("--all hit the trunk early return:\n%s", out)
+	}
+	for _, name := range []string{"a", "b", "c", "x", "y"} {
+		if !strings.Contains(out, "would push "+name) {
+			t.Fatalf("dry run from trunk omitted %s:\n%s", name, out)
+		}
+	}
+	_ = remoteDir
+}
+
+// TestSubmitAllEmptyForest pins the empty early return: an initialized repo
+// tracking nothing reports cleanly rather than pushing zero refs.
+func TestSubmitAllEmptyForest(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--all"}); err != nil {
+			t.Fatalf("submit --all on empty forest: %v", err)
+		}
+	})
+	if !strings.Contains(out, "nothing tracked") {
+		t.Fatalf("expected the empty-forest message, got:\n%s", out)
+	}
+}
+
+// TestSubmitAllCyclicState pins corrupt-state safety: branches unreachable
+// from the trunk (a cycle or a dangling parent) are named in an error, never
+// silently skipped and never a hang.
+func TestSubmitAllCyclicState(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJSONFile(t, filepath.Join(gitDir, "stacked", "state.json"), map[string]any{
+		"version": 1,
+		"trunk":   "main",
+		"branches": map[string]any{
+			"a":      map[string]any{"name": "a", "parent": "b"},
+			"b":      map[string]any{"name": "b", "parent": "a"},
+			"feat-a": map[string]any{"name": "feat-a", "parent": "main"},
+		},
+	})
+
+	err = runSubmit([]string{"--all"})
+	if err == nil {
+		t.Fatal("submit --all accepted a cyclic state")
+	}
+	if !strings.Contains(err.Error(), "do not descend") ||
+		!strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "b") {
+		t.Fatalf("cyclic state error = %v, want it naming the unreachable branches", err)
+	}
+}
+
+// TestSubmitAllPartialFailure pins the confirmed-per-ref contract under --all:
+// a mid-stack rejection names the failed branch and still reports every
+// confirmed push — including branches off the current path.
+func TestSubmitAllPartialFailure(t *testing.T) {
+	remoteDir := newStackedForest(t)
+	mustCheckout(t, "b")
+
+	hook := filepath.Join(remoteDir, "hooks", "update")
+	script := "#!/bin/sh\n[ \"$1\" = refs/heads/b ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var runErr error
+	out := captureStdout(t, func() {
+		runErr = runSubmit([]string{"--all", "--json"})
+	})
+	if runErr == nil {
+		t.Fatal("submit --all with a rejected branch should return a non-nil error")
+	}
+	var got submitResult
+	decodeStrictJSON(t, "partial submit --all", out, &got)
+	if got.Failed != "b" {
+		t.Fatalf("partial result Failed = %q, want b", got.Failed)
+	}
+	want := map[string]bool{"a": true, "c": true, "x": true, "y": true}
+	for _, name := range got.Pushed {
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("partial result Pushed = %v, missing %v", got.Pushed, want)
+	}
+	if !remoteHasRef(remoteDir, "a") || remoteHasRef(remoteDir, "b") {
+		t.Fatal("remote state disagrees with the reported partial outcome")
 	}
 }
