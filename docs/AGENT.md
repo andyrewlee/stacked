@@ -293,3 +293,29 @@ One stack, N agents, one worktree per branch:
   workflow; `--json` emits `{ "steps": [ "…", … ], "docs": "…" }` where `steps`
   is the same annotated command list text mode prints and `docs` points at
   `st help <command>` for per-command usage.
+
+### Internal: `st __complete`
+
+`st __complete` is the read-only endpoint the generated shell-completion hooks
+call once per keystroke — it is plumbing, not a user surface: hidden from
+`st help`, `help --json`, word-1 candidates, and did-you-mean suggestions, and
+exempt from the git-version check so the per-keystroke cost stays flat.
+
+```
+st __complete <command-or-alias> <index> -- <prior words...>
+```
+
+`<index>` must equal the number of `<prior words>` (the generated hooks always
+pass every word between the command and the cursor). Output is one branch name
+per line on stdout; anything that is not malformed argv — an unknown command,
+no repo, missing/unreadable/future state, a detached HEAD, a failed probe —
+prints nothing and exits 0. Malformed argv is a usage error (exit 1). The
+endpoint never takes the lock and never writes; it reads the state file plus
+at most two flat git probes (`for-each-ref` or `worktree list`, and a HEAD
+lookup for `onto`) — no fetch, no `rev-list`.
+
+Candidate policy: `checkout`/`co` → trunk + tracked branches; `onto`/`move` →
+tracked + trunk minus the current branch's subtree; `track` → untracked local
+branches, or tracked + trunk when completing `--parent`'s value; `worktree`/`wt`
+→ tracked branches lacking a linked worktree, or — after `rm`/`remove` —
+branches owning one. All other commands and positions emit nothing.

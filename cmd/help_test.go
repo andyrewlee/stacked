@@ -11,6 +11,9 @@ import (
 func TestPrintHelpListsEveryCommand(t *testing.T) {
 	out := captureStdout(t, func() { printHelp(false) })
 	for _, c := range registry {
+		if c.Hidden {
+			continue // hidden commands are deliberately absent from help
+		}
 		if !strings.Contains(out, c.Name) {
 			t.Errorf("help output is missing registered command %q", c.Name)
 		}

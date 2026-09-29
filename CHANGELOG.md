@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Branch-aware shell completion via a hidden `st __complete` endpoint.**
+  `st completion <bash|zsh|fish>` now emits dynamic hooks for the four
+  branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`, and
+  `worktree`/`wt` — that call `st __complete <cmd> <index> -- <words>` at
+  completion time. Candidates are read-only and cheap (state file plus at
+  most two flat git probes — `for-each-ref` or `worktree list`, never a
+  fetch or history walk), silent-empty outside a repo or on unreadable
+  state, and passed to the shell as data: a refname-legal name like
+  `$(touch_pwned)` can never be evaluated. `checkout` offers trunk plus
+  tracked branches; `onto` offers everything except the moving subtree;
+  `track` offers untracked locals (`--parent`'s value completes tracked
+  branches); `worktree` offers tracked branches lacking a worktree, and
+  `worktree rm` the branches owning one. `__complete` is hidden from help
+  and word-1 candidates and is exempt from the git-version floor so the
+  per-keystroke cost stays flat; `ST_COMPLETE_BIN` overrides the binary
+  the hooks call.
 - **`st undo --dry-run` previews the next undo.** Unlike `--list` (recorded
   data only), it diffs the journal against live refs and worktrees:
   `wouldRestore` carries each ref's live→recorded SHA pair plus a per-ref

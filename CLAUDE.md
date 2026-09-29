@@ -83,7 +83,12 @@ e2e/                 black-box tests driving the real binary as a subprocess
    the same constructor, so the declared-flags contract in `docs/AGENT.md` can't drift.
 4. If it has interesting CLI output, add a golden test (`cmd/golden_test.go`,
    regenerate with `go test ./cmd -run Golden -update`).
-5. `make ci`. Adding the command shifts the help golden — regenerate it deliberately.
+5. If the command takes a positional branch name, register a completion policy
+   in `cmd/complete.go`'s `branchCompletionCommands`/`completeCandidates` switch
+   so `st __complete` (and the generated shell hooks) offer branch names; the
+   positional classifier picks up new value-taking flags automatically from the
+   same flagset.
+6. `make ci`. Adding the command shifts the help golden — regenerate it deliberately.
 
 ## Invariants the tests enforce
 
