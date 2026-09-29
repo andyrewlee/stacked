@@ -1,0 +1,81 @@
+name: CI (windows)
+
+on:
+  # PRs get a windows run before merge; main gets one after each push. No tag
+  # trigger — release publishing is a local `make release` flow, not a job here.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # manual kick, e.g. to verify a lock change before release
+
+permissions:
+  contents: read
+
+# A re-push supersedes the previous run of the same ref. github.ref alone
+# would collide all PRs on the merge ref, so include the event name and PR
+# number. Everything is cancel-in-progress: there is no publish leg to orphan.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Why this is the ONLY remote leg: `make ci` is the whole pipeline locally
+# (lint, vet incl. windows/plan9 cross-vet, race tests, e2e, coverage gate,
+# installer checks) — the maintainer runs it on every push via pre-push. The
+# single thing a darwin dev box cannot do is EXECUTE the windows-only code
+# (internal/stack/lock_other.go, lock_owner_windows.go, windows path/exec
+# semantics): vet-cross type-checks it but never runs it. This job runs the
+# real tests on windows-latest so that gap is closed without a paid matrix.
+jobs:
+  ci-windows:
+    name: ci (windows, tests only)
+    runs-on: windows-latest
+    # Kill a hung leg well before the 6h default; a healthy run takes minutes.
+    timeout-minutes: 20
+    steps:
+      - name: Disable checkout CRLF conversion
+        run: git config --global core.autocrlf false
+
+      # No fetch-depth: nothing here runs `git describe` or reads history
+      # (check-release-version is release-only).
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # go.mod is the single Go pin (check-go-version enforces it against the
+      # docs); setup-go resolves the toolchain from it, so no second pin here.
+      - name: Set up Go
+        id: setup-go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false # stdlib-only: go.mod is static, so setup-go's cache key never re-saves
+
+      - name: Resolve Go build cache dir
+        id: gocache
+        shell: bash
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+      # Keyed on the commit so every run saves; restored by prefix so the newest
+      # previous cache seeds the next run, including this repo's package builds.
+      - name: Go build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: gobuild-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ github.sha }}
+          restore-keys: |
+            gobuild-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-
+
+      - name: Vet
+        run: go vet ./...
+
+      # The two windows-specific e2e incompatibilities found on the first
+      # Windows run (unsafe-symlink rollback behavior; the OS rewriting raw C1
+      # bytes) are now runtime.GOOS skips inside the tests themselves —
+      # TestWorktreeIncludeCopyFailureRollsBackWorktree and
+      # TestLogEscapesControlBytesInSubject — so the black-box suite runs here
+      # too. If a future windows run surfaces another incompatibility, guard it
+      # with the same skip pattern rather than re-excluding the package.
+      - name: Non-e2e package tests
+        run: go test ./cmd/... ./internal/... -race -count=1
+
+      - name: e2e tests (black-box binary)
+        run: go test ./e2e/... -count=1

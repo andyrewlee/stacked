@@ -21,12 +21,16 @@ e2edir="$(mktemp -d)"
 trap 'rm -rf "$unitdir" "$e2edir"' EXIT
 
 echo "==> running unit/integration tests (race + coverage)"
+# The cmd package drives real git subprocesses and already sits near go
+# test's 10m default ceiling; a slow subprocess on a loaded box tips it over
+# into a timeout panic, not a hang. 20m leaves headroom without masking a
+# real wedge (a truly stuck test still trips the alarm).
 go test ./cmd/... ./internal/... \
-	-race -coverpkg="$PKGS" -count=1 \
+	-race -coverpkg="$PKGS" -count=1 -timeout 20m \
 	-args -test.gocoverdir="$unitdir"
 
 echo "==> running black-box e2e tests (coverage-instrumented binary)"
-GOCOVERDIR="$e2edir" go test ./e2e/... -count=1
+GOCOVERDIR="$e2edir" go test ./e2e/... -count=1 -timeout 20m
 
 echo "==> merging coverage (in-process + e2e)"
 go tool covdata textfmt -i="$unitdir,$e2edir" -o=cover.out

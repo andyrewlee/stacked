@@ -7,11 +7,14 @@ loop, and the engine you'll touch most is tested in milliseconds.
 
 ```sh
 make test-fast   # about a second: pure engine logic over the fake git
-make ci          # the full gate (= the pre-push hook; there is no remote CI)
+make ci          # the full gate (= the pre-push hook)
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
-`make ci` is the single source of truth — and the ONLY gate: version-pin
+`make ci` is the single source of truth — the only remote leg
+(`.github/workflows/ci.yml`) is a windows-only test run that exists because
+the windows lock code cannot execute on the maintainer's machine; everything
+else lives in this one target: version-pin
 agreement checks, `fmt-check`, strict `golangci-lint`, `vet` (+ windows/plan9
 cross-vet), `build`, race tests, black-box e2e, a merged-coverage gate (≥75%),
 and the installer checks (`sh -n install.sh`, plus the goreleaser asset-parity
@@ -21,9 +24,10 @@ can commit.
 
 The Makefile, `scripts/cover.sh`, and the git hooks assume a POSIX shell — on
 Windows run them under git-bash or WSL (the engine and tests themselves are
-cross-platform; `vet-cross` type-checks the windows/plan9 lock code, but with
-no remote CI there is no windows RUNTIME leg — verify windows-specific changes
-by hand on a Windows machine).
+cross-platform; `vet-cross` type-checks the windows/plan9 lock code locally,
+and the windows Actions leg runs the real test suite on `windows-latest` —
+it is the only remote leg, so windows-specific changes still benefit from a
+manual check when possible).
 
 The coverage gate also enforces a **per-function floor** (default 50%,
 `COVERAGE_FUNC_MIN` to override): a new function below the floor fails the
@@ -201,9 +205,9 @@ wait applies (see below).
 
 Coverage note: the stale-lock code paths are exercised by the native test
 suite on every platform (`internal/stack/lock_stale_test.go` runs the real
-file operations in temp dirs regardless of `GOOS`). There is no Windows runtime
-leg anymore — exercise the composed `Lock`/`Unlock` pair on a real Windows
-machine before shipping lock changes. Timing races are deterministic in tests —
+file operations in temp dirs regardless of `GOOS`), and the windows Actions
+leg (`.github/workflows/ci.yml`) executes the real `Lock`/`Unlock` pair on
+`windows-latest` per PR. Timing races are deterministic in tests —
 synchronized contenders, not sleeps.
 
 ### Waiting on the lock
