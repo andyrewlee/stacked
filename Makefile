@@ -6,21 +6,33 @@ LDFLAGS := -X github.com/andyrewlee/stacked/cmd.version=$(VERSION)
 COVERAGE_MIN ?= 75
 
 # golangci-lint is an external binary, never a go.mod dependency. v2 is required:
-# .golangci.yml uses the v2 schema and its bundled gofumpt formatter. Keep this
-# in sync with the version pinned in .github/workflows/ci.yml.
+# .golangci.yml uses the v2 schema and its bundled gofumpt formatter. Keep the
+# pin in sync with the version documented in README/CONTRIBUTING.
 GOLANGCI_VERSION := v2.12.2
+
+# GoReleaser is likewise an external binary (release-time only). The pin's major
+# must match the .goreleaser.yaml config schema `version:`.
+GORELEASER_VERSION := v2.17.0
+
+# The minimum git version st requires at runtime — enforced by check-git-version
+# here and by git.RequireMinVersion in the binary. Keep in sync with the
+# README/CONTRIBUTING "Git N.NN+" requirement text.
+GIT_MIN_VERSION := 2.17
 
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-golangci check-goreleaser-version check-release-version check-release-ready golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
 
-# Full local gate: mirrors .github/workflows/ci.yml. Fails fast, in order. The
-# Go-toolchain-only steps (vet/vet-cross/build) run before lint, so a missing or
-# wrong golangci-lint never hides a compile/vet failure; lint still precedes the
-# slow `cover` step. `cover` runs the whole suite once (race + combined
-# in-process/e2e coverage), so ci does not run the tests three times.
-ci: check-deps check-lint-version check-go-version check-goreleaser-version fmt-check vet vet-cross build lint cover
+# THE gate: there is no remote CI — this Makefile is the whole pipeline.
+# Fails fast, in order. The Go-toolchain-only steps (vet/vet-cross/build) run
+# before lint, so a missing or wrong golangci-lint never hides a compile/vet
+# failure; lint still precedes the slow `cover` step. `cover` runs the whole
+# suite once (race + combined in-process/e2e coverage), so ci does not run the
+# tests three times. check-install covers what a remote runner used to add
+# (install.sh syntax, goreleaser schema/asset parity, the minisign decision
+# matrix); its optional tools skip loudly unless CI_STRICT=1.
+ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version fmt-check vet vet-cross build lint cover check-install
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -29,7 +41,7 @@ install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/st
 
 # Formatting runs through golangci-lint's `fmt` so `make fmt` and
-# `make fmt-check` apply exactly the formatters CI enforces (.golangci.yml:
+# `make fmt-check` apply exactly the formatters the gate enforces (.golangci.yml:
 # gofumpt with this module path). Plain gofmt would be a weaker, different
 # gate: a file can be gofmt-clean but gofumpt-dirty.
 fmt: check-golangci
@@ -54,7 +66,7 @@ vet-cross:
 
 # Enforce the project's hardest invariant: the shipped tool stays standard-library
 # only. Fail if go.mod declares any dependency or a go.sum appears. Run by `make ci`
-# (and therefore by CI and the pre-push hook), so a new dependency can never land
+# (and therefore by the pre-push hook), so a new dependency can never land
 # green.
 check-deps:
 	@if grep -qE '^require' go.mod; then \
@@ -67,37 +79,26 @@ check-deps:
 	fi
 	@echo "deps: standard library only"
 
-# The lint version is pinned in four hand-synced places. Enforce agreement so
-# local make ci, CI, and contributor docs cannot silently drift apart.
+# The lint version is pinned in three hand-synced places. Enforce agreement so
+# the Makefile and contributor docs cannot silently drift apart.
 check-lint-version:
 	@ok=1; \
-	for f in .github/workflows/ci.yml README.md CONTRIBUTING.md; do \
-		case $$f in \
-			.github/workflows/ci.yml) \
-				pins=$$(grep -A6 'golangci/golangci-lint-action' $$f | sed -nE 's/^[[:space:]]*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p');; \
-			*) \
-				pins=$$(sed -nE 's/.*golangci-lint@((v[0-9]+\.[0-9]+\.[0-9]+)).*/\1/p' $$f);; \
-		esac; \
+	for f in README.md CONTRIBUTING.md; do \
+		pins=$$(sed -nE 's/.*golangci-lint@((v[0-9]+\.[0-9]+\.[0-9]+)).*/\1/p' $$f); \
 		if [ "$$pins" != "$(GOLANGCI_VERSION)" ]; then \
 			echo "$$f pins golangci-lint '$${pins:-<none>}' (want $(GOLANGCI_VERSION) from Makefile)"; \
 			ok=0; \
 		fi; \
 	done; \
 	[ $$ok -eq 1 ] || exit 1; \
-	echo "lint pin: $(GOLANGCI_VERSION) consistent across Makefile, ci.yml, README, CONTRIBUTING"
+	echo "lint pin: $(GOLANGCI_VERSION) consistent across Makefile, README, CONTRIBUTING"
 
-# The Go pin lives in go.mod (source of truth), ci.yml's GO_VERSION env, and
-# the README/CONTRIBUTING "Go 1.NN+" prose. Enforce agreement so a toolchain
-# bump cannot silently leave CI or the docs behind (the same hazard
-# check-lint-version guards for the lint pin).
+# The Go pin lives in go.mod (source of truth) and the README/CONTRIBUTING
+# "Go 1.NN+" prose. Enforce agreement so a toolchain bump cannot silently leave
+# the docs behind (the same hazard check-lint-version guards for the lint pin).
 check-go-version:
 	@want=$$(sed -nE 's/^go ([0-9]+[.][0-9]+).*/\1/p' go.mod); \
 	ok=1; \
-	ci=$$(sed -nE "s/^[[:space:]]*GO_VERSION:[[:space:]]*'([0-9]+[.][0-9]+)'.*/\1/p" .github/workflows/ci.yml); \
-	if [ "$$ci" != "$$want" ]; then \
-		echo ".github/workflows/ci.yml pins GO_VERSION '$${ci:-<none>}' (want $$want from go.mod)"; \
-		ok=0; \
-	fi; \
 	for f in README.md CONTRIBUTING.md; do \
 		pin=$$(sed -nE 's/.*Go ([0-9]+[.][0-9]+)[+].*/\1/p' $$f | head -1); \
 		if [ "$$pin" != "$$want" ]; then \
@@ -106,42 +107,68 @@ check-go-version:
 		fi; \
 	done; \
 	[ $$ok -eq 1 ] || exit 1; \
-	echo "go pin: $$want consistent across go.mod, ci.yml, README, CONTRIBUTING"
+	echo "go pin: $$want consistent across go.mod, README, CONTRIBUTING"
 
-# The goreleaser-action steps pin the GoReleaser tool version (unlike
-# golangci-lint there is no Makefile variable — the action IS the installer).
-# Every workflow that uses the action must pin the same version, and the pin's
-# major must match the .goreleaser.yaml config schema `version:` (v2 config
-# needs a v2 tool). Greps all workflow files so the check still works if the
-# release job later moves into ci.yml.
+# The git floor ($(GIT_MIN_VERSION)) is the documented runtime requirement —
+# check it here so the gate fails on the maintainer's own ancient git rather
+# than deep in a test. st itself enforces the same floor in cmd.Execute.
+check-git-version:
+	@have=$$(git version 2>/dev/null | sed -nE 's/.*git version ([0-9]+)\.([0-9]+)(\.[0-9]+)?.*/\1.\2/p'); \
+	if [ -z "$$have" ]; then \
+		echo "cannot parse 'git version' output"; \
+		exit 1; \
+	fi; \
+	ok=$$(printf '%s\n%s\n' "$(GIT_MIN_VERSION)" "$$have" | sort -t. -k1,1n -k2,2n | head -1); \
+	if [ "$$ok" != "$(GIT_MIN_VERSION)" ]; then \
+		echo "git $$have is below the required floor $(GIT_MIN_VERSION)"; \
+		exit 1; \
+	fi; \
+	echo "git floor: $$have >= $(GIT_MIN_VERSION)"
+
+# The GoReleaser pin lives in GORELEASER_VERSION (Makefile) — it is the version
+# release tooling installs. Its major must match the .goreleaser.yaml config
+# schema `version:` (a v2 config needs a v2 tool), and an installed goreleaser
+# binary must be exactly the pin (like check-golangci).
 check-goreleaser-version:
-	@pins=$$(for f in .github/workflows/*.yml .github/workflows/*.yaml; do \
-		[ -f "$$f" ] || continue; \
-		grep -A5 'goreleaser/goreleaser-action' "$$f"; \
-	done | sed -nE 's/.*version:[[:space:]]*(v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$$/\1/p' | sort -u); \
-	n=$$(printf '%s\n' "$$pins" | grep -c .); \
-	if [ "$$n" -eq 0 ]; then \
-		echo "no goreleaser-action version pin found in .github/workflows/"; \
-		exit 1; \
-	fi; \
-	if [ "$$n" -gt 1 ]; then \
-		echo "goreleaser-action version pins disagree across .github/workflows/:"; \
-		printf '%s\n' "$$pins"; \
-		exit 1; \
-	fi; \
-	major=$${pins#v}; major=$${major%%.*}; \
+	@pin=$(GORELEASER_VERSION); major=$${pin#v}; major=$${major%%.*}; \
 	cfg=$$(sed -nE 's/^version:[[:space:]]*([0-9]+).*/\1/p' .goreleaser.yaml | head -1); \
 	if [ "$$cfg" != "$$major" ]; then \
-		echo ".goreleaser.yaml declares config version '$${cfg:-<none>}' but workflows pin goreleaser $$pins"; \
+		echo ".goreleaser.yaml declares config version '$${cfg:-<none>}' but Makefile pins goreleaser $(GORELEASER_VERSION)"; \
 		exit 1; \
 	fi; \
-	echo "goreleaser pin: $$pins consistent across workflows; .goreleaser.yaml schema v$$cfg matches"
+	if command -v goreleaser >/dev/null 2>&1; then \
+		have=$$(goreleaser --version 2>&1 | sed -nE 's/^GitVersion:[[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1); \
+		if [ "v$$have" != "$(GORELEASER_VERSION)" ]; then \
+			echo "installed goreleaser '$${have:-<unknown>}' != pin $(GORELEASER_VERSION)"; \
+			exit 1; \
+		fi; \
+		echo "goreleaser pin: $(GORELEASER_VERSION) installed; .goreleaser.yaml schema v$$cfg matches"; \
+	else \
+		echo "goreleaser pin: $(GORELEASER_VERSION); .goreleaser.yaml schema v$$cfg matches (binary not installed — fine for non-release work)"; \
+	fi
+
+# The checks a remote runner used to add around `make ci`: install.sh syntax,
+# the installer↔goreleaser asset-name parity check, and the minisign signature
+# decision matrix. goreleaser and minisign are OPTIONAL locally — absent tools
+# skip loudly; CI_STRICT=1 (pre-release runs) makes them required.
+check-install:
+	@sh -n install.sh
+	@if command -v goreleaser >/dev/null 2>&1; then \
+		goreleaser check && scripts/check-install-assets.sh; \
+	elif [ "$${CI_STRICT:-0}" = "1" ]; then \
+		echo "goreleaser required for installer checks (CI_STRICT=1)"; exit 1; \
+	else echo "skip: goreleaser not installed (set CI_STRICT=1 to require)"; fi
+	@if command -v minisign >/dev/null 2>&1; then \
+		bash scripts/check-install-signatures.sh; \
+	elif [ "$${CI_STRICT:-0}" = "1" ]; then \
+		echo "minisign required for signature matrix (CI_STRICT=1)"; exit 1; \
+	else echo "skip: minisign not installed (set CI_STRICT=1 to require)"; fi
 
 # Regenerate golden test fixtures after an intended, reviewed output change.
 golden:
 	go test ./cmd -run Golden -update
 
-# The lint binary must be exactly $(GOLANGCI_VERSION) — the version CI pins.
+# The lint binary must be exactly $(GOLANGCI_VERSION) — the documented pin.
 # A different golangci-lint release ships a different bundled gofumpt and
 # different linter diagnostics, so "any v2" could format or lint differently
 # than the gate. This preflight is a shared prerequisite of fmt, fmt-check,

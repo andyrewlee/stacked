@@ -7,17 +7,23 @@ loop, and the engine you'll touch most is tested in milliseconds.
 
 ```sh
 make test-fast   # about a second: pure engine logic over the fake git
-make ci          # the full gate (= the pre-push hook = CI)
+make ci          # the full gate (= the pre-push hook; there is no remote CI)
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
-`make ci` is the single source of truth: `fmt-check` + strict `golangci-lint` +
-`vet` + `build` + race tests + black-box e2e + a merged-coverage gate (≥75%). If
-it's green, you can commit.
+`make ci` is the single source of truth — and the ONLY gate: version-pin
+agreement checks, `fmt-check`, strict `golangci-lint`, `vet` (+ windows/plan9
+cross-vet), `build`, race tests, black-box e2e, a merged-coverage gate (≥75%),
+and the installer checks (`sh -n install.sh`, plus the goreleaser asset-parity
+and minisign signature-matrix scripts when those tools are installed —
+`CI_STRICT=1` makes them mandatory, e.g. before a release). If it's green, you
+can commit.
 
 The Makefile, `scripts/cover.sh`, and the git hooks assume a POSIX shell — on
 Windows run them under git-bash or WSL (the engine and tests themselves are
-cross-platform; CI covers `windows-latest`).
+cross-platform; `vet-cross` type-checks the windows/plan9 lock code, but with
+no remote CI there is no windows RUNTIME leg — verify windows-specific changes
+by hand on a Windows machine).
 
 The coverage gate also enforces a **per-function floor** (default 50%,
 `COVERAGE_FUNC_MIN` to override): a new function below the floor fails the
@@ -106,9 +112,9 @@ Before tagging: fold `CHANGELOG.md`'s `[Unreleased]` into the new `[x.y.z]`
 heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
 `make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (`make
 release` runs it). `make release`/`make snapshot` need the external
-`goreleaser` binary — match the version pinned in
-`.github/workflows/ci.yml` (currently `v2.17.0`; `brew install goreleaser`
-tracks latest, so check `goreleaser --version`, or pin exactly with
+`goreleaser` binary — match `GORELEASER_VERSION` in the Makefile (currently
+`v2.17.0`; `brew install goreleaser` tracks latest, so check
+`goreleaser --version`, or pin exactly with
 `go install github.com/goreleaser/goreleaser/v2@v2.17.0`). It is not a Go
 dependency.
 
@@ -119,7 +125,8 @@ signature (refused even under `ST_ALLOW_UNVERIFIED=1`), and tampered
 archive/checksum-entry cases, each verified against a pre-placed sentinel. It
 needs `minisign` plus `curl`/`tar`/the platform sha256 tool locally, no release
 secrets (keys are generated per run), and skips cleanly when minisign is
-absent. CI runs it on the Ubuntu leg, which installs minisign via apt.
+absent. `make ci` runs it when minisign is on PATH; `CI_STRICT=1 make
+check-install` makes it (and the goreleaser checks) mandatory.
 
 ### Signing runbook (minisign)
 
@@ -194,6 +201,7 @@ idiom applies.
 
 Coverage note: the stale-lock code paths are exercised by the native test
 suite on every platform (`internal/stack/lock_stale_test.go` runs the real
-file operations in temp dirs regardless of `GOOS`); the Windows CI job covers
-the composed `Lock`/`Unlock` pair against a real filesystem. Timing races are
-deterministic in tests — synchronized contenders, not sleeps.
+file operations in temp dirs regardless of `GOOS`). There is no Windows runtime
+leg anymore — exercise the composed `Lock`/`Unlock` pair on a real Windows
+machine before shipping lock changes. Timing races are deterministic in tests —
+synchronized contenders, not sleeps.

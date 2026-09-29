@@ -2673,3 +2673,59 @@ func TestLocalBranchRefSkipsProbeForQualifiedAndSHA(t *testing.T) {
 		}
 	}
 }
+
+func TestParseGitVersion(t *testing.T) {
+	for _, tc := range []struct {
+		out     string
+		want    [3]int
+		wantErr bool
+	}{
+		{"git version 2.46.0", [3]int{2, 46, 0}, false},
+		{"git version 2.17.0", [3]int{2, 17, 0}, false},
+		{"git version 2.39.5 (Apple Git-154)", [3]int{2, 39, 5}, false},
+		{"git version 2.17", [3]int{2, 17, 0}, false},
+		{"git version 10.1.2", [3]int{10, 1, 2}, false},
+		{"git version 2.46.0.windows.1", [3]int{2, 46, 0}, false},
+		{"", [3]int{}, true},
+		{"git version devel", [3]int{}, true},
+	} {
+		got, err := parseGitVersion(tc.out)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parseGitVersion(%q) = %v, want error", tc.out, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseGitVersion(%q): %v", tc.out, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseGitVersion(%q) = %v, want %v", tc.out, got, tc.want)
+		}
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		found, want [3]int
+		ok          bool
+	}{
+		{[3]int{2, 46, 0}, MinVersion, true},
+		{[3]int{2, 17, 0}, MinVersion, true},
+		{[3]int{2, 16, 9}, MinVersion, false},
+		{[3]int{1, 99, 0}, MinVersion, false},
+		{[3]int{3, 0, 0}, MinVersion, true},
+	} {
+		if got := versionAtLeast(tc.found, tc.want); got != tc.ok {
+			t.Errorf("versionAtLeast(%v, %v) = %v, want %v", tc.found, tc.want, got, tc.ok)
+		}
+	}
+}
+
+func TestRequireMinVersion(t *testing.T) {
+	// The dev environment's git is new enough; the check must pass here.
+	if err := RequireMinVersion(); err != nil {
+		t.Fatalf("RequireMinVersion: %v", err)
+	}
+}

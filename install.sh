@@ -91,7 +91,7 @@ VERSION_NUM="${VERSION#v}"
 FILENAME="${ARCHIVE}_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
 
 # Release-asset base URL shared by the tarball, checksums, and signature
-# fetches below. ST_INSTALL_BASE exists only as a test seam so CI can run this
+# fetches below. ST_INSTALL_BASE exists only as a test seam so scripts can run this
 # script end-to-end against local snapshot artifacts over file://; it must
 # never default anywhere other than the real GitHub release.
 BASE="${ST_INSTALL_BASE:-https://github.com/${REPO}/releases/download/${VERSION}}"
