@@ -8,16 +8,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 // sentinelBranch is a refname-legal name that is a working command
-// substitution+redirection under POSIX shells: if any layer of the completion
-// pipeline EVALUATES candidate text instead of carrying it as data, this name
-// writes the marker file. The tests assert both byte-exact output and the
-// marker's absence.
-const sentinelBranch = "$(id>pwned_sentinel)"
+// substitution under POSIX shells — on unix it also carries a redirection,
+// so if any layer of the completion pipeline EVALUATES candidate text
+// instead of carrying it as data, the write leaves sentinelMarker on disk.
+// Windows forbids `>` in filenames and loose refs are filename-backed, so no
+// redirect can appear in a branch name there; `$(id)` alone still detects
+// substitution because an evaluated candidate becomes uid=… text, which the
+// byte-exact assertions catch — and there is no marker to check.
+var (
+	sentinelBranch = "$(id>pwned_sentinel)"
+	sentinelMarker = "pwned_sentinel"
+)
+
+func init() {
+	if runtime.GOOS == "windows" {
+		sentinelBranch = "$(id)"
+		sentinelMarker = ""
+	}
+}
 
 // TestCompleteEndpointContract pins the protocol edge cases end to end:
 // silent-empty on unknown/uninitialized/unrelated commands, usage errors on
@@ -78,8 +92,10 @@ func TestCompleteEndpointContract(t *testing.T) {
 	if !strings.Contains(res.stdout, sentinelBranch) {
 		t.Fatalf("sentinel name mangled: %q", res.stdout)
 	}
-	if _, err := os.Stat(filepath.Join(r.dir, "pwned_sentinel")); !os.IsNotExist(err) {
-		t.Fatalf("endpoint evaluated candidate text — pwned_sentinel exists")
+	if sentinelMarker != "" {
+		if _, err := os.Stat(filepath.Join(r.dir, sentinelMarker)); !os.IsNotExist(err) {
+			t.Fatalf("endpoint evaluated candidate text — %s exists", sentinelMarker)
+		}
 	}
 }
 
@@ -157,8 +173,10 @@ printf '%s\n' "${COMPREPLY[@]}"
 	if !contains(got, sentinelBranch) || !contains(got, "feat-a") || !contains(got, "main") {
 		t.Fatalf("bash COMPREPLY = %v, want sentinel+feat-a+main", got)
 	}
-	if _, err := os.Stat(filepath.Join(r.dir, "pwned_sentinel")); !os.IsNotExist(err) {
-		t.Fatalf("bash completion evaluated candidate text — pwned_sentinel exists")
+	if sentinelMarker != "" {
+		if _, err := os.Stat(filepath.Join(r.dir, sentinelMarker)); !os.IsNotExist(err) {
+			t.Fatalf("bash completion evaluated candidate text — %s exists", sentinelMarker)
+		}
 	}
 
 	// Second positional: no candidates (checkout takes one name).
@@ -236,8 +254,10 @@ _st
 	if !contains(got, sentinelBranch) || !contains(got, globby) {
 		t.Fatalf("zsh candidates = %v, want sentinel+globby byte-exact", got)
 	}
-	if _, err := os.Stat(filepath.Join(r.dir, "pwned_sentinel")); !os.IsNotExist(err) {
-		t.Fatalf("zsh completion evaluated candidate text — pwned_sentinel exists")
+	if sentinelMarker != "" {
+		if _, err := os.Stat(filepath.Join(r.dir, sentinelMarker)); !os.IsNotExist(err) {
+			t.Fatalf("zsh completion evaluated candidate text — %s exists", sentinelMarker)
+		}
 	}
 	// Brace expansion would have split gl{a,b}c into glac/glbc.
 	if contains(got, "glac") || contains(got, "glbc") {
