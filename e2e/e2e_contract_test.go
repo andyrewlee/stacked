@@ -574,3 +574,109 @@ func TestGuide(t *testing.T) {
 	wantStdoutContains(t, r.stOK("guide"), "recommended workflow")
 	wantStdoutContains(t, r.stOK("guide", "--json"), `"steps"`)
 }
+
+// TestSubmitInvalidRefCleanError pins the submit error path the nil-guard fix
+// covers: PushBranches returns a nil result when an argument fails git refname
+// validation, and the command must surface a clean wrapped error — never a
+// panic/internal envelope. A remote named "-x" dies earlier at RemoteExists
+// (also a clean exit 1), so the push-path arm is reached through corrupt state:
+// a tracked branch whose name is not a valid git ref.
+func TestSubmitInvalidRefCleanError(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	// A remote name that IS a flag dies at the remote-exists check, before the
+	// push argument validation — a clean generic error either way.
+	res := r.st("submit", "--remote=-x")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "remote \"-x\" does not exist")
+
+	// Corrupt the stack so the push list itself carries an invalid refname:
+	// feat-a's parent becomes the bogus "-bad" tracked branch.
+	state := []byte(`{
+  "trunk": "main",
+  "branches": {
+    "-bad": {
+      "name": "-bad",
+      "parent": "main",
+      "parentSHA": "0000000000000000000000000000000000000000"
+    },
+    "feat-a": {
+      "name": "feat-a",
+      "parent": "-bad",
+      "parentSHA": "0000000000000000000000000000000000000000"
+    }
+  }
+}
+`)
+	if err := os.WriteFile(filepath.Join(r.dir, ".git", "stacked", "state.json"), state, 0o644); err != nil {
+		t.Fatalf("write hostile state: %v", err)
+	}
+
+	res = r.st("submit")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, `push to "origin"`)
+	wantStderrContains(t, res, "not a valid git ref name")
+	if strings.Contains(res.stderr, "internal error") || strings.Contains(res.stderr, "panic") {
+		t.Fatalf("submit leaked an internal/panic envelope:\n%s", res.stderr)
+	}
+
+	res = r.st("submit", "--json")
+	wantExit(t, res, 1)
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeStderrEnvelope(t, "submit corrupt-state --json", res.stderr, &env)
+	if env.Error.Code != "error" {
+		t.Fatalf("submit --json code = %q, want generic error (not internal)", env.Error.Code)
+	}
+	if !strings.Contains(env.Error.Message, "not a valid git ref name") {
+		t.Fatalf("submit --json message = %q, want the refname failure", env.Error.Message)
+	}
+}
+
+// TestUndoUnreadableJournal asserts the undo command surfaces a journal I/O
+// failure (undo.json replaced by a directory) as a clean non-zero exit while
+// leaving the journal and stack state untouched.
+func TestUndoUnreadableJournal(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	statePath := filepath.Join(r.dir, ".git", "stacked", "state.json")
+	journalPath := filepath.Join(r.dir, ".git", "stacked", "undo.json")
+	stateBefore, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	if err := os.Remove(journalPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove undo.json: %v", err)
+	}
+	if err := os.Mkdir(journalPath, 0o755); err != nil {
+		t.Fatalf("mkdir over undo.json: %v", err)
+	}
+
+	res := r.st("undo")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "undo")
+
+	stateAfter, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("re-read state.json: %v", err)
+	}
+	if string(stateBefore) != string(stateAfter) {
+		t.Fatalf("state.json changed across failed undo:\nbefore: %s\nafter: %s", stateBefore, stateAfter)
+	}
+}
