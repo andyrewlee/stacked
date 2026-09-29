@@ -24,10 +24,7 @@ GIT_MIN_VERSION := 2.17
 
 .PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
 
-# THE gate: this Makefile is the whole pipeline. The single remote leg
-# (.github/workflows/ci.yml) exists only to EXECUTE windows-only code — the
-# windows lock paths vet-cross compiles but a darwin dev box cannot run —
-# it runs vet + the test suite on windows-latest and adds nothing else.
+# THE gate: there is no remote CI — this Makefile is the whole pipeline.
 # Fails fast, in order. The Go-toolchain-only steps (vet/vet-cross/build) run
 # before lint, so a missing or wrong golangci-lint never hides a compile/vet
 # failure; lint still precedes the slow `cover` step. `cover` runs the whole
