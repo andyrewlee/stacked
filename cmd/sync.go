@@ -13,7 +13,7 @@ func init() {
 		Name:       "sync",
 		Aliases:    []string{"s"},
 		Summary:    "Fetch trunk, fast-forward it, restack everything, and prune merged branches",
-		Usage:      "st sync [--no-delete] [--remote <name>] [--dry-run] [--json]",
+		Usage:      "st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run] [--json]",
 		Run:        runSync,
 		NewFlagSet: syncFlagSet,
 	})
@@ -28,7 +28,7 @@ func runSync(args []string) error {
 	if err := rejectArgs("sync", fs.Args()); err != nil {
 		return err
 	}
-	asJSON, noDelete, remote, dryRun := o.asJSON, o.noDelete, o.remote, o.dryRun
+	asJSON, noDelete, noFetch, remote, dryRun := o.asJSON, o.noDelete, o.noFetch, o.remote, o.dryRun
 
 	// If the user explicitly named a remote that does not exist, fail loudly like
 	// `st submit` does instead of silently treating it as "no remote" and
@@ -49,14 +49,7 @@ func runSync(args []string) error {
 		if err != nil {
 			return err
 		}
-		trunkRef := "refs/heads/" + s.Trunk
-		if git.RemoteExists(remote) {
-			remoteRef := "refs/remotes/" + remote + "/" + s.Trunk
-			if _, err := git.RevParse(remoteRef); err == nil {
-				trunkRef = remoteRef
-			}
-		}
-		res, err := stack.SyncPlanAgainst(stackEnv(s, asJSON), s, noDelete, trunkRef)
+		res, err := stack.SyncPlanAgainst(stackEnv(s, asJSON), s, noDelete, resolveTrunkRef(remote, s.Trunk))
 		if err != nil {
 			return err
 		}
@@ -64,6 +57,20 @@ func runSync(args []string) error {
 	}
 
 	return mutate("sync", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
-		return stack.Sync(env, git.RemoteShell{}, s, remote, noDelete)
+		return stack.Sync(env, git.RemoteShell{}, s, remote, noDelete, noFetch)
 	})
+}
+
+// resolveTrunkRef picks the ref a dry-run sync or an explicit-remote prune
+// measures "merged" against: the named remote's tracking ref for the trunk
+// when it exists (already fetched), else the local trunk branch.
+func resolveTrunkRef(remote, trunk string) string {
+	trunkRef := "refs/heads/" + trunk
+	if git.RemoteExists(remote) {
+		remoteRef := "refs/remotes/" + remote + "/" + trunk
+		if _, err := git.RevParse(remoteRef); err == nil {
+			trunkRef = remoteRef
+		}
+	}
+	return trunkRef
 }

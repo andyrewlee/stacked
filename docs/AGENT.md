@@ -14,6 +14,10 @@ resolve the files, `git add` them, and run `st continue` (or `st abort`).
 Remote Git operations use your configured Git transport. `st sync` may fetch and
 `st submit` may push, so credentials, SSH agents, and host prompts behave like
 the corresponding `git fetch`/`git push` commands in your environment.
+`st sync --no-fetch` performs no remote calls at all (the prune/restack basis is
+the already-fetched `refs/remotes/<remote>/<trunk>` or the local trunk), and
+`st prune` never fetches either — it measures "merged" against the local trunk,
+or `refs/remotes/<remote>/<trunk>` when given `--remote`.
 
 ## Exit codes
 
@@ -54,7 +58,7 @@ message.
 ### Result shapes
 
 - **Stack-mutating commands** (`create`, `modify`, `restack`, `continue`, `fold`,
-  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`) share one shape:
+  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`, `prune`) share one shape:
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
@@ -63,8 +67,12 @@ message.
   untracked local branch in one shot, inferring each parent (so an existing
   `a→b→c` stack becomes a real chain); it adds `"tracked": {"name": "parent"}`
   and `notes` entries for skipped branches (e.g. orphans sharing no history
-  with the trunk). Preview-capable commands (`restack`, `sync`,
-  `onto`, `fold`, `squash`, `delete`) return the same result shape with
+  with the trunk). `st prune` deletes every tracked branch already merged into
+  the trunk (or into `refs/remotes/<remote>/<trunk>` with `--remote`, never
+  fetching) and reports them in `deleted`; it never moves HEAD, so it refuses
+  when the current branch itself is merged ("check out another branch or run
+  st sync"). Preview-capable commands (`restack`, `sync`,
+  `onto`, `fold`, `squash`, `delete`, `prune`) return the same result shape with
   `"dryRun": true` under `--dry-run`. In a multi-worktree repo, `restack`/`sync`
   rebase a dependent branch that lives in another worktree *inside that worktree*;
   a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
@@ -175,11 +183,15 @@ message.
   in dirty linked worktrees are skipped into `notes`. `--all --dry-run`
   previews the same set.
 - `st restack --dry-run`, `st sync --dry-run`, `st onto --dry-run`,
-  `st fold --dry-run`, `st squash --dry-run`, and `st delete --dry-run` preview
+  `st fold --dry-run`, `st squash --dry-run`, `st delete --dry-run`, and
+  `st prune --dry-run` preview
   the branches that *would* be rebased, moved, folded, squashed, or deleted.
   They return a `{"dryRun": true, ...}` result without changing stack metadata or
   branch refs. `sync --dry-run` does not fetch; it uses the current local trunk or
-  already-cached `refs/remotes/<remote>/<trunk>`.
+  already-cached `refs/remotes/<remote>/<trunk>`. `st sync --no-fetch` is the
+  same offline basis for a real run: it skips `git fetch` and the trunk
+  fast-forward (the note reports `trunk: skipped (--no-fetch)`), then prunes and
+  restacks against whatever the tracking ref or local trunk already says.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not

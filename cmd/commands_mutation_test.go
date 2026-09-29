@@ -1610,3 +1610,152 @@ func TestTrackAllJSONShape(t *testing.T) {
 		t.Fatalf("tracked = %v, want {a:main, b:a}", got.Tracked)
 	}
 }
+
+// --- prune + sync --no-fetch -------------------------------------------------
+
+func TestPruneDeletesMergedKeepsHEAD(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-merged", "m.txt", "m\n", "m")
+	mustCreate(t, "feat-live", "l.txt", "l\n", "l")
+
+	// Land feat-merged's commit on main, then return HEAD to the live branch.
+	mustCheckout(t, "main")
+	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-merged")
+	mustCheckout(t, "feat-live")
+
+	out := captureStdout(t, func() {
+		if err := runPrune(nil); err != nil {
+			t.Fatalf("prune: %v", err)
+		}
+	})
+	if !strings.Contains(out, "feat-merged") {
+		t.Fatalf("prune output should name the deleted branch, got:\n%s", out)
+	}
+	if curBranch(t) != "feat-live" {
+		t.Fatalf("HEAD = %q, want feat-live (prune never moves HEAD)", curBranch(t))
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-merged").Run() == nil {
+		t.Fatal("merged feat-merged still exists after prune")
+	}
+	if s := stateT(t); s.IsTracked("feat-merged") || !s.IsTracked("feat-live") {
+		t.Fatalf("state tracks feat-merged=%v feat-live=%v", s.IsTracked("feat-merged"), s.IsTracked("feat-live"))
+	}
+}
+
+func TestPruneRefusesCurrentMergedBranch(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
+	mustRun(t, "git", "checkout", "-q", "feat-a")
+
+	err := runPrune(nil)
+	if err == nil || !strings.Contains(err.Error(), "check out another branch or run st sync") {
+		t.Fatalf("prune on merged HEAD: err=%v", err)
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
+		t.Fatal("refused prune deleted feat-a")
+	}
+}
+
+func TestPruneDryRunDeletesNothing(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
+
+	var res map[string]any
+	out := captureStdout(t, func() {
+		if err := runPrune([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("prune --dry-run: %v", err)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode result: %v\n%s", err, out)
+	}
+	if res["dryRun"] != true {
+		t.Fatalf("dryRun = %v", res["dryRun"])
+	}
+	deleted, _ := res["deleted"].([]any)
+	if len(deleted) != 1 || deleted[0] != "feat-a" {
+		t.Fatalf("deleted = %v, want [feat-a]", res["deleted"])
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
+		t.Fatal("dry run deleted feat-a")
+	}
+}
+
+func TestPruneRemoteBasisAndMissingRemoteRef(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustRun(t, "git", "push", "-q", "-u", "origin", "main")
+
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
+
+	// origin/main still points at the init commit — feat-a is NOT merged into
+	// it, so --remote origin must not prune feat-a even though local main has it.
+	if err := runPrune([]string{"--remote", "origin"}); err != nil {
+		t.Fatalf("prune --remote origin: %v", err)
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
+		t.Fatal("feat-a was pruned against a remote ref that does not contain it")
+	}
+
+	// A remote with no tracking ref for the trunk must fail loudly.
+	r2Dir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", r2Dir)
+	mustRun(t, "git", "remote", "add", "r2", r2Dir)
+	if err := runPrune([]string{"--remote", "r2"}); err == nil || !strings.Contains(err.Error(), "no tracking ref") {
+		t.Fatalf("prune --remote r2 (unfetched): err=%v", err)
+	}
+	if err := runPrune([]string{"--remote", "nope"}); err == nil || !strings.Contains(err.Error(), `remote "nope" does not exist`) {
+		t.Fatalf("prune --remote nope: err=%v", err)
+	}
+}
+
+func TestSyncNoFetchUsesExistingRemoteRef(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	// Bare origin; push main so refs/remotes/origin/main exists locally.
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustRun(t, "git", "push", "-q", "-u", "origin", "main")
+	mustRun(t, "git", "--git-dir", remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	// Stack a branch, then make the REMOTE-tracking ref contain it while the
+	// local trunk stays behind: push feat-a's tip as origin/main and fetch so
+	// refs/remotes/origin/main advances past local main.
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustRun(t, "git", "push", "-q", "origin", "feat-a:main")
+	mustRun(t, "git", "fetch", "-q", "origin")
+	localMain := mustRun(t, "git", "rev-parse", "main")
+
+	out := captureStdout(t, func() {
+		if err := runSync([]string{"--no-fetch"}); err != nil {
+			t.Fatalf("sync --no-fetch: %v", err)
+		}
+	})
+	if !strings.Contains(out, "skipped (--no-fetch)") {
+		t.Fatalf("sync --no-fetch should note the skipped trunk step, got:\n%s", out)
+	}
+	// feat-a is contained in origin/main — the prune basis under --no-fetch —
+	// so it prunes even though local main does not contain it.
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() == nil {
+		t.Fatal("feat-a merged into origin/main should have been pruned")
+	}
+	// No fetch, no fast-forward: the local trunk must not have moved.
+	if got := mustRun(t, "git", "rev-parse", "main"); got != localMain {
+		t.Fatalf("local main moved under --no-fetch: %s → %s", localMain, got)
+	}
+}

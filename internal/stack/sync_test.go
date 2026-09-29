@@ -23,10 +23,15 @@ type fakeRemote struct {
 	gotOwnerDir       string
 	gotCheckedOutHere bool
 	called            bool
+	fetches           int
 }
 
 func (r *fakeRemote) Exists(string) bool { return r.exists }
-func (r *fakeRemote) Fetch(string) error { return nil }
+func (r *fakeRemote) Fetch(string) error {
+	r.fetches++
+	return nil
+}
+
 func (r *fakeRemote) FastForward(trunk, _, ownerDir string, checkedOutHere bool) (string, error) {
 	r.called = true
 	r.gotOwnerDir = ownerDir
@@ -135,7 +140,7 @@ func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -170,7 +175,7 @@ func TestSyncPrunesSquashMerged(t *testing.T) {
 		t.Fatal("test setup: feat-a should not be an ancestor of main after a squash-merge")
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -200,7 +205,7 @@ func TestSyncKeepsSquashMergedBranchWithNewContent(t *testing.T) {
 	}
 	f.commit("wip") // new work on top of the squash-merged commits
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -275,7 +280,7 @@ func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -310,7 +315,7 @@ func TestSyncPersistsEachSuccessfulPrune(t *testing.T) {
 		return nil
 	}
 
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false); err == nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); err == nil {
 		t.Fatal("sync should fail when pruning b fails")
 	}
 	if !savedAfterA {
@@ -326,7 +331,7 @@ func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "feat-a")
 
 	errBoom := errors.New("fast-forward failed")
-	if _, err := Sync(env, &fakeRemote{exists: true, err: errBoom, checkout: f}, s, "origin", false); !errors.Is(err, errBoom) {
+	if _, err := Sync(env, &fakeRemote{exists: true, err: errBoom, checkout: f}, s, "origin", false, false); !errors.Is(err, errBoom) {
 		t.Fatalf("Sync error = %v, want %v", err, errBoom)
 	}
 	if f.head != "feat-a" {
@@ -348,7 +353,7 @@ func TestSyncRestoresOriginalBranchWhenRestackFailsWithoutConflict(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false); !errors.Is(err, errBoom) {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); !errors.Is(err, errBoom) {
 		t.Fatalf("Sync error = %v, want %v", err, errBoom)
 	}
 	if f.head != "feat-a" {
@@ -414,7 +419,7 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 	}
 
 	_, liveS, liveEnv := setup(t)
-	_, liveErr := Sync(liveEnv, &fakeRemote{exists: false}, liveS, "origin", false)
+	_, liveErr := Sync(liveEnv, &fakeRemote{exists: false}, liveS, "origin", false, false)
 	if liveErr == nil {
 		t.Fatal("live Sync must refuse the same dirty linked worktree")
 	}
@@ -511,7 +516,7 @@ func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	if err := f.ForceBranch("main", aTip); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", true); err != nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", true, false); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if !s.IsTracked("feat-a") {
@@ -541,7 +546,7 @@ func TestSyncFastForwardsTrunkInItsOwnWorktree(t *testing.T) {
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
 	remote := &fakeRemote{exists: true, ff: "main fast-forwarded to refs/remotes/origin/main", git: f}
-	res, err := Sync(env, remote, s, "origin", false)
+	res, err := Sync(env, remote, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync from linked worktree: %v", err)
 	}
@@ -569,7 +574,7 @@ func TestSyncEndsDetachedWhenOrigPrunedAndTrunkOwnedElsewhere(t *testing.T) {
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -606,7 +611,7 @@ func TestSyncFailsWhenTrunkWorktreeDirty(t *testing.T) {
 	f.markWorktreeDirty("main")
 
 	remote := &fakeRemote{exists: true, ff: "unused", git: f}
-	_, err := Sync(env, remote, s, "origin", false)
+	_, err := Sync(env, remote, s, "origin", false, false)
 	if err == nil {
 		t.Fatal("sync with a dirty trunk worktree should fail")
 	}
@@ -629,7 +634,7 @@ func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &fakeRemote{exists: true, ff: "main already up to date"}
-	if _, err := Sync(env, remote, s, "origin", false); err != nil {
+	if _, err := Sync(env, remote, s, "origin", false, false); err != nil {
 		t.Fatalf("sync on trunk: %v", err)
 	}
 	if !remote.gotCheckedOutHere || remote.gotOwnerDir != "" {
@@ -644,7 +649,7 @@ func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote2 := &fakeRemote{exists: true, ff: "main already up to date"}
-	if _, err := Sync(env2, remote2, s2, "origin", false); err != nil {
+	if _, err := Sync(env2, remote2, s2, "origin", false, false); err != nil {
 		t.Fatalf("sync off trunk: %v", err)
 	}
 	if remote2.gotCheckedOutHere || remote2.gotOwnerDir != "" {
@@ -672,7 +677,7 @@ func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -694,5 +699,175 @@ func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("notes = %v, want %q", res.Notes, wantNote)
+	}
+}
+
+// --no-fetch: the remote port is never touched, the trunk is not moved, and the
+// prune basis is the already-fetched remote-tracking ref when it exists.
+
+func TestSyncNoFetchNeverTouchesRemote(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	aTip, _ := f.RevParse("feat-a")
+	// The remote-tracking ref contains feat-a; the local trunk does not — the
+	// remote ref is the fresher prune basis and must still be honored offline.
+	f.remoteRefs["refs/remotes/origin/main"] = aTip
+
+	remote := &fakeRemote{exists: true, ff: "must not be used"}
+	res, err := Sync(env, remote, s, "origin", false, true)
+	if err != nil {
+		t.Fatalf("sync --no-fetch: %v", err)
+	}
+	if remote.fetches != 0 || remote.called {
+		t.Fatalf("--no-fetch touched the remote: fetches=%d fastForward=%v", remote.fetches, remote.called)
+	}
+	if f.BranchExists("feat-a") || s.IsTracked("feat-a") {
+		t.Fatal("feat-a merged into the remote-tracking ref should have been pruned")
+	}
+	found := false
+	for _, note := range res.Notes {
+		if note == "trunk: skipped (--no-fetch)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want 'trunk: skipped (--no-fetch)'", res.Notes)
+	}
+}
+
+func TestSyncNoFetchFallsBackToLocalTrunk(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	// feat-a merged into the LOCAL trunk; no remote-tracking ref exists, so the
+	// prune basis falls back to it even though a remote is configured.
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := &fakeRemote{exists: true, ff: "must not be used"}
+	res, err := Sync(env, remote, s, "origin", false, true)
+	if err != nil {
+		t.Fatalf("sync --no-fetch: %v", err)
+	}
+	if remote.fetches != 0 || remote.called {
+		t.Fatalf("--no-fetch touched the remote: fetches=%d fastForward=%v", remote.fetches, remote.called)
+	}
+	if f.BranchExists("feat-a") {
+		t.Fatal("feat-a merged into the local trunk should have been pruned")
+	}
+	found := false
+	for _, note := range res.Notes {
+		if note == "trunk: skipped (--no-fetch)" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want 'trunk: skipped (--no-fetch)'", res.Notes)
+	}
+}
+
+// Standalone prune (st prune): never touches a remote, never moves HEAD.
+
+func TestPruneMergedAgainstRemoteTrackingRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	// The remote-tracking ref contains feat-a but the local trunk does not —
+	// proves the basis is the supplied ref, not s.Trunk.
+	aTip, _ := f.RevParse("feat-a")
+	f.remoteRefs["refs/remotes/origin/main"] = aTip
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := PruneMergedAgainst(env, s, "refs/remotes/origin/main")
+	if err != nil {
+		t.Fatalf("PruneMergedAgainst: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != "feat-a" {
+		t.Fatalf("deleted = %v, want [feat-a]", deleted)
+	}
+	if f.BranchExists("feat-a") || s.IsTracked("feat-a") {
+		t.Fatal("feat-a should be deleted and untracked")
+	}
+}
+
+func TestPruneDeletesMergedKeepsHEAD(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-merged")
+	mkBranch(t, env, s, f, "main", "feat-live")
+	aTip, _ := f.RevParse("feat-merged")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("feat-live"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Prune(env, s, s.Trunk)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-merged" {
+		t.Fatalf("deleted = %v, want [feat-merged]", res.Deleted)
+	}
+	if f.head != "feat-live" {
+		t.Fatalf("HEAD = %q, want feat-live (prune never moves HEAD)", f.head)
+	}
+	if !f.BranchExists("feat-live") || !s.IsTracked("feat-live") {
+		t.Fatal("unmerged feat-live should be kept and tracked")
+	}
+}
+
+func TestPruneRefusesWhenCurrentBranchMerged(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Prune(env, s, s.Trunk)
+	if err == nil || !strings.Contains(err.Error(), "check out another branch or run st sync") {
+		t.Fatalf("Prune on merged current branch: err=%v", err)
+	}
+	if !f.BranchExists("feat-a") || !s.IsTracked("feat-a") {
+		t.Fatal("refused prune must not delete feat-a")
+	}
+	// The dry-run preview must report the same refusal.
+	if _, err := PrunePlan(env, s, s.Trunk); err == nil || !strings.Contains(err.Error(), "check out another branch") {
+		t.Fatalf("PrunePlan on merged current branch: err=%v", err)
+	}
+}
+
+func TestPrunePlanListsWithoutDeleting(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	aTip, _ := f.RevParse("feat-a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PrunePlan(env, s, s.Trunk)
+	if err != nil {
+		t.Fatalf("PrunePlan: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatal("PrunePlan should mark DryRun")
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
+		t.Fatalf("preview deleted = %v, want [feat-a]", res.Deleted)
+	}
+	if !f.BranchExists("feat-a") || !s.IsTracked("feat-a") {
+		t.Fatal("dry run deleted feat-a")
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main", f.head)
 	}
 }

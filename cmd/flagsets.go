@@ -180,6 +180,7 @@ func submitFlagSet() *flag.FlagSet { return newSubmitFlags(&submitOpts{}) }
 type syncOpts struct {
 	asJSON   bool
 	noDelete bool
+	noFetch  bool
 	remote   string
 	dryRun   bool
 }
@@ -187,12 +188,28 @@ type syncOpts struct {
 func newSyncFlags(o *syncOpts) *flag.FlagSet {
 	fs := newFlagSet("sync", &o.asJSON)
 	fs.BoolVar(&o.noDelete, "no-delete", false, "do not delete merged branches")
+	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against already-fetched refs")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
 	return fs
 }
 
 func syncFlagSet() *flag.FlagSet { return newSyncFlags(&syncOpts{}) }
+
+type pruneOpts struct {
+	asJSON bool
+	remote string
+	dryRun bool
+}
+
+func newPruneFlags(o *pruneOpts) *flag.FlagSet {
+	fs := newFlagSet("prune", &o.asJSON)
+	fs.StringVar(&o.remote, "remote", "", "measure merged branches against <name>/<trunk> instead of the local trunk")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "list the merged branches that would be deleted")
+	return fs
+}
+
+func pruneFlagSet() *flag.FlagSet { return newPruneFlags(&pruneOpts{}) }
 
 type restackOpts struct {
 	asJSON bool
