@@ -112,7 +112,7 @@ func (s *State) snapshotUndo(g Git, label string) (*UndoEntry, error) {
 
 // RecordUndo snapshots the current state via snapshotUndo and appends the
 // entry to the undo journal, so the operation about to run can be reverted
-// with popUndo.
+// by st undo.
 func (s *State) RecordUndo(g Git, label string) error {
 	entry, err := s.snapshotUndo(g, label)
 	if err != nil {
@@ -349,19 +349,6 @@ func sameState(s *State, raw []byte) (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-// popUndo removes and returns the most recent undo entry. The boolean is false
-// when the journal is empty.
-func popUndo() (*UndoEntry, bool, error) {
-	last, ok, err := PeekUndo()
-	if err != nil || !ok {
-		return last, ok, err
-	}
-	if err := DropUndo(); err != nil {
-		return nil, false, err
-	}
-	return last, true, nil
 }
 
 // RestoreState overwrites the on-disk state file with raw bytes (used by undo to

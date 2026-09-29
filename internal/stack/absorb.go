@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 )
@@ -442,12 +443,5 @@ func shortSHA(sha string) string {
 }
 
 func joinComma(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ", "
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, ", ")
 }

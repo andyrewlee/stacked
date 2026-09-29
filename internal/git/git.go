@@ -459,7 +459,7 @@ type diffSection struct {
 }
 
 // diffCachedArgs is the one normalized staged-diff invocation shared by
-// DiffCachedHunks, DiffCachedPatch and DiffCachedPatchFor, so the parser and
+// DiffCachedHunks and DiffCachedPatchFor, so the parser and
 // the patch reassembler always consume the same byte stream. The explicit
 // flags pin the machine grammar against user configuration: --no-color and
 // --no-ext-diff/--no-textconv defeat color.ui, diff.external and textconv
@@ -678,20 +678,6 @@ func parseHunkRange(spec string) (start, n int, ok bool) {
 		}
 	}
 	return start, n, true
-}
-
-// DiffCachedPatch returns the full staged patch with ZERO context lines
-// (`git diff --cached -U0`) — the exact bytes absorb later lands on a target
-// tip with AmendTipWithPatch. Zero context is load-bearing: blame attribution
-// guarantees only the changed pre-image lines exist in the target's tree;
-// surrounding context is typically owned by descendant commits and would make
-// the apply fail there.
-func DiffCachedPatch() ([]byte, error) {
-	out, err := run(diffCachedArgs()...)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(out), nil
 }
 
 // DiffCachedPatchFor returns a minimal unified diff containing ONLY the
@@ -1365,6 +1351,71 @@ func IsCleanIn(dir string) (bool, error) {
 	return IsCleanAt(dir)
 }
 
+// LsFilesZ returns the tracked paths of the worktree at dir, parsed from one
+// `git -C dir ls-files -z` — NUL-separated so paths with spaces or quotes
+// survive byte-exact. A failure to run git is an error; dir must be a git
+// worktree.
+func LsFilesZ(dir string) ([]string, error) {
+	out, err := run("-C", dir, "ls-files", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
+// CheckIgnored reports which of rels (paths relative to root) git ignores,
+// from one batched `git -C root check-ignore -z --stdin`. A single path git
+// cannot classify (for example one beyond a symlinked directory) poisons the
+// whole batch, so a non-clean batch failure falls back to per-entry probes: a
+// path git cannot classify counts as not ignored.
+func CheckIgnored(root string, rels []string) (map[string]bool, error) {
+	ignored := make(map[string]bool, len(rels))
+	if len(rels) == 0 {
+		return ignored, nil
+	}
+	cmd := exec.Command("git", "-C", root, "check-ignore", "-z", "--stdin")
+	cmd.Env = gitEnv()
+	cmd.Stdin = bytes.NewReader([]byte(strings.Join(rels, "\x00") + "\x00"))
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return nil, fmt.Errorf("git check-ignore: %w", err)
+		}
+		switch exitErr.ExitCode() {
+		case 1:
+			return ignored, nil // none of the paths are ignored
+		default:
+			for _, rel := range rels {
+				if checkIgnored(root, rel) {
+					ignored[rel] = true
+				}
+			}
+			return ignored, nil
+		}
+	}
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			ignored[p] = true
+		}
+	}
+	return ignored, nil
+}
+
+// checkIgnored reports whether rel (relative to root) is ignored by git, via
+// `git -C root check-ignore`. check-ignore exits 0 when the path is ignored,
+// 1 when it is not, so a nil error means ignored. It is the per-entry fallback
+// when the batched CheckIgnored probe hits a fatal entry.
+func checkIgnored(root, rel string) bool {
+	return ok("-C", root, "check-ignore", "-q", "--", rel)
+}
+
 // Checkout switches the working tree to the named branch.
 func Checkout(name string) error {
 	if err := validRefArg("branch", name); err != nil {
@@ -1733,23 +1784,6 @@ func Fetch(remote string) error {
 		return err
 	}
 	_, err := Run("fetch", remote)
-	return err
-}
-
-// PushRemote pushes the given branch to remote and records it as the branch's
-// upstream (-u) so ahead/behind tracking works after the first publish. When
-// force is true it uses --force-with-lease for a safe force push.
-func PushRemote(remote, branch string, force bool) error {
-	if err := validRefArg("remote", remote); err != nil {
-		return err
-	}
-	args := []string{"push", "-u"}
-	if force {
-		args = append(args, "--force-with-lease")
-	}
-	refspec := "refs/heads/" + branch + ":refs/heads/" + branch
-	args = append(args, remote, refspec)
-	_, err := Run(args...)
 	return err
 }
 

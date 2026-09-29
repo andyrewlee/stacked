@@ -153,7 +153,7 @@ func TestSyncPlanPreviewsPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := syncPlan(env, s, false)
+	plan, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
 	if err != nil {
 		t.Fatal(err)
 	}
