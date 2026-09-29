@@ -18,10 +18,6 @@ func init() {
 func runUntrack(args []string) error {
 	var asJSON bool
 	fs := newFlagSet("untrack", &asJSON)
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), usageLine("untrack"))
-		fs.PrintDefaults()
-	}
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}

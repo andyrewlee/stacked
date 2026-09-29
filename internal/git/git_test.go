@@ -23,7 +23,7 @@ func TestFastForward(t *testing.T) {
 		bare := t.TempDir()
 		mustGit(t, "init", "-q", "--bare", bare)
 		mustGit(t, "remote", "add", "origin", bare)
-		if err := PushRemote("origin", "main", false); err != nil {
+		if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 			t.Fatalf("initial Push: %v", err)
 		}
 		return base
@@ -55,7 +55,7 @@ func TestFastForward(t *testing.T) {
 	t.Run("fast-forwards to the upstream tip", func(t *testing.T) {
 		base := setup(t)
 		remoteTip := advanceMain(t, "remote")
-		if err := PushRemote("origin", "main", false); err != nil {
+		if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		mustGit(t, "reset", "--hard", base)
@@ -73,7 +73,7 @@ func TestFastForward(t *testing.T) {
 	t.Run("diverged trunk returns an error", func(t *testing.T) {
 		base := setup(t)
 		advanceMain(t, "remote")
-		if err := PushRemote("origin", "main", false); err != nil {
+		if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		mustGit(t, "reset", "--hard", base)
@@ -94,7 +94,7 @@ func TestFastForward(t *testing.T) {
 	prepareBehindRemote := func(t *testing.T, base string) (remoteTip string) {
 		t.Helper()
 		remoteTip = advanceMain(t, "remote")
-		if err := PushRemote("origin", "main", false); err != nil {
+		if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		mustGit(t, "reset", "--hard", base)
@@ -167,7 +167,7 @@ func TestFastForward(t *testing.T) {
 	t.Run("never force-moves a diverged unchecked-out trunk", func(t *testing.T) {
 		base := setup(t)
 		advanceMain(t, "remote")
-		if err := PushRemote("origin", "main", false); err != nil {
+		if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 			t.Fatalf("Push: %v", err)
 		}
 		mustGit(t, "reset", "--hard", base)
@@ -707,14 +707,14 @@ func TestFetchAndPush(t *testing.T) {
 	mustGit(t, "init", "-q", "--bare", bare)
 	mustGit(t, "remote", "add", "origin", bare)
 
-	if err := PushRemote("origin", "main", false); err != nil {
+	if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 	if err := Fetch("origin"); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	// A force push (force-with-lease) of an unchanged ref is a no-op success.
-	if err := PushRemote("origin", "main", true); err != nil {
+	if _, err := PushBranches("origin", []string{"main"}, true); err != nil {
 		t.Fatalf("Push --force-with-lease: %v", err)
 	}
 
@@ -1675,7 +1675,7 @@ func TestPushUsesBranchRefspecWhenTagHasSameName(t *testing.T) {
 	mustGit(t, "remote", "add", "origin", bare)
 	mustGit(t, "tag", "main", "HEAD")
 
-	if err := PushRemote("origin", "main", false); err != nil {
+	if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 		t.Fatalf("Push with same-named tag: %v", err)
 	}
 	want := mustGit(t, "rev-parse", "refs/heads/main")
@@ -1695,7 +1695,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 	bare := t.TempDir()
 	mustGit(t, "init", "-q", "--bare", bare)
 	mustGit(t, "remote", "add", "origin", bare)
-	if err := PushRemote("origin", "main", false); err != nil {
+	if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 		t.Fatalf("initial Push: %v", err)
 	}
 
@@ -1710,7 +1710,7 @@ func TestFastForwardUsesRemoteTrackingRef(t *testing.T) {
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "remote")
 	remoteTip := mustGit(t, "rev-parse", "HEAD")
-	if err := PushRemote("origin", "main", false); err != nil {
+	if _, err := PushBranches("origin", []string{"main"}, false); err != nil {
 		t.Fatalf("remote Push: %v", err)
 	}
 	if err := Fetch("origin"); err != nil {
@@ -2263,9 +2263,13 @@ func TestAmendTipWithPatch(t *testing.T) {
 
 	writeFile(t, "shared.txt", "one\ntwo-owned-fixed\nthree\n")
 	mustGit(t, "add", "shared.txt")
-	patch, err := DiffCachedPatch()
+	hunks, _, err := DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks: %v", err)
+	}
+	patch, err := DiffCachedPatchFor(hunks)
 	if err != nil || len(patch) == 0 {
-		t.Fatalf("DiffCachedPatch = %d bytes, %v; want a non-empty patch", len(patch), err)
+		t.Fatalf("DiffCachedPatchFor(all) = %d bytes, %v; want a non-empty patch", len(patch), err)
 	}
 
 	newTip, err := AmendTipWithPatch("target", patch)
@@ -2332,9 +2336,13 @@ func TestAmendTipWithPatchMergeTip(t *testing.T) {
 	mustGit(t, "checkout", "-q", "-b", "scratch")
 	writeFile(t, "shared.txt", "one\ntwo-fixed\nthree\n")
 	mustGit(t, "add", "shared.txt")
-	patch, err := DiffCachedPatch()
+	mergeHunks, _, err := DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks: %v", err)
+	}
+	patch, err := DiffCachedPatchFor(mergeHunks)
 	if err != nil || len(patch) == 0 {
-		t.Fatalf("DiffCachedPatch = %d bytes, %v", len(patch), err)
+		t.Fatalf("DiffCachedPatchFor(all) = %d bytes, %v", len(patch), err)
 	}
 	mustGit(t, "reset", "-q", "--hard", "HEAD")
 

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -183,16 +183,13 @@ func gitTrackedPaths(dstRoot string) (tracked map[string]bool, trackedSorted []s
 	if _, err := os.Lstat(filepath.Join(dstRoot, ".git")); err != nil {
 		return tracked, nil, nil // not a git worktree: nothing can be tracked
 	}
-	cmd := exec.Command("git", "-C", dstRoot, "ls-files", "-z")
-	out, err := cmd.Output()
+	paths, err := git.LsFilesZ(dstRoot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("git -C %s ls-files: %w", dstRoot, err)
 	}
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" {
-			tracked[p] = true
-			trackedSorted = append(trackedSorted, p)
-		}
+	for _, p := range paths {
+		tracked[p] = true
+		trackedSorted = append(trackedSorted, p)
 	}
 	sort.Strings(trackedSorted)
 	return tracked, trackedSorted, nil
@@ -329,47 +326,10 @@ func expandIncludePattern(srcRoot, pattern string) ([]string, error) {
 // ignored" and is not an error. A fatal exit (128 — e.g. one entry reaches
 // beyond a symlinked directory) poisons the whole batch, so it falls back to
 // per-entry probes, preserving the old per-path semantics: a path git cannot
-// classify counts as not ignored (the copy loop then skips it).
+// classify counts as not ignored (the copy loop then skips it). The batch +
+// fallback semantics live in the port (git.CheckIgnored).
 func gitIgnoredSet(root string, rels []string) (map[string]bool, error) {
-	ignored := make(map[string]bool, len(rels))
-	if len(rels) == 0 {
-		return ignored, nil
-	}
-	cmd := exec.Command("git", "-C", root, "check-ignore", "-z", "--stdin")
-	cmd.Stdin = strings.NewReader(strings.Join(rels, "\x00") + "\x00")
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("git check-ignore: %w", err)
-		}
-		switch exitErr.ExitCode() {
-		case 1:
-			return ignored, nil // none of the paths are ignored
-		default:
-			for _, rel := range rels {
-				if isGitIgnored(root, rel) {
-					ignored[rel] = true
-				}
-			}
-			return ignored, nil
-		}
-	}
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" {
-			ignored[p] = true
-		}
-	}
-	return ignored, nil
-}
-
-// isGitIgnored reports whether rel (relative to root) is ignored by git, via
-// `git -C <root> check-ignore`. check-ignore exits 0 when the path is ignored,
-// 1 when it is not, so a nil error means ignored. It is the per-entry fallback
-// when the batched probe hits a fatal entry.
-func isGitIgnored(root, rel string) bool {
-	cmd := exec.Command("git", "-C", root, "check-ignore", "-q", "--", rel)
-	return cmd.Run() == nil
+	return git.CheckIgnored(root, rels)
 }
 
 func prepareSafeDestination(dstRoot, rel string) (string, error) {

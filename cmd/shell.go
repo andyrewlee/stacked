@@ -66,17 +66,13 @@ func runShell(args []string) error {
 func detectShell() string {
 	sh := os.Getenv("SHELL")
 	switch {
-	case hasSuffix(sh, "zsh"):
+	case strings.HasSuffix(sh, "zsh"):
 		return "zsh"
-	case hasSuffix(sh, "fish"):
+	case strings.HasSuffix(sh, "fish"):
 		return "fish"
 	default:
 		return "bash"
 	}
-}
-
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }
 
 // shellSnippet returns the integration snippet for the named shell. The shim

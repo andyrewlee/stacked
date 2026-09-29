@@ -1492,16 +1492,20 @@ func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
 
 func TestJSONStackEnvUsesQuietGit(t *testing.T) {
 	orig := gitShell
-	gitShell = cachedShell{}
+	gitShell = cachedPort{Git: git.Shell{}}
 	defer func() { gitShell = orig }()
 
 	// JSON mode swaps the production port for its quiet variant (so rebase chatter
 	// cannot corrupt the payload); both keep the cached Worktrees() override.
-	if _, ok := stackEnv(&stack.State{}, true).Git.(cachedQuietShell); !ok {
-		t.Fatal("JSON stack env did not use the quiet cached shell")
+	jsonGit, ok := stackEnv(&stack.State{}, true).Git.(cachedPort)
+	if !ok {
+		t.Fatal("JSON stack env did not use the cached port")
 	}
-	if _, ok := stackEnv(&stack.State{}, false).Git.(cachedShell); !ok {
-		t.Fatal("text stack env did not use the cached shell")
+	if _, ok := jsonGit.Git.(git.QuietShell); !ok {
+		t.Fatalf("JSON cached port wraps %T, want git.QuietShell", jsonGit.Git)
+	}
+	if _, ok := stackEnv(&stack.State{}, false).Git.(cachedPort); !ok {
+		t.Fatal("text stack env did not use the cached port")
 	}
 }
 
@@ -1544,8 +1548,9 @@ func TestStatusJSONSurfacesConflict(t *testing.T) {
 }
 
 // TestContinueJSONAfterConflict resumes a paused restack through the JSON
-// path, which routes the engine through cachedQuietShell — so the rebase runs
-// via QuietShell.RebaseContinue and git's chatter cannot corrupt the payload.
+// path, which routes the engine through cachedPort{git.QuietShell} — so the
+// rebase runs via QuietShell.RebaseContinue and git's chatter cannot corrupt
+// the payload.
 func TestContinueJSONAfterConflict(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -1579,8 +1584,8 @@ func TestContinueJSONAfterConflict(t *testing.T) {
 
 // TestDeleteJSONRemovesOwnedWorktree deletes a branch that owns a clean linked
 // worktree through the JSON path: mutate routes the engine through
-// cachedQuietShell, so the worktree teardown runs through its WorktreeRemove
-// override (the text path takes cachedShell instead).
+// cachedPort{git.QuietShell}, so the worktree teardown runs through its WorktreeRemove
+// override (the text path takes cachedPort{git.Shell} instead).
 func TestDeleteJSONRemovesOwnedWorktree(t *testing.T) {
 	newRepo(t)
 	t.Setenv("HOME", t.TempDir())

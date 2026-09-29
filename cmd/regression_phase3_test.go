@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -102,7 +103,7 @@ func TestSyncLocalWhenDefaultRemoteAbsent(t *testing.T) {
 	}
 }
 
-// TestRenameInvalidatesWorktreeCache pins the cachedShell RenameBranch
+// TestRenameInvalidatesWorktreeCache pins the cachedPort RenameBranch
 // override: after an in-process rename of a branch owning a linked worktree,
 // a fresh worktrees() read reports the NEW name, not the cached pre-rename
 // ownership.
@@ -120,7 +121,7 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 	if _, err := worktrees(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (cachedShell{}).RenameBranch("feat", "feat-renamed"); err != nil {
+	if err := (cachedPort{Git: git.Shell{}}).RenameBranch("feat", "feat-renamed"); err != nil {
 		t.Fatalf("RenameBranch: %v", err)
 	}
 	wts, err := worktrees()
@@ -134,9 +135,9 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 		t.Fatal("fresh read is missing the renamed branch's worktree ownership")
 	}
 
-	// The quiet (JSON-mode) shell carries the same override: rename back
+	// The quiet (JSON-mode) port carries the same override: rename back
 	// through it and assert the cache refreshes again.
-	if err := (cachedQuietShell{}).RenameBranch("feat-renamed", "feat"); err != nil {
+	if err := (cachedPort{Git: git.QuietShell{}}).RenameBranch("feat-renamed", "feat"); err != nil {
 		t.Fatalf("quiet RenameBranch: %v", err)
 	}
 	wts, err = worktrees()

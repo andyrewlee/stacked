@@ -63,10 +63,19 @@ func runLog(args []string) error {
 		return err
 	}
 
-	if asJSON {
-		return printLogJSON(s, index, cur, drift, tips, subjects, ancestors, wtInfo)
+	d := logData{
+		index:     index,
+		cur:       cur,
+		drift:     drift,
+		tips:      tips,
+		subjects:  subjects,
+		ancestors: ancestors,
+		wtInfo:    wtInfo,
 	}
-	printLogTree(s, index, cur, drift, tips, subjects, ancestors, wtInfo)
+	if asJSON {
+		return printLogJSON(s, d)
+	}
+	printLogTree(s, d)
 	return nil
 }
 
@@ -138,22 +147,35 @@ type logNode struct {
 	Children     []*logNode `json:"children"`
 }
 
-func printLogJSON(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, ancestors map[ancestorPair]bool, wtInfo map[string]worktreeInfo) error {
+// logData bundles the render context both log printers share: the child index,
+// the current branch ("" when detached), per-branch drift, the tip/subject/
+// ancestor maps from the batched cat-file reads, and worktree annotations.
+type logData struct {
+	index     map[string][]string
+	cur       string
+	drift     map[string]bool
+	tips      map[string]string
+	subjects  map[string]string
+	ancestors map[ancestorPair]bool
+	wtInfo    map[string]worktreeInfo
+}
+
+func printLogJSON(s *stack.State, d logData) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
-		node := &logNode{Name: name, Parent: parent, Current: name == cur, Children: []*logNode{}}
+		node := &logNode{Name: name, Parent: parent, Current: name == d.cur, Children: []*logNode{}}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
-			node.NeedsRestack = drift[name]
-			if subject, ok := topSubject(b, tips, subjects, ancestors); ok {
+			node.NeedsRestack = d.drift[name]
+			if subject, ok := topSubject(b, d.tips, d.subjects, d.ancestors); ok {
 				node.TopCommit = subject
 			}
 		}
-		if wt, ok := wtInfo[name]; ok {
+		if wt, ok := d.wtInfo[name]; ok {
 			node.Worktree = wt.path
 			node.Dirty = wt.dirty
 		}
-		for _, child := range index[name] {
+		for _, child := range d.index[name] {
 			node.Children = append(node.Children, build(child, name))
 		}
 		return node
@@ -169,10 +191,10 @@ func printLogJSON(s *stack.State, index map[string][]string, cur string, drift m
 
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
-func printLogTree(s *stack.State, index map[string][]string, cur string, drift map[string]bool, tips, subjects map[string]string, ancestors map[ancestorPair]bool, wtInfo map[string]worktreeInfo) {
+func printLogTree(s *stack.State, d logData) {
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
-		for _, child := range index[name] {
+		for _, child := range d.index[name] {
 			printBranch(child, depth+1)
 		}
 
@@ -183,21 +205,21 @@ func printLogTree(s *stack.State, index map[string][]string, cur string, drift m
 
 		safeName := sanitizeForTerminal(name)
 		marker, label := "○", safeName
-		if name == cur {
+		if name == d.cur {
 			marker = paint("◉", ansiBold, ansiGreen)
 			label = paint(safeName, ansiBold, ansiGreen)
 		}
 		line := fmt.Sprintf("%s%s %s", indent, marker, label)
 
 		if b, ok := s.Get(name); ok {
-			if drift[name] {
+			if d.drift[name] {
 				line += " " + paint("(needs restack)", ansiYellow)
 			}
-			if subject, ok := topSubject(b, tips, subjects, ancestors); ok {
+			if subject, ok := topSubject(b, d.tips, d.subjects, d.ancestors); ok {
 				line += "  " + paint(sanitizeForTerminal(subject), ansiDim)
 			}
 		}
-		if wt, ok := wtInfo[name]; ok {
+		if wt, ok := d.wtInfo[name]; ok {
 			safePath := sanitizeForTerminal(wt.path)
 			tag := "(worktree: " + safePath + ")"
 			if wt.dirty {

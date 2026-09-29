@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -379,7 +380,7 @@ func emitWorktree(asJSON bool, branch, path string, copied []string, summary str
 			for _, name := range copied {
 				safeCopied = append(safeCopied, sanitizeForTerminal(name))
 			}
-			out("copied: %s\n", joinNames(safeCopied))
+			out("copied: %s\n", strings.Join(safeCopied, ", "))
 		}
 	})
 }

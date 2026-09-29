@@ -788,15 +788,10 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete bool) (*OpResult,
 	}, nil
 }
 
-// syncPlan previews what a sync would do: which merged branches it would prune
-// and which branches it would restack. It does not fetch, fast-forward, or
-// mutate anything.
-func syncPlan(env Env, s *State, noDelete bool) (*OpResult, error) {
-	return SyncPlanAgainst(env, s, noDelete, branchTipRef(s.Trunk))
-}
-
-// SyncPlanAgainst previews sync against the supplied trunk ref, used by the CLI
-// dry-run path after fetching the selected remote's trunk.
+// SyncPlanAgainst previews what a sync would do against the supplied trunk
+// ref — which merged branches it would prune and which branches it would
+// restack — without fetching, fast-forwarding, or mutating anything. Used by
+// the CLI dry-run path after fetching the selected remote's trunk.
 func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResult, error) {
 	g := env.Git
 	// The real Sync requires a clean tree (engine.go Sync), so the preview must

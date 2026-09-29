@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/andyrewlee/stacked/internal/stack"
 )
@@ -62,11 +61,6 @@ func renderResult(res *stack.OpResult, asJSON bool) error {
 // is present in the format string.
 func out(format string, a ...any) {
 	fmt.Fprintf(os.Stdout, format, a...)
-}
-
-// joinNames renders a list of branch names for display.
-func joinNames(names []string) string {
-	return strings.Join(names, ", ")
 }
 
 // navEmit renders the result of a navigation command (the branch HEAD ended on

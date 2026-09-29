@@ -57,15 +57,21 @@ func TestRecordUndoUsesLocalBranchRefs(t *testing.T) {
 		t.Fatalf("RecordUndo: %v", err)
 	}
 
-	entry, ok, err := popUndo()
+	entry, ok, err := PeekUndo()
 	if err != nil {
-		t.Fatalf("popUndo: %v", err)
+		t.Fatalf("PeekUndo: %v", err)
 	}
 	if !ok {
-		t.Fatal("popUndo returned no undo entry")
+		t.Fatal("PeekUndo returned no undo entry")
 	}
 	if got := entry.Refs["feature"]; got != branchSHA {
 		t.Fatalf("undo ref for feature = %q, want branch tip %q", got, branchSHA)
+	}
+	if err := DropUndo(); err != nil {
+		t.Fatalf("DropUndo: %v", err)
+	}
+	if _, ok, err := PeekUndo(); err != nil || ok {
+		t.Fatalf("PeekUndo after DropUndo = (ok=%v, err=%v), want empty journal", ok, err)
 	}
 }
 

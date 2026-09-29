@@ -104,7 +104,7 @@ func joinTerminalNames(names []string) string {
 	for _, name := range names {
 		safe = append(safe, sanitizeForTerminal(name))
 	}
-	return joinNames(safe)
+	return strings.Join(safe, ", ")
 }
 
 func navEmitText(asJSON bool, branch, summary, textSummary string) error {
