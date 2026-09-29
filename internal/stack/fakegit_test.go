@@ -81,6 +81,19 @@ type fakeGit struct {
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
+
+	// failErr forces method-level errors beyond the dedicated maps: the key
+	// is the method name (e.g. "RebaseInProgress", "MergeBase"). failAfter
+	// delays the failure until the method has been called more than N times,
+	// modeling "first probe OK, second probe dies" windows. calls counts
+	// every invocation of a fail-instrumented method (so tests can assert a
+	// method was never reached, e.g. calls["UpdateRefs"] == 0).
+	//
+	// Convention: every new port method gets an `f.fail("Method")` guard at
+	// its top, so future failure-path tests never need a bespoke knob.
+	failErr   map[string]error
+	failAfter map[string]int
+	calls     map[string]int
 }
 
 func newFakeGit() *fakeGit {
@@ -92,6 +105,9 @@ func newFakeGit() *fakeGit {
 		checkoutErr:     map[string]error{},
 		deleteErr:       map[string]error{},
 		rebaseErr:       map[string]error{},
+		failErr:         map[string]error{},
+		failAfter:       map[string]int{},
+		calls:           map[string]int{},
 		clean:           true,
 		linkedWorktrees: map[string]string{},
 	}
@@ -135,7 +151,21 @@ func (f *fakeGit) resolve(ref string) string {
 	return ""
 }
 
+// fail returns the injected error for method once its allowed-call budget is
+// exhausted, and counts every invocation under calls. A nil map entry means
+// "never fail" — the guard costs nothing when the knobs are unset.
+func (f *fakeGit) fail(method string) error {
+	f.calls[method]++
+	if n, ok := f.failAfter[method]; ok && f.calls[method] <= n {
+		return nil
+	}
+	return f.failErr[method]
+}
+
 func (f *fakeGit) RevParse(ref string) (string, error) {
+	if err := f.fail("RevParse"); err != nil {
+		return "", err
+	}
 	if id := f.resolve(ref); id != "" {
 		return id, nil
 	}
@@ -143,6 +173,9 @@ func (f *fakeGit) RevParse(ref string) (string, error) {
 }
 
 func (f *fakeGit) CurrentBranch() (string, error) {
+	if err := f.fail("CurrentBranch"); err != nil {
+		return "", err
+	}
 	if f.head == "" {
 		return "", fmt.Errorf("detached HEAD")
 	}
@@ -155,6 +188,9 @@ func (f *fakeGit) BranchExists(name string) bool {
 }
 
 func (f *fakeGit) Tips() (map[string]string, error) {
+	if err := f.fail("Tips"); err != nil {
+		return nil, err
+	}
 	tips := make(map[string]string, len(f.branches))
 	for name, tip := range f.branches {
 		tips[name] = tip
@@ -163,6 +199,9 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 }
 
 func (f *fakeGit) TipsFor(names []string) (map[string]string, error) {
+	if err := f.fail("TipsFor"); err != nil {
+		return nil, err
+	}
 	tips := map[string]string{}
 	seen := map[string]bool{}
 	for _, name := range names {
@@ -227,6 +266,9 @@ func (g *tipReadSpyGit) Worktrees() ([]git.Worktree, error) {
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 	f.mergedIntoCalls++
+	if err := f.fail("MergedInto"); err != nil {
+		return nil, err
+	}
 	target := f.resolve(ref)
 	if target == "" {
 		return nil, fmt.Errorf("unknown revision %q", ref)
@@ -250,6 +292,9 @@ func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 // test explicitly lands the tokens on upstream — squashInto (a host
 // squash-merge) or an ancestry merge that makes the commits reachable.
 func (f *fakeGit) ChangesContainedIn(upstream, branch string) (bool, error) {
+	if err := f.fail("ChangesContainedIn"); err != nil {
+		return false, err
+	}
 	base, err := f.MergeBase(upstream, branch)
 	if err != nil {
 		return false, err
@@ -305,18 +350,29 @@ func (f *fakeGit) squashInto(t *testing.T, trunk, branch string) {
 
 // DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
 func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error) {
+	if err := f.fail("DiffCachedHunks"); err != nil {
+		return nil, nil, err
+	}
 	return f.stagedHunks, f.stagedUnsupported, nil
 }
 
 // BlamePorcelain returns the canned per-file blame a test set on blame. The
 // rev is ignored: engine tests only ever blame HEAD.
 func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) {
+	if err := f.fail("BlamePorcelain"); err != nil {
+		return nil, err
+	}
 	return f.blame[file], nil
 }
 
 // DiffCachedPatchFor ignores the hunk selection (patch content is not
 // modeled; real reassembly is proven by the git-level and e2e tests).
-func (f *fakeGit) DiffCachedPatchFor(_ []git.Hunk) ([]byte, error) { return f.stagedPatch, nil }
+func (f *fakeGit) DiffCachedPatchFor(_ []git.Hunk) ([]byte, error) {
+	if err := f.fail("DiffCachedPatchFor"); err != nil {
+		return nil, err
+	}
+	return f.stagedPatch, nil
+}
 
 // AmendTipWithPatch models the temp-index amend: the branch's tip is replaced
 // by a new commit with the same parent and subject (patch content is not
@@ -339,6 +395,9 @@ func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
 // ResetHardIn records the call; for the current worktree ("") it clears the
 // staged state, mirroring `git reset --hard` dropping the staged copy.
 func (f *fakeGit) ResetHardIn(dir, _ string) error {
+	if err := f.fail("ResetHardIn"); err != nil {
+		return err
+	}
 	f.resetHardDirs = append(f.resetHardDirs, dir)
 	if dir == "" {
 		f.staged = false
@@ -357,6 +416,9 @@ func (f *fakeGit) addWorktree(path, branch string) { f.linkedWorktrees[branch] =
 // branch) plus any registered linked worktrees. It is read-only and tolerates a
 // detached HEAD (it simply omits the main worktree's branch entry).
 func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
+	if err := f.fail("Worktrees"); err != nil {
+		return nil, err
+	}
 	var list []git.Worktree
 	main := git.Worktree{Path: "."}
 	if f.head != "" {
@@ -405,6 +467,9 @@ func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error
 func (f *fakeGit) RebaseAbortIn(_ string) error { return f.RebaseAbort() }
 
 func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
+	if err := f.fail("IsCleanIn"); err != nil {
+		return false, err
+	}
 	// Map the worktree dir back to its branch to honor markWorktreeDirty.
 	for branch, path := range f.linkedWorktrees {
 		if path == dir {
@@ -418,6 +483,9 @@ func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 // to remove a dirty worktree without --force. It deregisters the branch so a
 // follow-up DeleteBranch no longer hits "checked out in another worktree".
 func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
+	if err := f.fail("WorktreeRemove"); err != nil {
+		return err
+	}
 	for branch, path := range f.linkedWorktrees {
 		if path != dir {
 			continue
@@ -445,6 +513,9 @@ func (f *fakeGit) Checkout(name string) error {
 }
 
 func (f *fakeGit) CheckoutDetach(ref string) error {
+	if err := f.fail("CheckoutDetach"); err != nil {
+		return err
+	}
 	id := f.resolve(ref)
 	if id == "" {
 		return fmt.Errorf("unknown revision %q", ref)
@@ -478,6 +549,9 @@ func (f *fakeGit) CreateBranch(name string) error {
 }
 
 func (f *fakeGit) CreateBranchAt(name, ref string) error {
+	if err := f.fail("CreateBranchAt"); err != nil {
+		return err
+	}
 	if _, ok := f.branches[name]; ok {
 		return fmt.Errorf("branch %q exists", name)
 	}
@@ -518,6 +592,9 @@ func (f *fakeGit) DeleteBranch(name string, force bool) error {
 }
 
 func (f *fakeGit) ForceBranch(name, ref string) error {
+	if err := f.fail("ForceBranch"); err != nil {
+		return err
+	}
 	if name == f.head {
 		return fmt.Errorf("cannot force the current branch %q", name)
 	}
@@ -530,6 +607,9 @@ func (f *fakeGit) ForceBranch(name, ref string) error {
 }
 
 func (f *fakeGit) UpdateRef(ref, sha string) error {
+	if err := f.fail("UpdateRef"); err != nil {
+		return err
+	}
 	name := strings.TrimPrefix(ref, "refs/heads/")
 	id := f.resolve(sha)
 	if id == "" {
@@ -542,6 +622,9 @@ func (f *fakeGit) UpdateRef(ref, sha string) error {
 // UpdateRefs mirrors the shell's transactional contract: every SHA must
 // resolve before any ref moves.
 func (f *fakeGit) UpdateRefs(updates map[string]string) error {
+	if err := f.fail("UpdateRefs"); err != nil {
+		return err
+	}
 	resolved := map[string]string{}
 	for ref, sha := range updates {
 		id := f.resolve(sha)
@@ -600,6 +683,9 @@ func (f *fakeGit) amend(subject string) {
 }
 
 func (f *fakeGit) AmendNoEdit(_ bool) error {
+	if err := f.fail("AmendNoEdit"); err != nil {
+		return err
+	}
 	head := f.headBranch("AmendNoEdit")
 	f.amend(f.commits[f.branches[head]].subject)
 	f.staged = false
@@ -608,6 +694,9 @@ func (f *fakeGit) AmendNoEdit(_ bool) error {
 }
 
 func (f *fakeGit) AmendMessage(message string, _ bool) error {
+	if err := f.fail("AmendMessage"); err != nil {
+		return err
+	}
 	f.amend(message)
 	f.staged = false
 	f.clean = true
@@ -615,6 +704,9 @@ func (f *fakeGit) AmendMessage(message string, _ bool) error {
 }
 
 func (f *fakeGit) ResetSoft(ref string) error {
+	if err := f.fail("ResetSoft"); err != nil {
+		return err
+	}
 	if f.head == "" {
 		return fmt.Errorf("cannot reset with a detached HEAD")
 	}
@@ -709,8 +801,19 @@ func (f *fakeGit) replay(newBase, oldBase, branch string) error {
 	return nil
 }
 
-func (f *fakeGit) RebaseInProgress() (bool, error) { return f.rebaseActive, nil }
-func (f *fakeGit) RebaseHeadName() (string, error) { return f.rebaseBranch, nil }
+func (f *fakeGit) RebaseInProgress() (bool, error) {
+	if err := f.fail("RebaseInProgress"); err != nil {
+		return false, err
+	}
+	return f.rebaseActive, nil
+}
+
+func (f *fakeGit) RebaseHeadName() (string, error) {
+	if err := f.fail("RebaseHeadName"); err != nil {
+		return "", err
+	}
+	return f.rebaseBranch, nil
+}
 
 // RebaseOntoSHA reports the target recorded when the rebase paused — the fake
 // equivalent of rebase-merge/onto. rebaseOntoErr models unreadable/corrupt
@@ -743,6 +846,9 @@ func (f *fakeGit) RebaseAbort() error {
 // parent chains: walk from include, stopping at anything reachable from
 // exclude.
 func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) {
+	if err := f.fail("CommitRange"); err != nil {
+		return nil, err
+	}
 	to := f.resolve(include)
 	ex := f.resolve(exclude)
 	if to == "" || ex == "" {
@@ -775,6 +881,9 @@ func (f *fakeGit) RebaseContinue() error {
 
 func (f *fakeGit) IsAncestor(ancestor, descendant string) (bool, error) {
 	f.isAncestorCalls++
+	if err := f.fail("IsAncestor"); err != nil {
+		return false, err
+	}
 	a := f.resolve(ancestor)
 	d := f.resolve(descendant)
 	if a == "" || d == "" {
@@ -798,6 +907,9 @@ func mustFakeIsAncestor(t *testing.T, f *fakeGit, ancestor, descendant string) b
 }
 
 func (f *fakeGit) MergeBase(a, b string) (string, error) {
+	if err := f.fail("MergeBase"); err != nil {
+		return "", err
+	}
 	seen := map[string]bool{}
 	for cur := f.resolve(a); cur != ""; cur = f.commits[cur].parent {
 		seen[cur] = true
@@ -811,6 +923,9 @@ func (f *fakeGit) MergeBase(a, b string) (string, error) {
 }
 
 func (f *fakeGit) CommitSubjects(base, branch string) ([]string, error) {
+	if err := f.fail("CommitSubjects"); err != nil {
+		return nil, err
+	}
 	baseID := f.resolve(base)
 	var subs []string
 	for cur := f.branches[branch]; cur != "" && cur != baseID; cur = f.commits[cur].parent {
@@ -825,8 +940,23 @@ func (f *fakeGit) Add(_ ...string) error {
 	return nil
 }
 
-func (f *fakeGit) HasStagedChanges() (bool, error) { return f.staged, nil }
+func (f *fakeGit) HasStagedChanges() (bool, error) {
+	if err := f.fail("HasStagedChanges"); err != nil {
+		return false, err
+	}
+	return f.staged, nil
+}
+
 func (f *fakeGit) HasUnstagedChanges() (bool, error) {
+	if err := f.fail("HasUnstagedChanges"); err != nil {
+		return false, err
+	}
 	return !f.clean && !f.staged, nil
 }
-func (f *fakeGit) IsClean() (bool, error) { return f.clean && !f.staged, nil }
+
+func (f *fakeGit) IsClean() (bool, error) {
+	if err := f.fail("IsClean"); err != nil {
+		return false, err
+	}
+	return f.clean && !f.staged, nil
+}

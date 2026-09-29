@@ -14,6 +14,20 @@ func newEnvState() (*fakeGit, *State, Env) {
 	return f, s, Env{Git: f}
 }
 
+// envWithSaveErr returns an Env whose Save hook counts invocations and
+// returns err once more than failAfterN saves have run (0 = the first save
+// fails). The counter lets tests assert a checkpoint save was attempted.
+func envWithSaveErr(g Git, err error, failAfterN int) (Env, *int) {
+	saves := new(int)
+	return Env{Git: g, Save: func() error {
+		*saves++
+		if *saves > failAfterN {
+			return err
+		}
+		return nil
+	}}, saves
+}
+
 func mkBranch(t *testing.T, env Env, s *State, f *fakeGit, parent, name string) {
 	t.Helper()
 	if err := f.Checkout(parent); err != nil {
