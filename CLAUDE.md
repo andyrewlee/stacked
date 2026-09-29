@@ -19,17 +19,14 @@ stores stack topology locally — no host API.
 
 ```
 make test-fast   # about a second: the stack engine package over the fake git (./internal/stack)
-make ci          # THE gate: check-deps + pin checks +
+make ci          # THE gate — there is no remote CI: check-deps + pin checks +
                  #   fmt-check + lint + vet + vet-cross + build + race tests +
                  #   e2e + merged-coverage gate (>=75%) + installer checks
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
 
 `make ci` is the single source of truth — the pre-push hook runs the exact same
-target. The one remote job (.github/workflows/ci.yml) is a windows-only test
-leg that exists solely because a darwin dev box cannot execute the windows
-lock code `vet-cross` type-checks; it mirrors `go vet` + the test suite, no
-more. If `make ci` is green, you can commit/refactor
+target and nothing else does. If `make ci` is green, you can commit/refactor
 without manual testing. The inner loop you hit constantly is `make test-fast`.
 
 ## Architecture (why the loop is fast)
