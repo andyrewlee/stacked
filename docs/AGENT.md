@@ -257,8 +257,9 @@ One stack, N agents, one worktree per branch:
    a linked worktree too (a dirty trunk worktree blocks it with an error naming
    the path).
 4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree, and
-   `st worktree rm --all` releases every linked worktree in one call (dirty
-   ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
+   `st worktree rm --all` releases the linked worktree of every tracked
+   branch that has one — worktrees of untracked branches are untouched
+   (dirty ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
    `st undo` after a `create --worktree` also removes the worktree it created.
 
    Worktree paths are byte-exact: on git ≥ 2.36 the listing uses the
