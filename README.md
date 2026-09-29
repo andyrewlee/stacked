@@ -32,6 +32,7 @@ and the parent commit SHA it was last rebased onto:
 
 ```json
 {
+  "version": 1,
   "trunk": "main",
   "branches": {
     "feat-a": {
@@ -113,8 +114,9 @@ worktrees of the same repo share one stack.
 ## For scripts and agents
 
 `st` is built to be driven programmatically: it never prompts, JSON-capable
-subcommands accept `--json`, and failures report stable exit codes (`2`
-conflict, `3` not initialized, `4` dirty tree). See
+subcommands accept `--json`, and failures report stable exit codes (`1`
+usage, `2` conflict, `3` not initialized, `4` dirty tree, `5` lock held,
+`70` internal). See
 **[docs/AGENT.md](docs/AGENT.md)** for the full machine interface (JSON schemas,
 exit codes, idempotency).
 
@@ -143,7 +145,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st down [n]` | `d` | Move down the stack toward trunk. |
 | `st top` | `t` | Jump to the top (leaf) of the current stack. |
 | `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
-| `st track [name] [--parent <branch>]` | | Start tracking a git branch (the current one when no name is given). |
+| `st track [name] [--parent <branch>] [--all]` | | Start tracking a git branch (the current one when no name is given), or every untracked branch with `--all`. |
 | `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
 | `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
 | `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
@@ -155,9 +157,10 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
 | `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
-| `st sync [--no-delete] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--dry-run` previews). |
-| `st submit [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs). |
-| `st undo [--list]` | | Undo the last stack-mutating command (`--list` previews the journal without reverting). |
+| `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` uses already-fetched refs; `--dry-run` previews). |
+| `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
+| `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
+| `st undo [--list \| --dry-run]` | | Undo the last stack-mutating command (`--list` lists the journal, `--dry-run` previews the next undo). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
 | `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
@@ -232,9 +235,10 @@ non-ignored matches are skipped. `st worktree ls` lists every worktree;
 `st worktree rm <branch>` removes a branch's worktree. `st worktree --all`
 materializes a worktree for every tracked branch that lacks one, in one call —
 the branch checked out in the main worktree is skipped, and a rerun is a
-no-op. `st worktree rm --all` is the bulk teardown: it removes every linked
-worktree, skipping dirty ones (in-progress work is never discarded) and the
-main worktree. The stack metadata is
+no-op. `st worktree rm --all` is the bulk teardown: it removes the linked worktree
+of every tracked branch that has one — worktrees belonging to untracked
+branches are left alone — skipping dirty ones (in-progress work is never
+discarded) and the branch checked out in the main worktree. The stack metadata is
 shared across all worktrees, so every `st` command sees the same stack.
 
 #### `st shell install [bash|zsh|fish]`
@@ -251,11 +255,14 @@ Walk `n` levels up (toward leaves) or down (toward trunk) and check out the resu
 Jump to the leaf of the current stack (`top`) or to the bottom branch just above
 trunk (`bottom`).
 
-#### `st track [name] [--parent <branch>]` / `st untrack [name]`
+#### `st track [name] [--parent <branch>] [--all]` / `st untrack [name]`
 `track` starts managing an existing git branch — the current one, or the one
 named — with the parent inferred from the commit graph or set with `--parent`.
-`untrack` stops managing a branch and re-parents its children onto that
-branch's parent (the git branch is not deleted).
+`--all` adopts every untracked local branch in one pass, inferring each
+branch's parent from the merge base (branches that share no history with the
+trunk are skipped and reported in `notes`). `untrack` stops managing a branch
+and re-parents its children onto that branch's parent (the git branch is not
+deleted).
 
 #### `st modify [-m <msg>] [-a|--all] [--commit]` (`amend`, `m`)
 Amends the current branch's tip (or, with `--commit`, adds a new commit), then
@@ -296,11 +303,24 @@ tree-content containment: a branch carrying any content the trunk lacks is never
 pruned. Sync also works from inside a branch's linked worktree: the trunk
 fast-forward runs in the trunk's own worktree (a dirty trunk worktree blocks
 sync with an error naming its path). `--no-delete` keeps merged branches;
-`--dry-run` previews the prune/restack plan without fetching or changing
-anything.
+`--no-fetch` skips the fetch and fast-forward entirely — prune and restack run
+against the local trunk (or the already-cached `refs/remotes/<remote>/<trunk>`
+with `--remote`), so sync can run fully offline; `--dry-run` previews the
+prune/restack plan without fetching or changing anything.
 
-#### `st submit [--remote <name>] [--dry-run]` (`ss`)
-Pushes every branch on the current stack — from the bottom branch up to the
+#### `st prune [--remote <name>] [--dry-run]`
+Deletes every tracked branch already merged into the trunk — the prune step of
+`st sync` as a standalone command. It never fetches: mergedness is measured
+against the local trunk, or `refs/remotes/<remote>/<trunk>` with `--remote`
+(a missing tracking ref fails loudly). It never moves HEAD and needs no clean
+tree; pruning the current branch is refused with "check out another branch or
+run st sync". `--dry-run` lists the same set under `"dryRun": true` without
+deleting anything.
+
+#### `st submit [--all] [--remote <name>] [--dry-run]` (`ss`)
+`--all` pushes the whole tracked forest in dependency order (trunk→tips),
+independent of where you are. Without it, pushes every branch on the current
+stack — from the bottom branch up to the
 currently checked-out branch — using `--force-with-lease`, setting each branch's
 upstream (`-u`). It is login-free and never opens PRs; it prints your repository's
 URL so you can open pull requests on your host by hand. For github.com,
@@ -339,13 +359,16 @@ Renames a branch (the current one by default) with `git branch -m` and updates t
 stack metadata: the branch's record, the trunk name if applicable, and every
 child's parent pointer.
 
-#### `st undo [--list]`
+#### `st undo [--list | --dry-run]`
 Reverts the last stack-mutating command: the metadata is rolled back and each
 recorded branch is reset to its prior tip. It does **not** touch your working
 tree, so uncommitted changes are preserved (run `git status` to review). The
 journal keeps the last several operations.
 
-`st undo --list` previews the journal without reverting anything: entries are
+`st undo --dry-run` previews the next undo against *live* refs and worktrees —
+what it would restore, which created branches/worktrees it would delete, and
+every blocker a real run would refuse on — changing nothing. `--list` previews
+the recorded journal alone: entries are
 listed newest-first as `1: create (created feat-a; on main)`, where index 1 is
 what a bare `st undo` would revert.
 
@@ -396,8 +419,7 @@ st down                       # now on feat-a
 echo 'A2' >> a.txt
 st modify -m "add A (revised)"
 # Amended feat-a with new message
-# Restacked 1 branch(es):
-#   feat-b
+# restacked: feat-b
 
 # 6. if anything ever drifts, fix the whole stack in one shot
 st restack                    # no-op here: everything up to date

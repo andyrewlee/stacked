@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st undo --list` previews the journal without reverting.** It prints the
+  undo entries newest-first (index 1 is what a bare `st undo` would revert);
+  `--json` emits `{ "entries": [ { "index", "label", "currentBranch",
+  "createdBranches": [], "createdWorktrees": {}, "refs": {} } ] }` where
+  `refs` maps each recorded branch to the tip undo would restore.
 - **Branch-aware shell completion via a hidden `st __complete` endpoint.**
   `st completion <bash|zsh|fish>` now emits dynamic hooks for the four
   branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`, and
@@ -70,6 +75,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **Documentation corrections.** The 0.0.1 notes now list all seven shipped
+  exit codes (`5` lock-held and `70` internal existed from the start) and name
+  `shell` alongside `completion` as the `--json` exceptions; `worktree
+  rm --all` is described as tracked-branches-only everywhere; the README's
+  `state.json` example carries the always-written `"version": 1`, and its
+  `st modify` example shows the current `restacked: <names>` rendering.
 - **`st absorb` can no longer drop unaccounted staged changes.** The staged
   diff is now captured with pinned flags (`--no-color --no-ext-diff
   --no-textconv --src-prefix=a/ --dst-prefix=b/`) so user diff configuration
@@ -177,8 +188,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a reason); bare `st absorb` applies a single-target plan — the owning
   branch tip is amended via a checkout-free temp-index commit, descendants are
   restacked, and one `st undo` reverts both.
-- **`st worktree rm --all`** tears down every clean stacked-owned linked
-  worktree in one command (dirty ones are skipped loudly).
+- **`st worktree rm --all`** tears down the clean linked worktree of every
+  tracked branch that has one in a single command (dirty ones and the main
+  worktree's branch are skipped loudly; untracked branches' worktrees are
+  left alone).
 - Shell completion now completes flags and sub-verbs per command
   (bash/zsh/fish), not just command names.
 - Compare URLs from `st submit` for self-hosted GitLab and GitHub Enterprise
@@ -234,11 +247,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--dry-run` on `restack` and `sync` previews the branches that would be rebased
   or pruned (a `{"dryRun":true,...}` result) without changing anything.
 - `st guide` prints the recommended end-to-end workflow (text or `--json`).
-- **Agent-native interface.** Every command (except `completion`) accepts `--json`
-  with stable schemas; failures emit a structured `{"error":{"code","message"}}`
-  envelope on stderr. Documented in `docs/AGENT.md`.
+- **Agent-native interface.** Every command (except `completion` and `shell`)
+  accepts `--json` with stable schemas; failures emit a structured
+  `{"error":{"code","message"}}` envelope on stderr. Documented in `docs/AGENT.md`.
 - **Semantic exit codes**: `0` ok, `1` usage/generic, `2` conflict (run
-  `st continue`), `3` not initialized, `4` dirty working tree.
+  `st continue`), `3` not initialized, `4` dirty working tree, `5` repo lock
+  held (retry after it clears), `70` internal error (a bug in `st`).
 - `submit --json` reports a partial-push failure through a `failed` field naming
   the branch whose push failed (the branches in `pushed` were already pushed);
   documented in `docs/AGENT.md`.
