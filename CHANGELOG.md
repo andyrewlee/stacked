@@ -7,6 +7,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st undo --dry-run` previews the next undo.** Unlike `--list` (recorded
+  data only), it diffs the journal against live refs and worktrees:
+  `wouldRestore` carries each ref's live→recorded SHA pair plus a per-ref
+  `commitsLostFromRef` count (`"unknown"` when either object is missing),
+  `wouldDelete` lists branches the op created with their live owning
+  worktrees (even when none was recorded) and dirtiness, and `blockers`
+  names — in the real undo's gate order — everything a real run would
+  refuse on (`rebase_in_progress`, `state_too_new`, `malformed_snapshot`,
+  `cwd_inside_created_worktree`, `worktree_dirty`,
+  `recorded_worktree_mismatch`). The preview holds the advisory lock but
+  mutates nothing: state, journal, refs, worktrees, and cwd are byte-for-
+  byte unchanged, and a later real undo revalidates everything. `--dry-run`
+  and `--list` are mutually exclusive; blockers are data, exit is still 0.
 - **`st prune` is sync's prune step as a standalone command.** It deletes
   every tracked branch already merged into the local trunk — or into
   `refs/remotes/<remote>/<trunk>` with `--remote` (no fetch; a missing
