@@ -2668,3 +2668,157 @@ func TestAbsorbDryRunMapping(t *testing.T) {
 	}
 	r.stOK("validate")
 }
+
+// TestCreateWorktreeMaterializeFailure covers the create --worktree failure
+// window: git worktree add fails AFTER the branch is created and tracked (the
+// canonical worktree path is pre-obstructed), so the command exits non-zero
+// naming the st worktree retry, the branch stays tracked without a worktree,
+// and the undo entry is kept — a later `st worktree` retry materializes the
+// branch unrecorded in the journal, so `st undo` must discover that worktree
+// through LinkedOwnerOf (the journal has no createdWorktrees record) and remove
+// it while deleting the branch.
+func TestCreateWorktreeMaterializeFailure(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	// Bootstrap the generated-worktrees root with a sibling branch's worktree so
+	// the canonical <root>/<repo-key>/<branch> layout — and the directory a
+	// failed feat-x worktree must land under — is discoverable without
+	// duplicating the repo-key derivation here.
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	wtA := worktreeFor(t, r, "feat-a")
+	matches, err := filepath.Glob(filepath.Join(r.home, ".stacked", "worktrees", "*", "feat-a"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("locating generated worktrees root: matches=%v err=%v", matches, err)
+	}
+	keyDir := filepath.Dir(matches[0])
+
+	// Pre-obstruct feat-x's canonical path with a NON-EMPTY directory: git
+	// worktree add reuses an existing empty directory, but refuses one that
+	// already holds content.
+	obstruction := filepath.Join(keyDir, "feat-x")
+	if err := os.MkdirAll(obstruction, 0o755); err != nil {
+		t.Fatalf("mkdir obstruction: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(obstruction, "in-the-way"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("fill obstruction: %v", err)
+	}
+
+	res := r.st("create", "--worktree", "feat-x")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, `branch "feat-x" created and tracked, but its worktree failed`)
+	wantStderrContains(t, res, "retry with: st worktree feat-x")
+
+	// The branch is tracked but has no materialized worktree.
+	var root logNode
+	if err := json.Unmarshal([]byte(r.stOK("log", "--json").stdout), &root); err != nil {
+		t.Fatalf("decode log: %v", err)
+	}
+	if findNode(&root, "feat-x") == nil {
+		t.Fatalf("feat-x not tracked after failed create --worktree:\n%s", r.stOK("log", "--json").stdout)
+	}
+	if list := r.git("worktree", "list", "--porcelain"); strings.Contains(list, "refs/heads/feat-x") {
+		t.Fatalf("feat-x unexpectedly owns a worktree:\n%s", list)
+	}
+
+	// Clearing the obstruction and retrying with the hinted command succeeds —
+	// the worktree lands outside the journal (st worktree records no undo
+	// entry), so the create entry's createdWorktrees stays empty.
+	if err := os.RemoveAll(obstruction); err != nil {
+		t.Fatalf("remove obstruction: %v", err)
+	}
+	wtX := worktreeFor(t, r, "feat-x")
+	if _, err := os.Stat(wtX); err != nil {
+		t.Fatalf("retried worktree path missing: %v", err)
+	}
+	if list := r.git("worktree", "list", "--porcelain"); !strings.Contains(list, "refs/heads/feat-x") {
+		t.Fatalf("feat-x worktree not registered after retry:\n%s", list)
+	}
+
+	// Undo discovers feat-x's worktree via LinkedOwnerOf, removes it, and
+	// deletes the branch; feat-a's unrelated worktree is untouched.
+	undoRes := r.stOK("undo")
+	wantStdoutContains(t, undoRes, "undid: create")
+	if r.branchExists("feat-x") {
+		t.Fatal("undo left branch feat-x behind")
+	}
+	if _, err := os.Stat(wtX); !os.IsNotExist(err) {
+		t.Fatalf("feat-x worktree dir survived undo: stat err=%v", err)
+	}
+	list := r.git("worktree", "list", "--porcelain")
+	if strings.Contains(list, "refs/heads/feat-x") {
+		t.Fatalf("feat-x worktree still registered after undo:\n%s", list)
+	}
+	if !strings.Contains(list, "refs/heads/feat-a") {
+		t.Fatalf("undo removed unrelated feat-a worktree:\n%s", list)
+	}
+	if _, err := os.Stat(filepath.Join(wtA, "a.txt")); err != nil {
+		t.Fatalf("feat-a worktree damaged by undo: %v", err)
+	}
+	r.stOK("validate")
+}
+
+// TestWorktreeRemoveAllLeavesUntracked pins rm --all's scope: it removes linked
+// worktrees owning TRACKED branches only. A manually-created worktree for an
+// untracked local branch is invisible to the command — it stays on disk and in
+// git's registry, and the JSON result only ever names tracked branches.
+func TestWorktreeRemoveAllLeavesUntracked(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b") // checked out in the main worktree
+
+	// feat-a gets a canonical linked worktree; scratch is an UNTRACKED branch
+	// with a manually-created worktree outside the generated root.
+	wtA := worktreeFor(t, r, "feat-a")
+	scratchPath := filepath.Join(t.TempDir(), "scratch-wt")
+	r.git("branch", "scratch", "main")
+	r.git("worktree", "add", scratchPath, "scratch")
+
+	res := r.stOK("worktree", "rm", "--all", "--json")
+	var out struct {
+		Removed []struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+		} `json:"removed"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &out); err != nil {
+		t.Fatalf("decode rm --all json: %v\n%s", err, res.stdout)
+	}
+	if len(out.Removed) != 1 || out.Removed[0].Branch != "feat-a" {
+		t.Fatalf("removed = %+v, want exactly [feat-a]", out.Removed)
+	}
+	// skipped may only name tracked branches: feat-b (checked out in the main
+	// worktree). The untracked scratch worktree must not appear at all.
+	for _, sk := range out.Skipped {
+		if sk.Branch != "feat-b" {
+			t.Fatalf("skipped names untracked/unexpected branch %+v", out.Skipped)
+		}
+	}
+	if len(out.Skipped) != 1 {
+		t.Fatalf("skipped = %+v, want exactly [feat-b checked out in main]", out.Skipped)
+	}
+
+	// feat-a's worktree is gone; scratch's is untouched on disk and registered.
+	if _, err := os.Stat(wtA); !os.IsNotExist(err) {
+		t.Fatalf("feat-a worktree survived rm --all: stat err=%v", err)
+	}
+	list := r.git("worktree", "list", "--porcelain")
+	if strings.Contains(list, "refs/heads/feat-a") {
+		t.Fatalf("feat-a worktree still registered:\n%s", list)
+	}
+	if !strings.Contains(list, "refs/heads/scratch") {
+		t.Fatalf("untracked scratch worktree was removed:\n%s", list)
+	}
+	if _, err := os.Stat(scratchPath); err != nil {
+		t.Fatalf("scratch worktree dir removed: %v", err)
+	}
+	r.stOK("validate")
+}
