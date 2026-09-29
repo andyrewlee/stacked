@@ -31,8 +31,11 @@ type fakeCommit struct {
 type fakeGit struct {
 	commits  map[string]*fakeCommit
 	branches map[string]string // branch -> tip commit id
-	head     string            // current branch
-	seq      int
+	// remoteRefs models fetched remote-tracking refs ("refs/remotes/<r>/<b>")
+	// so tests can point a prune basis at them without a real remote.
+	remoteRefs map[string]string
+	head       string // current branch
+	seq        int
 
 	// conflict modeling: a branch in conflictNext stops mid-rebase the next time
 	// it is rebased, mirroring a real merge conflict that the caller resolves with
@@ -100,6 +103,7 @@ func newFakeGit() *fakeGit {
 	f := &fakeGit{
 		commits:         map[string]*fakeCommit{},
 		branches:        map[string]string{},
+		remoteRefs:      map[string]string{},
 		conflictNext:    map[string]bool{},
 		conflictEvery:   map[string]bool{},
 		checkoutErr:     map[string]error{},
@@ -143,6 +147,9 @@ func (f *fakeGit) resolve(ref string) string {
 	}
 	ref = strings.TrimPrefix(ref, "refs/heads/")
 	if tip, ok := f.branches[ref]; ok {
+		return tip
+	}
+	if tip, ok := f.remoteRefs[ref]; ok {
 		return tip
 	}
 	if _, ok := f.commits[ref]; ok {

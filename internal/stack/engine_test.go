@@ -1491,7 +1491,7 @@ func TestRequireCleanGuards(t *testing.T) {
 		{"Squash", func(env Env, s *State) (*OpResult, error) { return Squash(env, s, "m") }},
 		{"Onto", func(env Env, s *State) (*OpResult, error) { return Onto(env, s, "main") }},
 		{"Sync", func(env Env, s *State) (*OpResult, error) {
-			return Sync(env, &fakeRemote{exists: false}, s, "origin", false)
+			return Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
 		}},
 	}
 	for _, c := range cases {

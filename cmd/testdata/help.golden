@@ -18,6 +18,7 @@ commands:
   log (ls)           Show the stack as a tree
   modify (amend, m)  Amend (or add) a commit on the current branch and restack everything above
   onto (move)        Move the current branch (and its upstack) onto a new parent
+  prune              Delete tracked branches already merged into the trunk (no fetch, no restack)
   rename (mv)        Rename a branch and update the stack metadata
   repair             Reconcile the stack metadata with the repository (fix drift)
   restack (r)        Rebase the current branch and everything above it onto their parents

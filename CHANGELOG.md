@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st prune` is sync's prune step as a standalone command.** It deletes
+  every tracked branch already merged into the local trunk — or into
+  `refs/remotes/<remote>/<trunk>` with `--remote` (no fetch; a missing
+  tracking ref fails loudly) — and reports them in `deleted`. It never
+  moves HEAD and requires no clean tree: pruning the current branch is
+  refused with "check out another branch or run st sync". `--dry-run`
+  lists the same set under `"dryRun": true`.
+- **`st sync --no-fetch` skips every remote call.** No fetch, no trunk
+  fast-forward; prune and restack run against the already-fetched
+  `refs/remotes/<remote>/<trunk>` when it exists, else the local trunk.
+  The result note reports `trunk: skipped (--no-fetch)`.
 - **`st track --all` adopts an existing branch stack in one command.**
   Every untracked local branch is adopted with its parent inferred from
   the full local-branch set — `a→b→c` becomes a real chain, not three
