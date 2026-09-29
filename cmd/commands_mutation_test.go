@@ -881,6 +881,28 @@ func TestUndoRejectsFutureCurrentState(t *testing.T) {
 	}
 }
 
+// TestUndoPeekFailureSurfaces pins the PeekUndo error arm in runUndo: when the
+// journal file itself is unreadable (here: a directory where a file is
+// expected — loadUndo only swallows malformed JSON, not I/O errors), undo
+// surfaces the read failure instead of claiming an empty journal.
+func TestUndoPeekFailureSurfaces(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	undoDir := filepath.Join(gitDir, "stacked", "undo.json")
+	if err := os.Mkdir(undoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runUndo(nil); err == nil || !strings.Contains(err.Error(), "undo") {
+		t.Fatalf("undo with an unreadable journal = %v, want a journal error", err)
+	}
+}
+
 // TestUndoRejectsFutureSnapshotBeforeWorktreePreparation pins ordering: the
 // snapshot's schema check must run BEFORE prepareUndoCurrentCreatedWorktree —
 // the case where undo would chdir out of and delete the worktree it is being
