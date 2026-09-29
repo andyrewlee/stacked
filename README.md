@@ -356,7 +356,11 @@ breaks parent cycles. Re-parented branches may then need `st restack`.
 
 #### `st completion <bash|zsh|fish>`
 Prints a shell completion script for st's subcommands, e.g.
-`st completion zsh > "${fpath[1]}/_st"`.
+`st completion zsh > "${fpath[1]}/_st"`. The scripts complete branch names
+live for `checkout`, `onto`, `track`, and `worktree` (and `rm`'s owned
+branches), via a hidden read-only `st __complete` endpoint that answers in
+flat probes — no fetch, no history walk, silent-empty outside a repo. Set
+`ST_COMPLETE_BIN` to point the hooks at a different st binary.
 
 #### `st validate` (`doctor`)
 Checks the recorded stack against the actual repository and reports problems — a

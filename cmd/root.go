@@ -45,6 +45,10 @@ type Command struct {
 	// once and `help --json` cannot drift from what Run parses. Commands whose
 	// only flag is --json leave it nil.
 	NewFlagSet func() *flag.FlagSet
+	// Hidden marks machinery commands (st __complete) that dispatch normally but
+	// never appear in help, help --json, word-1 completion candidates, generated
+	// case arms, or did-you-mean suggestions.
+	Hidden bool
 }
 
 // registry holds all registered commands in registration order.
@@ -127,10 +131,14 @@ func Execute() (rc int) {
 
 	// Every real command needs a supported git on PATH; fail before dispatch
 	// rather than mid-mutation on an unrecognized flag. Builtins (help,
-	// version) stay exempt — they answer without git.
-	if err := git.RequireMinVersion(); err != nil {
-		renderError(err, jsonRequested(args[1:]))
-		return exitCode(err)
+	// version) stay exempt — they answer without git — and so do hidden
+	// completion endpoints: they run once per keystroke, so the version probe's
+	// extra spawn is real cost, and a too-old git just degrades to empty output.
+	if !cmd.Hidden {
+		if err := git.RequireMinVersion(); err != nil {
+			renderError(err, jsonRequested(args[1:]))
+			return exitCode(err)
+		}
 	}
 
 	if err := cmd.Run(args[1:]); err != nil {
@@ -331,6 +339,9 @@ func suggestCommand(name string) string {
 		}
 	}
 	for _, c := range registry {
+		if c.Hidden {
+			continue
+		}
 		consider(c.Name, true)
 		for _, a := range c.Aliases {
 			consider(a, false)
@@ -478,6 +489,9 @@ func printHelp(asJSON bool) {
 	if asJSON {
 		infos := make([]commandInfo, 0, len(registry)+2)
 		for _, c := range registry {
+			if c.Hidden {
+				continue
+			}
 			infos = append(infos, registeredInfo(c))
 		}
 		helpInfo, _ := commandInfoForName("help")
@@ -495,6 +509,9 @@ func printHelp(asJSON bool) {
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, c := range registry {
+		if c.Hidden {
+			continue
+		}
 		name := c.Name
 		if len(c.Aliases) > 0 {
 			name += " (" + strings.Join(c.Aliases, ", ") + ")"

@@ -208,8 +208,8 @@ func TestExecuteBuiltInUnknownFlags(t *testing.T) {
 // DOC-2/3).
 func TestEveryCommandDocumentsJSONInUsage(t *testing.T) {
 	for _, c := range registry {
-		if c.Name == "completion" || c.Name == "shell" {
-			continue // these emit shell scripts, not JSON
+		if c.Name == "completion" || c.Name == "shell" || c.Hidden {
+			continue // these emit shell scripts, not JSON — and hidden machinery has no user-facing usage
 		}
 		if !strings.Contains(c.Usage, "--json") {
 			t.Errorf("command %q usage %q does not document --json", c.Name, c.Usage)
@@ -470,6 +470,9 @@ func TestEveryCommandUsageMatchesRegistry(t *testing.T) {
 	t.Chdir(t.TempDir())
 	resetWorktreeCache()
 	for _, c := range registry {
+		if c.Hidden {
+			continue // machinery endpoints take their own argv protocol, not -h
+		}
 		got := captureStdout(t, func() { _ = c.Run([]string{"-h"}) })
 		first, _, _ := strings.Cut(got, "\n")
 		if want := "usage: " + c.Usage; first != want {
