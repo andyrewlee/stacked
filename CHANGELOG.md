@@ -7,6 +7,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st track --all` adopts an existing branch stack in one command.**
+  Every untracked local branch is adopted with its parent inferred from
+  the full local-branch set — `a→b→c` becomes a real chain, not three
+  trunk-parented orphans. Cyclic proposals are refused naming the members;
+  orphan branches sharing no history with the trunk are skipped with a
+  note. The JSON result adds a `tracked` name→parent map.
 - **`st submit --all` pushes the whole tracked forest.** In dependency
   order (parents before children), from any branch — including trunk and
   detached HEAD — with the same confirmed-per-ref partial-failure contract

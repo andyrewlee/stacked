@@ -147,11 +147,13 @@ func initFlagSet() *flag.FlagSet { return newInitFlags(&initOpts{}) }
 
 type trackOpts struct {
 	asJSON bool
+	all    bool
 	parent string
 }
 
 func newTrackFlags(o *trackOpts) *flag.FlagSet {
 	fs := newFlagSet("track", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "adopt every untracked local branch, inferring topology")
 	fs.StringVar(&o.parent, "parent", "", "parent branch (trunk or a tracked branch)")
 	return withDefaults(fs, "track")
 }

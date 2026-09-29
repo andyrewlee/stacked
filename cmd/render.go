@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/andyrewlee/stacked/internal/stack"
 )
@@ -50,6 +51,18 @@ func renderResult(res *stack.OpResult, asJSON bool) error {
 	}
 	if len(res.Deleted) > 0 {
 		out("%s: %s\n", deleted, joinTerminalNames(res.Deleted))
+	}
+	if len(res.Tracked) > 0 {
+		names := make([]string, 0, len(res.Tracked))
+		for n := range res.Tracked {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		pairs := make([]string, 0, len(names))
+		for _, n := range names {
+			pairs = append(pairs, n+" (parent: "+res.Tracked[n]+")")
+		}
+		out("tracked: %s\n", joinTerminalNames(pairs))
 	}
 	for _, n := range res.Notes {
 		out("%s\n", sanitizeForTerminal(n))

@@ -1740,3 +1740,158 @@ func TestDeleteSingleTipsRead(t *testing.T) {
 		t.Fatalf("restacked = %v, want %v (per-child walk order)", res.Restacked, want)
 	}
 }
+
+// --- track --all ------------------------------------------------------------
+
+// mkUntracked creates a git branch (untracked by the state) forking at the
+// current tip of parent and committing one fake commit on it.
+func mkUntracked(t *testing.T, f *fakeGit, parent, name string) {
+	t.Helper()
+	if err := f.Checkout(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch(name); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("c-" + name)
+}
+
+func TestTrackAllBranchesAdoptsLinearChain(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "a")
+	mkUntracked(t, f, "a", "b")
+	mkUntracked(t, f, "b", "c")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := TrackAllBranches(env, s)
+	if err != nil {
+		t.Fatalf("track --all: %v", err)
+	}
+	want := map[string]string{"a": "main", "b": "a", "c": "b"}
+	for name, parent := range want {
+		b, ok := s.Get(name)
+		if !ok {
+			t.Fatalf("%s was not tracked", name)
+		}
+		if b.Parent != parent {
+			t.Fatalf("%s parent=%q, want %q", name, b.Parent, parent)
+		}
+		if res.Tracked[name] != parent {
+			t.Fatalf("res.Tracked[%q]=%q, want %q", name, res.Tracked[name], parent)
+		}
+	}
+}
+
+// TestTrackAllBranchesParentsBeforeChildren builds an untracked fork off an
+// untracked base and asserts the base is recorded before the child — the
+// child can only be tracked once its parent is in the forest.
+func TestTrackAllBranchesParentsBeforeChildren(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "base")
+	mkUntracked(t, f, "base", "feat")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := TrackAllBranches(env, s); err != nil {
+		t.Fatalf("track --all: %v", err)
+	}
+	if b, _ := s.Get("feat"); b.Parent != "base" {
+		t.Fatalf("feat parent=%q, want base", b.Parent)
+	}
+	if b, _ := s.Get("base"); b.Parent != "main" {
+		t.Fatalf("base parent=%q, want main", b.Parent)
+	}
+}
+
+// TestTrackAllBranchesCycleRefusal: two branches pointing at the same commit
+// are mutual ancestors, so inference proposes x->y and y->x. The batch must
+// refuse naming both rather than recording a cycle into the forest.
+func TestTrackAllBranchesCycleRefusal(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "x")
+	xTip, _ := f.RevParse("x")
+	if err := f.CreateBranchAt("y", xTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := TrackAllBranches(env, s)
+	if err == nil {
+		t.Fatal("track --all accepted a cyclic parent proposal")
+	}
+	for _, name := range []string{"x", "y"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("cycle error %v does not name %s", err, name)
+		}
+		if s.IsTracked(name) {
+			t.Fatalf("%s was tracked despite the refused batch", name)
+		}
+	}
+}
+
+// TestTrackAllBranchesFallbacks: a branch already merged into the trunk lands
+// on the trunk (the same fallback as single-track inference), while a true
+// orphan — no merge base with the trunk, nothing to record as its base — is
+// skipped with a note rather than failing the batch.
+func TestTrackAllBranchesFallbacks(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "tracked-a")
+	mkUntracked(t, f, "main", "feat")
+
+	// `old` sits at the trunk tip — already merged, never a parent candidate
+	// for anyone; its own parent is the trunk.
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranchAt("old", "main"); err != nil {
+		t.Fatal(err)
+	}
+	// `orphan` has no commits on the trunk's line and nothing merges into it.
+	f.commits["r0"] = &fakeCommit{id: "r0", subject: "unrelated", content: map[string]bool{}}
+	if err := f.CreateBranchAt("orphan", "r0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := TrackAllBranches(env, s)
+	if err != nil {
+		t.Fatalf("track --all: %v", err)
+	}
+	for _, name := range []string{"old", "feat"} {
+		b, ok := s.Get(name)
+		if !ok {
+			t.Fatalf("%s was not tracked", name)
+		}
+		if b.Parent != "main" {
+			t.Fatalf("%s parent=%q, want main", name, b.Parent)
+		}
+	}
+	if s.IsTracked("orphan") {
+		t.Fatal("orphan was tracked despite having no base to record")
+	}
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "orphan") {
+		t.Fatalf("Notes = %v, want a skip note naming orphan", res.Notes)
+	}
+}
+
+// TestTrackAllBranchesSkipsTrackedAndTrunk: already-tracked branches and the
+// trunk are never re-adopted; an empty untracked set is a clean no-op result.
+func TestTrackAllBranchesSkipsTrackedAndTrunk(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	res, err := TrackAllBranches(env, s)
+	if err != nil {
+		t.Fatalf("track --all with nothing untracked: %v", err)
+	}
+	if len(res.Tracked) != 0 {
+		t.Fatalf("Tracked = %v, want empty", res.Tracked)
+	}
+}
