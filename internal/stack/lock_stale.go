@@ -198,7 +198,7 @@ func acquireReclaimGuard(dir string) (func(), error) {
 // lock is reclaimed only after proving the recorded owner is gone (or a
 // malformed lock is abandoned), guarded by lock.reclaim so two reclaimers cannot
 // race. It carries no build tag so the composed path is exercised by the unix
-// test suite, even though lock_other.go's Lock wrapper only ships off-flock.
+// test suite, even though lock_other.go's acquirePlatformLock only ships off-flock.
 func acquireExclLock(dir string) (func(), error) {
 	path := filepath.Join(dir, "lock.excl")
 	token := newLockToken()

@@ -180,13 +180,15 @@ message.
 - Concurrent `st` processes in one repo are serialized by an advisory lock (a
   second one fails fast rather than corrupting state): flock on unix-like
   platforms, an exclusive lock file elsewhere. A contender exits 5
-  (`"code": "locked"`), so the retry idiom is
-  `until st restack; do [ $? -eq 5 ] || break; sleep 1; done`. On non-flock
+  (`"code": "locked"`). To have `st` itself wait instead of looping in your
+  shell, set `ST_LOCK_WAIT` to a Go duration or bare seconds
+  (`ST_LOCK_WAIT=10s` or `ST_LOCK_WAIT=10`) — acquisition is retried for up to
+  that budget and exit 5 still means the lock never cleared. On non-flock
   platforms an *abandoned* `lock.reclaim` guard (left by a dead process) is
   also exit 5 but carries `"code": "locked_guard"` — a maintenance error
-  naming the guard path; it is never removed automatically, and a retry loop
-  must stop on that code. See CONTRIBUTING's troubleshooting section for the
-  operator procedure.
+  naming the guard path; it is never removed automatically and never retried,
+  even with `ST_LOCK_WAIT` set. See CONTRIBUTING's troubleshooting section for
+  the operator procedure.
 
 ## Orchestrating parallel agents
 

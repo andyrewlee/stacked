@@ -3,7 +3,7 @@ package stack
 // Portable lock-subsystem tests: no build tag, so they run on the unix and
 // windows CI legs and compile under `make vet-cross` for plan9. They pin the
 // build-tag-free pieces — lock file contents/owner parsing, the contention
-// classifiers, and acquireExclLock, the composition that ships as Lock() on
+// classifiers, and acquireExclLock, the composition Lock() delegates to on
 // non-flock platforms (see lock_stale.go). The per-platform lockOwnerIsGone
 // bodies are reached through the helpers here on unix and windows; the plan9
 // owner check (lock_owner_plan9.go) is compile-only coverage via vet-cross —

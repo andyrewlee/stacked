@@ -10,12 +10,12 @@ import (
 	"syscall"
 )
 
-// Lock acquires an exclusive advisory lock that serializes mutating stacked
-// commands across concurrent processes in the same repository. The returned
-// release function unlocks and closes the lock file; the lock is also released
-// automatically if the process exits. Platforms without flock support use an
-// exclusive lock file instead (see lock_other.go).
-func Lock() (func(), error) {
+// acquirePlatformLock takes the platform lock once — flock here, an exclusive
+// lock file on platforms without flock (see lock_other.go). The public Lock
+// (lock_wait.go) wraps it in the ST_LOCK_WAIT retry loop. The returned release
+// function unlocks and closes the lock file; the lock is also released
+// automatically if the process exits.
+func acquirePlatformLock() (func(), error) {
 	dir, err := stackedDir()
 	if err != nil {
 		return nil, err

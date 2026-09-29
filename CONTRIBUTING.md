@@ -196,8 +196,8 @@ retry loop can tell it apart. To recover:
 
 The error names the exact path; do not delete it while any `st` command could
 still be running. A live or freshly-written malformed guard stays ordinary
-contention (exit 5) — that case means another `st` is mid-reclaim and the retry
-idiom applies.
+contention (exit 5) — that case means another `st` is mid-reclaim and a short
+wait applies (see below).
 
 Coverage note: the stale-lock code paths are exercised by the native test
 suite on every platform (`internal/stack/lock_stale_test.go` runs the real
@@ -205,3 +205,14 @@ file operations in temp dirs regardless of `GOOS`). There is no Windows runtime
 leg anymore — exercise the composed `Lock`/`Unlock` pair on a real Windows
 machine before shipping lock changes. Timing races are deterministic in tests —
 synchronized contenders, not sleeps.
+
+### Waiting on the lock
+
+`ST_LOCK_WAIT` makes lock acquisition patient instead of fail-fast: a Go
+duration (`500ms`, `10s`, `1m`) or bare seconds (`10`). While the budget lasts
+`st` retries on contention every 100ms; exhaustion still returns the ordinary
+`locked` error (exit 5), so behavior without the variable is unchanged. It is
+parsed once per process at the first lock attempt — a malformed value fails the
+command immediately naming the variable, and a negative one is rejected. The
+abandoned-`lock.reclaim` guard above is never retried by this mechanism: it is
+a maintenance condition, not contention.
