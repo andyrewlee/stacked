@@ -58,8 +58,12 @@ message.
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
-  `branch`, `restacked`, `deleted`, `notes`, and `dryRun` are all `omitempty` —
-  absent when empty or false. Preview-capable commands (`restack`, `sync`,
+  `branch`, `restacked`, `deleted`, `notes`, `tracked`, and `dryRun` are all
+  `omitempty` — absent when empty or false. `track --all` adopts every
+  untracked local branch in one shot, inferring each parent (so an existing
+  `a→b→c` stack becomes a real chain); it adds `"tracked": {"name": "parent"}`
+  and `notes` entries for skipped branches (e.g. orphans sharing no history
+  with the trunk). Preview-capable commands (`restack`, `sync`,
   `onto`, `fold`, `squash`, `delete`) return the same result shape with
   `"dryRun": true` under `--dry-run`. In a multi-worktree repo, `restack`/`sync`
   rebase a dependent branch that lives in another worktree *inside that worktree*;

@@ -1516,3 +1516,97 @@ func TestSubmitAllPartialFailure(t *testing.T) {
 		t.Fatal("remote state disagrees with the reported partial outcome")
 	}
 }
+
+// --- track --all ------------------------------------------------------------
+
+// TestTrackAllMutualExclusion pins the usage contract: --all names the whole
+// untracked set, so a positional name or --parent is a usage error.
+func TestTrackAllMutualExclusion(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	for _, args := range [][]string{
+		{"--all", "feat"},
+		{"--all", "--parent", "main"},
+	} {
+		if err := runTrack(args); err == nil {
+			t.Fatalf("track %v succeeded; want a usage error", args)
+		}
+	}
+}
+
+// TestTrackAllAdoptsExistingStack is the flagship case over real git: two
+// pre-existing stacks (a→b→c and lone x) are adopted in one command with the
+// inferred topology — parents before children — and a single undo entry.
+func TestTrackAllAdoptsExistingStack(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+
+	mkLocal := func(parent, name, file string) {
+		mustRun(t, "git", "checkout", "-q", parent)
+		mustRun(t, "git", "checkout", "-q", "-b", name)
+		write(t, file, name+"\n")
+		mustRun(t, "git", "add", "-A")
+		mustRun(t, "git", "commit", "-q", "-m", name)
+	}
+	mkLocal("main", "a", "a.txt")
+	mkLocal("a", "b", "b.txt")
+	mkLocal("b", "c", "c.txt")
+	mkLocal("main", "x", "x.txt")
+	mustRun(t, "git", "checkout", "-q", "main")
+
+	out := captureStdout(t, func() {
+		if err := runTrack([]string{"--all"}); err != nil {
+			t.Fatalf("track --all: %v", err)
+		}
+	})
+	s := stateT(t)
+	for name, want := range map[string]string{"a": "main", "b": "a", "c": "b", "x": "main"} {
+		b, ok := s.Get(name)
+		if !ok {
+			t.Fatalf("%s was not adopted:\n%s", name, out)
+		}
+		if b.Parent != want {
+			t.Fatalf("%s parent=%q, want %q", name, b.Parent, want)
+		}
+	}
+	// One undo entry reverts the whole adoption.
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("undo after track --all: %v", err)
+	}
+	for _, name := range []string{"a", "b", "c", "x"} {
+		if stateT(t).IsTracked(name) {
+			t.Fatalf("%s still tracked after undo", name)
+		}
+	}
+}
+
+// TestTrackAllJSONShape pins the aggregate payload: tracked maps each adopted
+// name to its inferred parent.
+func TestTrackAllJSONShape(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "checkout", "-q", "-b", "a")
+	write(t, "a.txt", "a\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "a")
+	mustRun(t, "git", "checkout", "-q", "-b", "b")
+	write(t, "b.txt", "b\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "b")
+	mustRun(t, "git", "checkout", "-q", "main")
+
+	out := captureStdout(t, func() {
+		if err := runTrack([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("track --all --json: %v", err)
+		}
+	})
+	var got stack.OpResult
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("track --all --json did not decode as OpResult: %v\n%s", err, out)
+	}
+	if got.Tracked["a"] != "main" || got.Tracked["b"] != "a" {
+		t.Fatalf("tracked = %v, want {a:main, b:a}", got.Tracked)
+	}
+}
