@@ -1032,6 +1032,218 @@ func TestContinuePromotesPendingReparentWhenHeadNameEmpty(t *testing.T) {
 	}
 }
 
+// TestRequireNoPausedRebase pins the mutation gate: every mutation is refused
+// while a rebase is paused, and a dead probe surfaces rather than letting the
+// mutation through.
+func TestRequireNoPausedRebase(t *testing.T) {
+	f, _, _ := newEnvState()
+	if err := RequireNoPausedRebase(f); err != nil {
+		t.Fatalf("no rebase in progress: %v", err)
+	}
+	f.rebaseActive = true
+	if err := RequireNoPausedRebase(f); err == nil || !strings.Contains(err.Error(), "rebase is in progress") {
+		t.Fatalf("paused rebase = %v, want a refusal", err)
+	}
+	f.rebaseActive = false
+	f.failErr["RebaseInProgress"] = errors.New("probe dead")
+	if err := RequireNoPausedRebase(f); err == nil || !strings.Contains(err.Error(), "probe dead") {
+		t.Fatalf("probe failure = %v, want it surfaced", err)
+	}
+}
+
+// TestRepairClearsStalePendingReparent pins the GC arm: a pending reparent
+// whose rebase is gone (finished/aborted outside st) is a validate problem
+// that repair clears by name — while a live paused rebase keeps its record.
+func TestRepairClearsStalePendingReparent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	s.PendingReparent = &PendingReparent{Branch: "a", Parent: "main", ParentSHA: f.branches["main"]}
+
+	tips, _ := f.Tips()
+	probs := s.Inconsistencies(tips, false)
+	if len(probs) != 1 || probs[0].Kind != StalePendingReparent {
+		t.Fatalf("Inconsistencies (no rebase) = %+v, want StalePendingReparent", probs)
+	}
+	if probs := s.Inconsistencies(tips, true); len(probs) != 0 {
+		t.Fatalf("a live paused reparent must not be reported stale: %+v", probs)
+	}
+
+	res, err := Repair(env, s)
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if s.PendingReparent != nil {
+		t.Fatal("stale pending reparent must be cleared")
+	}
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "stale pending reparent") {
+		t.Fatalf("notes = %v, want the stale-reparent fix named", res.Notes)
+	}
+}
+
+// TestRepairKeepsLivePendingReparent: repair never clears the record of a rebase
+// that is still paused — `st continue` needs it.
+func TestRepairKeepsLivePendingReparent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.rebaseActive = true
+	f.rebaseBranch = "a"
+	s.PendingReparent = &PendingReparent{Branch: "a", Parent: "main", ParentSHA: f.branches["main"]}
+
+	if _, err := Repair(env, s); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if s.PendingReparent == nil {
+		t.Fatal("a live paused reparent must keep its record")
+	}
+}
+
+// TestContinueForeignRebaseStampsAndWarns pins the foreign-rebase path: `st
+// continue` on a rebase st did not start records the rebase's actual target as
+// the branch's base (the truth — that is what the branch now contains), warns
+// that the target was not the recorded parent's line, and the cascade then
+// recovers the branch onto its real parent. Withholding the stamp would leave
+// the divergence invisible to NeedsRestack.
+func TestContinueForeignRebaseStampsAndWarns(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	b, _ := s.Get("b")
+	oldBase := b.ParentSHA
+	cTip := f.branches["c"]
+	aTip := f.branches["a"]
+
+	// A foreign paused rebase on b whose target (c's tip) is unrelated to the
+	// recorded parent a.
+	f.rebaseActive = true
+	f.rebaseBranch = "b"
+	f.rebaseNewBase = cTip
+	f.rebaseOldBase = oldBase
+	f.rebaseInWT["."] = true
+	f.rebaseWT = "."
+
+	res, err := Continue(env, s)
+	if err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	found := false
+	for _, n := range res.Notes {
+		if strings.Contains(n, "not headed for recorded parent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want the foreign-target warning", res.Notes)
+	}
+	// The cascade recovered b onto its real parent a, replaying off the stamped
+	// foreign target — so only b's own commits replayed.
+	var bRebase *rebaseCall
+	for i := len(f.rebaseLog) - 1; i >= 0; i-- {
+		if f.rebaseLog[i].branch == "b" {
+			bRebase = &f.rebaseLog[i]
+			break
+		}
+	}
+	if bRebase == nil || bRebase.oldBase != cTip || bRebase.newBase != aTip {
+		t.Fatalf("cascade rebase of b = %+v, want {newBase: %s (parent tip), oldBase: %s (foreign target)}", bRebase, aTip, cTip)
+	}
+	if b.ParentSHA != aTip {
+		t.Fatalf("ParentSHA after recovery = %s, want parent tip %s", b.ParentSHA, aTip)
+	}
+}
+
+// TestContinueDoesNotAdoptStalePendingReparent: when git's head-name file is
+// unreadable AND a pending reparent is on record, the adoption is only safe if
+// the paused rebase's recorded target matches the record's own target — a stale
+// record (its rebase was finished/aborted outside st) must not be promoted onto
+// an unrelated rebase.
+func TestContinueDoesNotAdoptStalePendingReparent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	b, _ := s.Get("b")
+	oldBase := b.ParentSHA
+
+	// A stale reparent record: its recorded target ("deadbeef") cannot match
+	// any live rebase's onto.
+	s.PendingReparent = &PendingReparent{Branch: "b", Parent: "c", ParentSHA: "deadbeef"}
+	// A paused rebase on b st did not start; head-name unreadable.
+	f.rebaseActive = true
+	f.rebaseBranch = "b"
+	f.rebaseNewBase = f.branches["a"] // ≠ pending.ParentSHA
+	f.rebaseOldBase = oldBase
+	f.rebaseInWT["."] = true
+	f.rebaseWT = "."
+	env.Git = emptyHeadNameGit{f}
+
+	res, err := Continue(env, s)
+	if err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	// The stale record was not promoted onto the foreign rebase — it survives
+	// for `st repair`/`st validate` to report (cleared there, not here).
+	if s.PendingReparent == nil {
+		t.Fatal("the stale pending reparent must not be promoted (or silently cleared) by a foreign continue")
+	}
+	for _, n := range res.Notes {
+		if strings.Contains(n, "completed: b") {
+			t.Fatalf("notes = %v — the record was treated as the rebase's own", res.Notes)
+		}
+	}
+}
+
+// TestContinueStampsAncestorTarget is the regression pin for the legit case:
+// when the recorded parent moved forward while the rebase was paused, the
+// rebase's recorded target is an ancestor of the live parent tip — it must
+// still be stamped (stamping the live tip instead would suppress the needed
+// follow-up restack).
+func TestContinueStampsAncestorTarget(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	b, _ := s.Get("b")
+	targetAtRebase := f.branches["a"]
+
+	// Pause a rebase of b onto a's tip, then advance a while paused.
+	f.rebaseActive = true
+	f.rebaseBranch = "b"
+	f.rebaseNewBase = targetAtRebase
+	f.rebaseOldBase = b.ParentSHA
+	f.rebaseInWT["."] = true
+	f.rebaseWT = "."
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.Add()
+	if err := f.Commit("a moves", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Continue(env, s); err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	// The post-continue cascade's oldBase reveals the stamped value: it must be
+	// the rebase's recorded target (the tip a had when the rebase paused), so
+	// only b's own commits replay — stamping the live (moved) tip would leave
+	// the cascade no correct base to replay from.
+	var bRebase *rebaseCall
+	for i := len(f.rebaseLog) - 1; i >= 0; i-- {
+		if f.rebaseLog[i].branch == "b" {
+			bRebase = &f.rebaseLog[i]
+			break
+		}
+	}
+	if bRebase == nil || bRebase.oldBase != targetAtRebase {
+		t.Fatalf("cascade rebase of b = %+v, want oldBase %s (the recorded rebase target)", bRebase, targetAtRebase)
+	}
+	if needs, _ := s.NeedsRestack(f, "b"); needs {
+		t.Fatal("after continue + cascade, b should be reconciled onto the moved parent")
+	}
+}
+
 // The dry-run previews must enforce the same clean-tree precondition as the real
 // ops, so they don't promise restacks the real command would refuse.
 func TestRestackPlanRefusesDirtyTree(t *testing.T) {

@@ -61,6 +61,21 @@ func AlsoFailed(primary error, what string, secondary error) error {
 	return fmt.Errorf("%w; additionally failed to %s: %w", primary, what, secondary)
 }
 
+// RequireNoPausedRebase refuses a stack mutation while a rebase is in progress:
+// state edits mid-rebase can orphan the PendingReparent record or reorder the
+// stack under the paused rebase (e.g. renaming the branch being rebased). st
+// continue/st abort bypass this on purpose — they exist to resolve the pause.
+func RequireNoPausedRebase(g Git) error {
+	inProgress, err := g.RebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state: %w", err)
+	}
+	if inProgress {
+		return errors.New("a rebase is in progress; resolve it with `st continue` or `st abort` first")
+	}
+	return nil
+}
+
 // requireClean returns ErrDirty when the working tree has uncommitted changes.
 func requireClean(g Git) error {
 	clean, err := g.IsClean()
@@ -927,8 +942,13 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	// Fall back to it so the reparent is still promoted and HEAD restored, rather
 	// than silently leaving cur mis-parented. This mirrors `st abort`, which
 	// already treats an empty head-name plus a pending reparent as that branch.
+	// The adoption is verified against the paused rebase's recorded target: a
+	// stale record (its rebase finished or aborted outside st) or a foreign
+	// rebase has a different onto, and must not be promoted.
 	if conflicted == "" && s.PendingReparent != nil {
-		conflicted = s.PendingReparent.Branch
+		if onto, err := g.RebaseOntoSHA(); err == nil && onto == s.PendingReparent.ParentSHA {
+			conflicted = s.PendingReparent.Branch
+		}
 	}
 
 	// Capture the target the paused rebase is actually replaying onto BEFORE
@@ -965,6 +985,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	}
 
 	// The just-finished branch now sits on its parent's current tip.
+	var foreignNote string
 	if conflicted != "" {
 		if pending := s.PendingReparent; pending != nil && pending.Branch == conflicted {
 			if b, ok := s.Get(conflicted); ok {
@@ -976,7 +997,17 @@ func Continue(env Env, s *State) (*OpResult, error) {
 				return nil, err
 			}
 		} else if b, ok := s.Get(conflicted); ok {
+			// Record the target the rebase actually replayed onto — even when it
+			// is not the recorded parent's tip-line (a rebase st did not start).
+			// Stamping the truth is what lets NeedsRestack see the divergence and
+			// the cascade below recover the branch onto its parent; withholding
+			// the stamp would leave the branch sitting on the foreign target
+			// while reporting clean. The warning tells the user this was not an
+			// st-initiated rebase.
 			b.ParentSHA = ontoSHA
+			if !rebaseTargetIsParentBase(g, b, ontoSHA) {
+				foreignNote = fmt.Sprintf("continued a rebase on %s that was not headed for recorded parent %s; recorded the actual target as its base and restacked (run `st repair` if the stack needs reconciling)", conflicted, b.Parent)
+			}
 			if err := env.save(); err != nil {
 				return nil, err
 			}
@@ -1003,7 +1034,30 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	if conflicted != "" {
 		res.Notes = []string{"completed: " + conflicted}
 	}
+	if foreignNote != "" {
+		res.Notes = append(res.Notes, foreignNote)
+	}
 	return res, nil
+}
+
+// rebaseTargetIsParentBase reports whether ontoSHA — the target the just-finished
+// rebase recorded — is the tip of b's recorded parent or an ancestor of it (the
+// ancestor case covers the parent moving forward while the rebase was paused).
+// When it is not, the rebase was not st-initiated and Continue warns while still
+// stamping the real target so the cascade can recover the branch.
+func rebaseTargetIsParentBase(g Git, b *Branch, ontoSHA string) bool {
+	if ontoSHA == "" {
+		return false
+	}
+	tip, err := g.RevParse(branchTipRef(b.Parent))
+	if err != nil {
+		return false // parent ref unreadable: cannot prove the target was ours
+	}
+	if tip == ontoSHA {
+		return true
+	}
+	anc, err := g.IsAncestor(ontoSHA, tip)
+	return err == nil && anc
 }
 
 // restackAll restacks every stack rooted on the trunk, parents before children,

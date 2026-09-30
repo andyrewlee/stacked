@@ -274,6 +274,60 @@ func TestUndoRejectsActiveRebase(t *testing.T) {
 	}
 }
 
+// TestMutateRefusesPausedRebase pins the mutateState gate: every mutating
+// command funnels through it, so a paused rebase refuses even a command that
+// itself performs no rebasing — and no undo entry is recorded for the refusal.
+func TestMutateRefusesPausedRebase(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	write(t, "f.txt", "A\nB\n")
+	if err := runCreate([]string{"feat-b", "-a", "-m", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	mustCheckout(t, "feat-a")
+
+	write(t, "f.txt", "X\n")
+	if err := runModify([]string{"-a"}); err == nil {
+		t.Fatalf("expected a conflict")
+	}
+	if inProgress, _ := git.RebaseInProgress(); !inProgress {
+		t.Fatalf("expected a rebase in progress")
+	}
+
+	before, err := stack.ListUndo()
+	if err != nil {
+		t.Fatalf("ListUndo: %v", err)
+	}
+	for _, run := range [][]string{
+		// Args chosen so each command parses cleanly and reaches the gate.
+		{"rename", "feat-b", "feat-renamed"},
+		{"track", "feat-a"},
+		{"untrack", "feat-b"},
+	} {
+		var err error
+		switch run[0] {
+		case "rename":
+			err = runRename(run[1:])
+		case "track":
+			err = runTrack(run[1:])
+		case "untrack":
+			err = runUntrack(run[1:])
+		}
+		if err == nil || !strings.Contains(err.Error(), "rebase is in progress") {
+			t.Fatalf("%s mid-rebase = %v, want the paused-rebase refusal", run[0], err)
+		}
+	}
+	// The refusal happens before any undo entry is recorded.
+	after, err := stack.ListUndo()
+	if err != nil {
+		t.Fatalf("ListUndo: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("refused mutations journaled entries: %d -> %d", len(before), len(after))
+	}
+}
+
 // An empty undo journal is a success-shaped refusal, not an error: the JSON
 // arm emits {"undone": false} (and the text arm prints "nothing to undo"),
 // both exiting 0.

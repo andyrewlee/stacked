@@ -615,7 +615,7 @@ func checkInvariants(t *testing.T, f *fakeGit, s *State, step int) {
 	if err != nil {
 		t.Fatalf("step %d: Tips: %v", step, err)
 	}
-	if ps := s.Inconsistencies(tips); len(ps) != 0 {
+	if ps := s.Inconsistencies(tips, f.rebaseActive); len(ps) != 0 {
 		t.Fatalf("step %d: Inconsistencies on a reconciled stack: %+v", step, ps)
 	}
 }
