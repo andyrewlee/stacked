@@ -12,11 +12,12 @@ import (
 type problemKind int
 
 const (
-	TrunkMissing    problemKind = iota // the trunk branch's git ref is gone
-	BranchMissing                      // a tracked branch's git ref is gone
-	ParentUntracked                    // parent is neither the trunk nor a tracked branch
-	ParentMissing                      // parent is tracked but its git ref is gone
-	ParentCycle                        // the parent chain loops before reaching the trunk
+	TrunkMissing         problemKind = iota // the trunk branch's git ref is gone
+	BranchMissing                           // a tracked branch's git ref is gone
+	ParentUntracked                         // parent is neither the trunk nor a tracked branch
+	ParentMissing                           // parent is tracked but its git ref is gone
+	ParentCycle                             // the parent chain loops before reaching the trunk
+	StalePendingReparent                    // a recorded pending reparent outlived its rebase
 )
 
 // Problem is one inconsistency found by Inconsistencies. Detail carries the
@@ -54,14 +55,19 @@ func (s *State) branchProblems(tips map[string]string, name string) []Problem {
 }
 
 // Inconsistencies returns every inconsistency between the recorded state and the
-// repository, computed from one Tips() map: a missing trunk first, then each
-// tracked branch in sorted order (missing branch, invalid parent, cycle). It is
-// the single definition of an inconsistent stack — validate renders every
-// Problem and Repair fixes them, so the two cannot drift apart.
-func (s *State) Inconsistencies(tips map[string]string) []Problem {
+// repository, computed from one Tips() map: a missing trunk first, a pending
+// reparent whose rebase is gone (rebaseInProgress reports whether git currently
+// has one), then each tracked branch in sorted order (missing branch, invalid
+// parent, cycle). It is the single definition of an inconsistent stack —
+// validate renders every Problem and Repair fixes them, so the two cannot
+// drift apart.
+func (s *State) Inconsistencies(tips map[string]string, rebaseInProgress bool) []Problem {
 	var ps []Problem
 	if _, ok := tips[s.Trunk]; !ok {
 		ps = append(ps, Problem{Kind: TrunkMissing, Branch: s.Trunk})
+	}
+	if s.PendingReparent != nil && !rebaseInProgress {
+		ps = append(ps, Problem{Kind: StalePendingReparent, Branch: s.PendingReparent.Branch, Detail: s.PendingReparent.Parent})
 	}
 	for _, name := range sortedBranchNames(s) {
 		ps = append(ps, s.branchProblems(tips, name)...)
@@ -130,6 +136,20 @@ func Repair(env Env, s *State) (*OpResult, error) {
 			b.Parent = s.Trunk
 			b.ParentSHA = repairedParentSHA(g, s.Trunk, name, trunkTip)
 			fixes = append(fixes, fmt.Sprintf("broke a parent cycle at %s (re-parented onto trunk)", name))
+		}
+	}
+	// A pending reparent whose rebase is gone is stale — the rebase was
+	// finished or aborted outside st. Clear it so a later `st continue` cannot
+	// promote it onto an unrelated rebase. A live paused rebase keeps its
+	// record; `st continue` still needs it.
+	if s.PendingReparent != nil {
+		inProgress, err := g.RebaseInProgress()
+		if err != nil {
+			return nil, fmt.Errorf("checking rebase state: %w", err)
+		}
+		if !inProgress {
+			fixes = append(fixes, fmt.Sprintf("cleared the stale pending reparent of %s onto %s (its rebase is gone)", s.PendingReparent.Branch, s.PendingReparent.Parent))
+			s.PendingReparent = nil
 		}
 	}
 	return &OpResult{Summary: "repair complete", Notes: fixes}, nil

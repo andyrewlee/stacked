@@ -44,9 +44,14 @@ func runValidate(args []string) error {
 	drift := s.DriftAgainst(tips)
 
 	// The engine is the single source of truth for what an inconsistent stack is
-	// (the same classifier st repair fixes); this command just renders it.
+	// (the same classifier st repair fixes); this command just renders it. The
+	// rebase probe distinguishes a live paused reparent from a stale record.
+	inRebase, err := git.RebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state: %w", err)
+	}
 	problemBranch := map[string]bool{}
-	for _, p := range s.Inconsistencies(tips) {
+	for _, p := range s.Inconsistencies(tips, inRebase) {
 		problems = append(problems, formatProblem(p))
 		problemBranch[p.Branch] = true
 	}
@@ -131,6 +136,8 @@ func formatProblem(p stack.Problem) string {
 		return fmt.Sprintf("%s has parent %q whose git branch is missing", p.Branch, p.Detail)
 	case stack.ParentCycle:
 		return fmt.Sprintf("%s is part of a parent cycle: %s", p.Branch, p.Detail)
+	case stack.StalePendingReparent:
+		return fmt.Sprintf("%s has a recorded pending reparent onto %q but no rebase is in progress (run: st repair)", p.Branch, p.Detail)
 	}
 	return ""
 }

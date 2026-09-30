@@ -41,7 +41,7 @@ func TestInconsistenciesClassifiesEveryKind(t *testing.T) {
 		{Kind: ParentCycle, Branch: "x", Detail: "x -> y -> x"},
 		{Kind: ParentCycle, Branch: "y", Detail: "y -> x -> y"},
 	}
-	if got := s.Inconsistencies(tips); !reflect.DeepEqual(got, want) {
+	if got := s.Inconsistencies(tips, false); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Inconsistencies =\n %+v\nwant\n %+v", got, want)
 	}
 
@@ -52,7 +52,7 @@ func TestInconsistenciesClassifiesEveryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	tips, _ = f.Tips()
-	if got := s.Inconsistencies(tips); len(got) == 0 || got[0].Kind != TrunkMissing {
+	if got := s.Inconsistencies(tips, false); len(got) == 0 || got[0].Kind != TrunkMissing {
 		t.Fatalf("after deleting trunk, first problem = %+v, want TrunkMissing first", got)
 	}
 }
