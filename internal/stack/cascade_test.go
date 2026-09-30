@@ -71,13 +71,80 @@ func TestRestackCascadeSkipsDirtyWorktree(t *testing.T) {
 	if did {
 		t.Fatal("a dirty owner worktree must be skipped, not rebased")
 	}
-	if skipped := s.drainSkippedWorktrees(); len(skipped) != 1 || skipped[0] != "feat-a" {
+	skipped, _ := s.drainSkippedWorktrees()
+	if len(skipped) != 1 || skipped[0] != "feat-a" {
 		t.Fatalf("drainSkippedWorktrees = %v, want [feat-a]", skipped)
 	}
 	// feat-a is left needing a restack (never clobbered).
 	needs, _ := s.NeedsRestack(f, "feat-a")
 	if !needs {
 		t.Fatal("skipped feat-a should still need a restack")
+	}
+}
+
+// TestRestackCascadeSkipsForeignRebaseWorktree pins the headline guard: a
+// rebase paused in the owner worktree that st did NOT start must make the
+// branch SKIPPED — never answered with RebaseAbortIn, which would destroy the
+// user's foreign rebase.
+func TestRestackCascadeSkipsForeignRebaseWorktree(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.rebaseInWT["/wt/feat-a"] = true // a foreign paused rebase st did not start
+
+	did, err := s.restackBranch(env, "feat-a")
+	if err != nil {
+		t.Fatalf("restackBranch with a foreign paused rebase: %v", err)
+	}
+	if did {
+		t.Fatal("a worktree mid-rebase must be skipped, not rebased")
+	}
+	if f.calls["RebaseAbortIn"] != 0 || f.calls["RebaseOntoIn"] != 0 {
+		t.Fatalf("no rebase call may reach a foreign-rebase worktree (RebaseOntoIn=%d, RebaseAbortIn=%d)",
+			f.calls["RebaseOntoIn"], f.calls["RebaseAbortIn"])
+	}
+	if !f.rebaseInWT["/wt/feat-a"] {
+		t.Fatal("the foreign rebase must be left untouched")
+	}
+	skipped, rebase := s.drainSkippedWorktrees()
+	if len(skipped) != 1 || skipped[0] != "feat-a" {
+		t.Fatalf("skipped = %v, want [feat-a]", skipped)
+	}
+	if !rebase["feat-a"] {
+		t.Fatal("the skip must be marked as a rebase skip, not a dirty-tree skip")
+	}
+	// feat-a is left needing a restack (never clobbered).
+	if needs, _ := s.NeedsRestack(f, "feat-a"); !needs {
+		t.Fatal("skipped feat-a should still need a restack")
+	}
+}
+
+// TestRestackCascadeRebaseProbeError: a failed RebaseInProgressIn probe must
+// surface as an error — silently treating it as "no rebase" could lead to
+// aborting a foreign rebase.
+func TestRestackCascadeRebaseProbeError(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.failErr["RebaseInProgressIn"] = errors.New("git dir unreadable")
+
+	_, err := s.restackBranch(env, "feat-a")
+	if err == nil || !strings.Contains(err.Error(), "git dir unreadable") {
+		t.Fatalf("restackBranch with a dead rebase probe = %v, want the probe error", err)
+	}
+	if f.calls["RebaseAbortIn"] != 0 {
+		t.Fatal("a probe failure must never be followed by an abort")
+	}
+}
+
+// TestRestackCascadeForeignRebaseSkipNote pins the note wording: a rebase skip
+// names the rebase, not the dirty-tree reason.
+func TestRestackCascadeForeignRebaseSkipNote(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.rebaseInWT["/wt/feat-a"] = true
+
+	if _, err := s.restackBranch(env, "feat-a"); err != nil {
+		t.Fatalf("restackBranch: %v", err)
+	}
+	notes := skippedWorktreeNotes(s)
+	if len(notes) != 1 || !strings.Contains(notes[0], "rebase is already in progress") {
+		t.Fatalf("notes = %v, want the rebase-in-progress wording", notes)
 	}
 }
 

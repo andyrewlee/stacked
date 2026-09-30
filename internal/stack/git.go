@@ -79,6 +79,11 @@ type Git interface {
 	// cross-worktree rebase that hit a conflict can be rolled back rather than
 	// left paused in a worktree the main process cannot drive.
 	RebaseAbortIn(dir string) error
+	// RebaseInProgressIn reports whether a rebase is already in progress in the
+	// worktree at dir — including one st did not start. Rebase metadata is
+	// per-worktree (it lives under that worktree's own git dir), so a paused
+	// rebase elsewhere is invisible to RebaseInProgress and vice versa.
+	RebaseInProgressIn(dir string) (bool, error)
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)

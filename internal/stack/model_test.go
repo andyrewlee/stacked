@@ -399,7 +399,8 @@ func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned
 
 	// drainSkippedWorktrees is drained on read; snapshot it once.
 	skipped := map[string]bool{}
-	for _, name := range s.drainSkippedWorktrees() {
+	drained, _ := s.drainSkippedWorktrees()
+	for _, name := range drained {
 		skipped[name] = true
 	}
 

@@ -65,17 +65,34 @@ type State struct {
 	PendingReparent *PendingReparent `json:"pendingReparent,omitempty"`
 
 	// skippedWorktrees collects branches the current restack skipped because they
-	// live in a dirty linked worktree (owner-driven cascade). It is transient
+	// live in a linked worktree that is dirty or has a rebase already in
+	// progress (owner-driven cascade); skippedRebase marks which entries were
+	// rebase skips so the note names the right reason. Both are transient
 	// (never persisted) and consumed by the engine to build OpResult notes.
-	skippedWorktrees []string `json:"-"`
+	skippedWorktrees []string        `json:"-"`
+	skippedRebase    map[string]bool `json:"-"`
 }
 
-// drainSkippedWorktrees returns the branches the last restack skipped because their
-// owning worktree was dirty, and clears the list.
-func (s *State) drainSkippedWorktrees() []string {
-	skipped := s.skippedWorktrees
-	s.skippedWorktrees = nil
-	return skipped
+// recordSkippedWorktree notes that the current restack skipped branch because
+// its owning worktree could not be touched; rebase selects the skip's reason
+// (a paused rebase vs a dirty tree) for the note wording.
+func (s *State) recordSkippedWorktree(name string, rebase bool) {
+	s.skippedWorktrees = append(s.skippedWorktrees, name)
+	if rebase {
+		if s.skippedRebase == nil {
+			s.skippedRebase = map[string]bool{}
+		}
+		s.skippedRebase[name] = true
+	}
+}
+
+// drainSkippedWorktrees returns the branches the last restack skipped —
+// along with which skips were for a rebase already in progress rather than a
+// dirty worktree — and clears the list.
+func (s *State) drainSkippedWorktrees() (skipped []string, rebase map[string]bool) {
+	skipped, rebase = s.skippedWorktrees, s.skippedRebase
+	s.skippedWorktrees, s.skippedRebase = nil, nil
+	return skipped, rebase
 }
 
 // Get returns the tracked Branch with the given name and whether it exists.
