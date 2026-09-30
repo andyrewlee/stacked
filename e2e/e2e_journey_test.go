@@ -382,6 +382,51 @@ func TestUndoCreateRemovesManuallyMaterializedWorktree(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestUndoFromUnrecordedCreatedWorktreeWithShim covers the gap between the two
+// journeys above: the branch was created plainly (the journal recorded no
+// worktree), its worktree was materialized afterward by `st worktree`, and
+// `st undo` runs from INSIDE it. Undo still deletes the branch — and the
+// worktree with it — so the shim must teleport the caller to the main
+// worktree first rather than letting the removal delete the process's cwd.
+func TestUndoFromUnrecordedCreatedWorktreeWithShim(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.stOK("create", "feat-x")
+	r.stOK("checkout", "main")
+	out := r.stOK("worktree", "feat-x", "--json").stdout
+	var created struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("decode worktree json: %v\n%s", err, out)
+	}
+
+	directive := filepath.Join(t.TempDir(), "cd")
+	res := r.stInEnv(created.Path, []string{"ST_CD_FILE=" + directive}, "undo")
+	if res.exitCode != 0 {
+		t.Fatalf("st undo from unrecorded created worktree: exit %d\nstdout:\n%s\nstderr:\n%s",
+			res.exitCode, res.stdout, res.stderr)
+	}
+	got, err := os.ReadFile(directive)
+	if err != nil {
+		t.Fatalf("read cd directive: %v", err)
+	}
+	gotResolved, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got)))
+	wantResolved, _ := filepath.EvalSymlinks(r.dir)
+	if gotResolved != wantResolved {
+		t.Fatalf("undo cd directive = %q, want main worktree %q", got, r.dir)
+	}
+	if r.branchExists("feat-x") {
+		t.Fatal("undo left feat-x branch behind")
+	}
+	if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
+		t.Fatalf("undo left created worktree at %q: %v", created.Path, err)
+	}
+	r.stOK("validate")
+}
+
 func TestUndoCreateWorktreeChildOfLinkedParentWithShim(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)

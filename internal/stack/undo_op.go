@@ -48,7 +48,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		var extra []string
 		for name := range candidates {
-			if branchCreatedByEntry(entry, name) && g.BranchExists(name) {
+			if entry.CreatesBranch(name) && g.BranchExists(name) {
 				extra = append(extra, name)
 			}
 		}
@@ -168,6 +168,13 @@ func removeCreatedWorktree(env Env, branch, path string) error {
 	if path != "" && !sameWorktreePath(owner.Path, path) {
 		return fmt.Errorf("branch is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", owner.Path, path)
 	}
+	// Belt under cmd's teleport pre-flight: never remove the worktree the
+	// caller is standing in — doing so deletes the process's own cwd.
+	if within, err := CwdWithinWorktree(env.Git, owner.Path); err != nil {
+		return err
+	} else if within {
+		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", owner.Path)
+	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
 		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
@@ -202,19 +209,41 @@ func checkoutBlockedByOtherWorktree(err error) bool {
 		strings.Contains(msg, "checked out at")
 }
 
-// branchCreatedByEntry reports whether name was created by the command the
-// entry snapshots: it is listed in CreatedBranches, or absent from the
-// local-branch list captured before the command ran.
-func branchCreatedByEntry(entry *UndoEntry, name string) bool {
-	for _, created := range entry.CreatedBranches {
+// CreatesBranch reports whether name was created by the command the entry
+// snapshots: it is listed in CreatedBranches, or absent from the local-branch
+// list captured before the command ran. Note it answers true for ANY branch
+// absent from LocalBranches — including one created after the snapshot — so
+// callers checking "does undo doom this branch" must also require candidate
+// membership; DoomedBranch does both.
+func (e *UndoEntry) CreatesBranch(name string) bool {
+	for _, created := range e.CreatedBranches {
 		if created == name {
 			return true
 		}
 	}
-	for _, existed := range entry.LocalBranches {
+	for _, existed := range e.LocalBranches {
 		if existed == name {
 			return false
 		}
 	}
 	return true
+}
+
+// DoomedBranch reports whether Undo will try to delete name: the deletion loop
+// only ever considers the candidate set (current-state branches ∪ the entry's
+// CreatedBranches) and only members the entry created are doomed. Branch
+// liveness is a git probe the caller adds; the LocalBranches==nil degrade
+// (deletion skipped entirely) is honored here.
+func (e *UndoEntry) DoomedBranch(s *State, name string) bool {
+	if e.LocalBranches == nil {
+		return false
+	}
+	candidate := false
+	if s != nil {
+		candidate = name == s.Trunk || s.IsTracked(name)
+	}
+	for _, c := range e.CreatedBranches {
+		candidate = candidate || c == name
+	}
+	return candidate && e.CreatesBranch(name)
 }

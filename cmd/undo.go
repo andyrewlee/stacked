@@ -131,7 +131,16 @@ func prepareUndoCurrentCreatedWorktree(entry *stack.UndoEntry, s *stack.State) (
 	if err != nil {
 		return "", nil
 	}
-	if !undoEntryCreatedWorktree(entry, cur) {
+	// The doomed set is the journal's recorded created-worktrees PLUS any
+	// branch Undo discovers was created by the entry — the journal only
+	// records worktrees that existed when the command ran, so a worktree
+	// materialized later (`st worktree <branch>` after `st create`) is still
+	// removed by Undo and would take the caller's cwd with it.
+	doomed := undoEntryCreatedWorktree(entry, cur)
+	if !doomed && entry.DoomedBranch(s, cur) && git.BranchExists(cur) {
+		doomed = true
+	}
+	if !doomed {
 		return "", nil
 	}
 	wts, err := worktrees()

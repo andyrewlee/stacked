@@ -109,6 +109,74 @@ func TestWorktreeMutationsInvalidateCache(t *testing.T) {
 	}
 }
 
+// TestWorktreeRemoveRefusesFromInsideTarget pins the cwd guard on the
+// single-branch removal path: run from inside the worktree being removed,
+// `st worktree rm` refuses instead of deleting the process's own cwd.
+func TestWorktreeRemoveRefusesFromInsideTarget(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	// mustCheckout warmed the worktree list mid-command while HEAD was still
+	// feat-a; reset so materializeWorktree sees the post-checkout owners.
+	resetWorktreeCache()
+
+	created, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	t.Chdir(created.Path)
+	resetWorktreeCache()
+
+	err = worktreeRemove("feat-a", false)
+	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
+		t.Fatalf("worktreeRemove from inside target = %v, want the cwd refusal", err)
+	}
+	if _, statErr := os.Stat(created.Path); statErr != nil {
+		t.Fatalf("refused removal still deleted %q: %v", created.Path, statErr)
+	}
+}
+
+// TestWorktreeRemoveAllSkipsCwdWorktree: rm --all must not stop on the caller's
+// own worktree — it is skipped like a dirty one while the rest are removed.
+func TestWorktreeRemoveAllSkipsCwdWorktree(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	resetWorktreeCache() // see above: checkout warmed the list pre-move
+
+	stay, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree feat-a: %v", err)
+	}
+	gone, err := materializeWorktree("feat-b")
+	if err != nil {
+		t.Fatalf("materializeWorktree feat-b: %v", err)
+	}
+	t.Chdir(stay.Path)
+	resetWorktreeCache()
+
+	out := captureStdout(t, func() {
+		if err := worktreeRemoveAll(false); err != nil {
+			t.Fatalf("worktreeRemoveAll: %v", err)
+		}
+	})
+	if !strings.Contains(out, "skipped feat-a") || !strings.Contains(out, "inside") {
+		t.Fatalf("rm --all output = %q, want the inside-it skip named", out)
+	}
+	if _, statErr := os.Stat(stay.Path); statErr != nil {
+		t.Fatalf("rm --all removed the caller's worktree %q: %v", stay.Path, statErr)
+	}
+	if _, statErr := os.Stat(gone.Path); !os.IsNotExist(statErr) {
+		t.Fatalf("rm --all left sibling worktree %q: %v", gone.Path, statErr)
+	}
+}
+
 // TestGitIgnoredSet pins the batched check-ignore probe: one spawn classifies
 // every manifest entry, exit status 1 (nothing ignored) is an empty set, and
 // -z round-trips paths with spaces verbatim.

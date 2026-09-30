@@ -467,6 +467,57 @@ func TestDeleteCurrentRefusesParentInOtherWorktree(t *testing.T) {
 	}
 }
 
+// TestDeleteRefusesWhenCwdInsideOwnerWorktree pins the releaseOwnedWorktree
+// cwd guard: deleting the branch whose linked worktree contains the caller's
+// cwd refuses up front. It replaced a `branch == cur` probe that silently
+// skipped the removal — in the fake's model, f.head is the MAIN worktree's
+// branch, so cur ("a") differed from the doomed branch ("b") and the old probe
+// could not see that the caller stood inside /wt/b.
+func TestDeleteRefusesWhenCwdInsideOwnerWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/b", "b")
+	f.repoRoot = "/wt/b"                    // the caller stands inside b's worktree…
+	if err := f.Checkout("a"); err != nil { // …while main is checked out on a
+		t.Fatal(err)
+	}
+
+	_, err := Delete(env, s, "b", true)
+	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
+		t.Fatalf("delete = %v, want the cwd-inside refusal", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("delete removed the worktree the caller was inside")
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("delete deleted the branch despite refusing its worktree")
+	}
+}
+
+// TestDeleteRefusesWhenCwdInsideOwnerWorktreeDetached — same refusal under a
+// detached HEAD: RepoRoot, not CurrentBranch, is what locates the caller's
+// worktree, so the guard still fires where the old branch==cur probe could not.
+func TestDeleteRefusesWhenCwdInsideOwnerWorktreeDetached(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/b", "b")
+	f.repoRoot = "/wt/b"
+	f.head, f.detachedAt = "", f.branches["b"]
+
+	_, err := Delete(env, s, "b", true)
+	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
+		t.Fatalf("delete = %v, want the cwd-inside refusal", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("delete removed the worktree the caller was inside")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("delete deleted the branch despite refusing its worktree")
+	}
+}
+
 func TestCrossWorktreeConflictAbortFailureSurfaces(t *testing.T) {
 	f, s, env := setupCascade(t)
 	f.conflictOn("feat-a")
