@@ -87,6 +87,11 @@ type Git interface {
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)
+	// RepoRoot returns the top level of the worktree containing the process's
+	// current directory (rev-parse --show-toplevel) — the answer to "which
+	// worktree am I standing in", used by guards that must never delete the
+	// caller's own cwd.
+	RepoRoot() (string, error)
 	// DiffCachedHunks returns the staged text-change regions (git diff
 	// --cached -U0) plus an UnsupportedRecord for every staged section that
 	// is not plain text hunks (binary, mode change, rename, quoted path).

@@ -298,13 +298,25 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 	if !ok {
 		return "", nil
 	}
-	cur, _ := env.Git.CurrentBranch()
-	if branch == cur {
-		return "", nil
-	}
 	main, _ := MainWorktree(wts)
 	if owner.Path == main.Path {
+		// A branch checked out in the main worktree is not removable state —
+		// nothing here releases a worktree. When it is ALSO the caller's
+		// current branch the delete/fold callers' checkout dance handles it;
+		// only refuse when it is checked out there and the caller stands
+		// elsewhere.
+		if cur, _ := env.Git.CurrentBranch(); branch == cur {
+			return "", nil
+		}
 		return "", fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", branch, owner.Path)
+	}
+	// Linked owner: never remove the worktree the caller is standing in —
+	// RepoRoot (not CurrentBranch) decides, so a detached HEAD inside the
+	// worktree is caught too.
+	if within, err := CwdWithinWorktree(env.Git, owner.Path); err != nil {
+		return "", err
+	} else if within {
+		return "", fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, branch)
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
@@ -322,4 +334,19 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 // single-tree behavior, which must stay byte-for-byte unchanged.
 func IsMultiWorktree(worktrees []git.Worktree) bool {
 	return len(worktrees) > 1
+}
+
+// CwdWithinWorktree reports whether the process's own working directory sits
+// inside the worktree rooted at dir. Removal paths call it before deleting a
+// worktree: removing the tree the caller is standing in would leave it in a
+// deleted directory (or fail mid-operation on gits that refuse). The probe is
+// fail-closed — a RepoRoot error surfaces rather than guessing "not inside".
+// Unlike a CurrentBranch comparison it does not depend on HEAD being attached,
+// so a detached HEAD inside the worktree is still caught.
+func CwdWithinWorktree(g Git, dir string) (bool, error) {
+	root, err := g.RepoRoot()
+	if err != nil {
+		return false, fmt.Errorf("locating the current worktree root: %w", err)
+	}
+	return sameWorktreePath(root, dir), nil
 }

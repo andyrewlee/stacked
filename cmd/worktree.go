@@ -199,6 +199,19 @@ func worktreeRemove(branch string, asJSON bool) error {
 		}
 		return fmt.Errorf("%q has no worktree", branch)
 	}
+	// Removing the worktree the caller is standing in would delete this
+	// process's own cwd; a paused rebase inside the target would be destroyed
+	// with it. Both refuse up front rather than letting git fail partway.
+	if within, err := stack.CwdWithinWorktree(gitShell, wt.Path); err != nil {
+		return err
+	} else if within {
+		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
+	}
+	if inProgress, err := git.RebaseInProgressIn(wt.Path); err != nil {
+		return fmt.Errorf("checking worktree %q for a paused rebase: %w", wt.Path, err)
+	} else if inProgress {
+		return fmt.Errorf("cannot remove worktree %q: a rebase is in progress there; finish or abort it first", wt.Path)
+	}
 	removeErr := git.WorktreeRemove(wt.Path, false)
 	resetWorktreeCache()
 	if removeErr != nil {
@@ -289,6 +302,23 @@ func worktreeRemoveAll(asJSON bool) error {
 		wt, ok := stack.LinkedOwnerOf(wts, name)
 		if !ok {
 			continue // no worktree to remove
+		}
+		// Never remove the worktree the caller is standing in (it would delete
+		// the process's cwd) or one holding a paused rebase — both are skips,
+		// like the dirty check, not hard failures.
+		if within, err := stack.CwdWithinWorktree(gitShell, wt.Path); err != nil {
+			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
+		} else if within {
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "you are inside it"})
+			continue
+		}
+		if inProgress, err := git.RebaseInProgressIn(wt.Path); err != nil {
+			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
+		} else if inProgress {
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "a rebase is in progress there"})
+			continue
 		}
 		clean, err := git.IsCleanIn(wt.Path)
 		if err != nil {

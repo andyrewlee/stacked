@@ -121,7 +121,7 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 			candidates[name] = true
 		}
 		for name := range candidates {
-			if branchCreatedByEntry(entry, name) && g.BranchExists(name) {
+			if entry.CreatesBranch(name) && g.BranchExists(name) {
 				created = append(created, name)
 			}
 		}
@@ -139,9 +139,12 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	}
 
 	// prepareUndoCurrentCreatedWorktree's gate: the current branch's worktree
-	// was created by the undone op — removing it deletes the caller's cwd, so
-	// a real undo needs the shell shim to teleport out first.
-	if entry.CreatedWorktrees[cur] != "" {
+	// is doomed by the undone op — removing it deletes the caller's cwd, so a
+	// real undo needs the shell shim to teleport out first. The doom set is the
+	// recorded CreatedWorktrees PLUS any discovered created branch whose live
+	// worktree Undo removes (the journal only records worktrees that existed
+	// when the command ran — one materialized later is still doomed).
+	if entry.CreatedWorktrees[cur] != "" || (entry.DoomedBranch(s, cur) && g.BranchExists(cur)) {
 		if _, ok := LinkedOwnerOf(wts, cur); ok && !canTeleport {
 			res.Blockers = append(res.Blockers, "cwd_inside_created_worktree:"+cur)
 		}

@@ -447,6 +447,66 @@ func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
 	}
 }
 
+// TestUndoRefusesInsideUnrecordedDoomedWorktree pins the engine belt under
+// cmd's teleport pre-flight: a branch the undone op created whose worktree was
+// materialized AFTER the journal entry ran (so the journal recorded none) is
+// still doomed — Undo must refuse when the caller's cwd is inside it rather
+// than deleting the process's own worktree.
+func TestUndoRefusesInsideUnrecordedDoomedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.addWorktree("/wt/b", "b") // materialized after the op ran: unrecorded
+	f.repoRoot = "/wt/b"        // the caller is standing inside it
+	// (f.head stays "a" — the fake binds head to the main worktree; the linked
+	// worktree is where the process's cwd notionally sits via repoRoot)
+
+	_, err := Undo(env, s, entry)
+	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
+		t.Fatalf("undo = %v, want the cwd-inside refusal", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("undo removed the worktree the caller was inside")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("undo deleted the branch despite refusing its worktree")
+	}
+}
+
+// TestUndoPropagatesRepoRootProbeFailure: the cwd guard is fail-closed — a
+// broken rev-parse probe surfaces rather than guessing "not inside" and
+// deleting the caller's worktree.
+func TestUndoPropagatesRepoRootProbeFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.addWorktree("/wt/b", "b")
+	boom := errors.New("rev-parse exploded")
+	f.failErr["RepoRoot"] = boom
+
+	_, err := Undo(env, s, entry)
+	if err == nil || !strings.Contains(err.Error(), "rev-parse exploded") {
+		t.Fatalf("undo = %v, want the RepoRoot probe failure surfaced", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("undo removed the worktree after its cwd probe failed")
+	}
+}
+
 // TestUndoRejectsFutureSnapshot pins the schema barrier on the undo path: a
 // snapshot — or a supplied nonnil current State — stamped with a version this
 // binary does not understand must be refused BEFORE any branch/worktree

@@ -91,6 +91,12 @@ type fakeGit struct {
 	// and continues clear the right per-dir entry.
 	rebaseInWT map[string]bool
 	rebaseWT   string
+	// repoRoot is what RepoRoot reports — the top level of the worktree the
+	// test's cwd is meant to sit in. "" means "the main worktree" (the fake
+	// does not model a path for it), so a guard comparing against a linked
+	// worktree's Path sees not-inside; set it to an owner's Path to exercise
+	// the you-are-inside-it refusals.
+	repoRoot string
 
 	// failErr forces method-level errors beyond the dedicated maps: the key
 	// is the method name (e.g. "RebaseInProgress", "MergeBase"). failAfter
@@ -520,6 +526,13 @@ func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+func (f *fakeGit) RepoRoot() (string, error) {
+	if err := f.fail("RepoRoot"); err != nil {
+		return "", err
+	}
+	return f.repoRoot, nil
 }
 
 // WorktreeRemove tears down the linked worktree at dir, mirroring git's refusal
