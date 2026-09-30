@@ -84,6 +84,13 @@ type fakeGit struct {
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
+	// rebaseInWT marks worktree dirs (the Path Worktrees reports — "." is the
+	// main worktree) with a paused rebase, whether st-armed or armed directly
+	// by the test as a foreign rebase st must not touch. rebaseWT records
+	// which dir the globally modeled rebaseActive state lives in, so aborts
+	// and continues clear the right per-dir entry.
+	rebaseInWT map[string]bool
+	rebaseWT   string
 
 	// failErr forces method-level errors beyond the dedicated maps: the key
 	// is the method name (e.g. "RebaseInProgress", "MergeBase"). failAfter
@@ -114,6 +121,7 @@ func newFakeGit() *fakeGit {
 		calls:           map[string]int{},
 		clean:           true,
 		linkedWorktrees: map[string]string{},
+		rebaseInWT:      map[string]bool{},
 	}
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, subject: "init", content: map[string]bool{id: true}}
@@ -454,7 +462,7 @@ func (f *fakeGit) markWorktreeDirty(branch string) {
 // like RebaseOnto but, crucially, does NOT move f.head — the rebase happens in
 // another worktree, leaving the main worktree's HEAD untouched. A branch armed
 // via conflictOn stalls just like RebaseOnto.
-func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error {
+func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) error {
 	if err := f.rebaseErr[branch]; err != nil {
 		return err
 	}
@@ -463,6 +471,8 @@ func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
 		f.rebaseOldBase = f.resolve(oldBase)
+		f.rebaseInWT[dir] = true // the paused rebase lives in dir
+		f.rebaseWT = dir
 		return fmt.Errorf("conflict rebasing %q", branch)
 	}
 	savedHead := f.head
@@ -471,7 +481,33 @@ func (f *fakeGit) RebaseOntoIn(_ /*dir*/, newBase, oldBase, branch string) error
 	return err
 }
 
-func (f *fakeGit) RebaseAbortIn(_ string) error { return f.RebaseAbort() }
+// RebaseAbortIn aborts the rebase paused in dir specifically — a dir with no
+// paused rebase reports "no rebase in progress" even if the main worktree has
+// one (rebase state is per-worktree). It also clears foreign rebases a test
+// armed directly in rebaseInWT.
+func (f *fakeGit) RebaseAbortIn(dir string) error {
+	if err := f.fail("RebaseAbortIn"); err != nil {
+		return err
+	}
+	if f.rebaseAbortErr != nil {
+		return f.rebaseAbortErr
+	}
+	if !f.rebaseInWT[dir] {
+		return fmt.Errorf("no rebase in progress")
+	}
+	delete(f.rebaseInWT, dir)
+	if f.rebaseWT == dir {
+		f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase, f.rebaseWT = false, "", "", "", ""
+	}
+	return nil
+}
+
+func (f *fakeGit) RebaseInProgressIn(dir string) (bool, error) {
+	if err := f.fail("RebaseInProgressIn"); err != nil {
+		return false, err
+	}
+	return f.rebaseInWT[dir], nil
+}
 
 func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 	if err := f.fail("IsCleanIn"); err != nil {
@@ -779,6 +815,8 @@ func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
 		f.rebaseOldBase = f.resolve(oldBase)
+		f.rebaseInWT["."] = true // the main worktree owns this rebase
+		f.rebaseWT = "."
 		return fmt.Errorf("conflict rebasing %q", branch)
 	}
 	return f.replay(newBase, oldBase, branch)
@@ -845,7 +883,8 @@ func (f *fakeGit) RebaseAbort() error {
 	if !f.rebaseActive {
 		return fmt.Errorf("no rebase in progress")
 	}
-	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase = false, "", "", ""
+	delete(f.rebaseInWT, f.rebaseWT)
+	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase, f.rebaseWT = false, "", "", "", ""
 	return nil
 }
 
@@ -882,7 +921,8 @@ func (f *fakeGit) RebaseContinue() error {
 	}
 	branch, newBase, oldBase := f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase
 	delete(f.conflictNext, branch)
-	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase = false, "", "", ""
+	delete(f.rebaseInWT, f.rebaseWT)
+	f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase, f.rebaseWT = false, "", "", "", ""
 	return f.replay(newBase, oldBase, branch)
 }
 

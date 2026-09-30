@@ -1685,6 +1685,26 @@ func RebaseInProgress() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return rebaseInProgressAt(gitDir)
+}
+
+// RebaseInProgressIn reports whether a git rebase is in progress in the
+// worktree at dir — including one this process did not start. Rebase metadata
+// is per-worktree: it lives under that worktree's own git dir
+// (.git/worktrees/<name>/ for a linked worktree), resolved via `git -C dir
+// rev-parse --absolute-git-dir` rather than assumed from the caller's git dir.
+func RebaseInProgressIn(dir string) (bool, error) {
+	if dir == "" {
+		return false, fmt.Errorf("worktree dir is empty")
+	}
+	gitDir, err := Run("-C", dir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return false, err
+	}
+	return rebaseInProgressAt(gitDir)
+}
+
+func rebaseInProgressAt(gitDir string) (bool, error) {
 	for _, name := range []string{"rebase-merge", "rebase-apply"} {
 		_, err := os.Stat(filepath.Join(gitDir, name))
 		if err == nil {

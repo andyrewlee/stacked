@@ -369,24 +369,28 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 }
 
 // skippedWorktreeNotes drains the branches a restack skipped because their owning
-// worktree was dirty, turning each into a human-readable note. Empty when the
-// cascade skipped nothing (the common, single-tree case).
+// worktree was dirty or mid-rebase, turning each into a human-readable note.
+// Empty when the cascade skipped nothing (the common, single-tree case).
 func skippedWorktreeNotes(s *State) []string {
-	return skippedWorktreeNotesFrom(s.drainSkippedWorktrees())
+	skipped, rebase := s.drainSkippedWorktrees()
+	return skippedWorktreeNotesFrom(skipped, rebase)
 }
 
-func skippedWorktreeNotesFrom(skipped []string) []string {
+func skippedWorktreeNotesFrom(skipped []string, rebase map[string]bool) []string {
 	if len(skipped) == 0 {
 		return nil
 	}
 	notes := make([]string, 0, len(skipped))
 	for _, name := range skipped {
-		notes = append(notes, skippedWorktreeNote(name))
+		notes = append(notes, skippedWorktreeNote(name, rebase[name]))
 	}
 	return notes
 }
 
-func skippedWorktreeNote(name string) string {
+func skippedWorktreeNote(name string, rebase bool) string {
+	if rebase {
+		return fmt.Sprintf("skipped %s: a rebase is already in progress in its worktree (finish or abort it there, then re-run)", name)
+	}
 	return fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name)
 }
 

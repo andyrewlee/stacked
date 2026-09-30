@@ -1746,6 +1746,42 @@ func TestRebaseInProgressFalse(t *testing.T) {
 	}
 }
 
+// TestRebaseInProgressIn pins the per-worktree probe: rebase metadata lives
+// under the worktree's own git dir, so a paused rebase in a linked worktree is
+// visible to RebaseInProgressIn(wtPath) and invisible to the caller's
+// RebaseInProgress() — and vice versa.
+func TestRebaseInProgressIn(t *testing.T) {
+	newRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, "branch", "feat")
+	mustGit(t, "worktree", "add", wt, "feat")
+
+	inProgress, err := RebaseInProgressIn(wt)
+	if err != nil {
+		t.Fatalf("RebaseInProgressIn: %v", err)
+	}
+	if inProgress {
+		t.Fatal("no rebase should be in progress in the fresh worktree")
+	}
+
+	// Pause a rebase in the LINKED worktree — its git dir lives under
+	// .git/worktrees/<name>/, not the main one.
+	wtGitDir := mustGit(t, "-C", wt, "rev-parse", "--absolute-git-dir")
+	if err := os.MkdirAll(filepath.Join(wtGitDir, "rebase-merge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inProgress, err = RebaseInProgressIn(wt)
+	if err != nil {
+		t.Fatalf("RebaseInProgressIn: %v", err)
+	}
+	if !inProgress {
+		t.Fatal("a paused rebase in the linked worktree must be detected")
+	}
+	if mainInProgress, _ := RebaseInProgress(); mainInProgress {
+		t.Fatal("the linked worktree's rebase must be invisible to the main worktree probe")
+	}
+}
+
 // TestRebaseOntoSHA covers the worktree-local rebase-target reader: both
 // metadata backends resolve their recorded commit, and missing or corrupt
 // metadata is a distinct actionable error — never a guess.

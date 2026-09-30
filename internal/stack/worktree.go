@@ -213,17 +213,28 @@ func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, b
 }
 
 // restackInWorktree rebases name onto parentTip inside its owning worktree
-// (git -C <path>), gated on that worktree being clean. A dirty owner is SKIPPED
-// (recorded in s.skippedWorktrees, never clobbered). A conflict during the
+// (git -C <path>), gated on that worktree having no paused rebase and no dirty
+// tree. A paused-rebase or dirty owner is SKIPPED (recorded in
+// s.skippedWorktrees, never clobbered) — the rebase probe runs first because a
+// paused-but-clean rebase would otherwise pass the clean gate, and aborting a
+// rebase this process did not start must never happen. A conflict during the
 // cross-worktree rebase is rolled back in that worktree and surfaced as an
 // error, rather than left paused where the main process cannot drive it.
 func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree) (bool, error) {
+	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
+	if err != nil {
+		return false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, name, err)
+	}
+	if inRebase {
+		s.recordSkippedWorktree(name, true)
+		return false, nil
+	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
 		return false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, name, err)
 	}
 	if !clean {
-		s.skippedWorktrees = append(s.skippedWorktrees, name)
+		s.recordSkippedWorktree(name, false)
 		return false, nil
 	}
 	if err := env.Git.RebaseOntoIn(owner.Path, parentTip, b.ParentSHA, name); err != nil {

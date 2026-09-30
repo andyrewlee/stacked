@@ -457,7 +457,7 @@ func TestSquashPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 		t.Fatalf("SquashPlan: %v", err)
 	}
 	assertPreviewDidNotMutate(t, f, s, before)
-	wantNotes := []string{skippedWorktreeNote("b")}
+	wantNotes := []string{skippedWorktreeNote("b", false)}
 	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
 		t.Fatalf("SquashPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
 	}
@@ -492,7 +492,7 @@ func TestOntoPlanSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 		t.Fatalf("OntoPlan: %v", err)
 	}
 	assertPreviewDidNotMutate(t, f, s, before)
-	wantNotes := []string{skippedWorktreeNote("c")}
+	wantNotes := []string{skippedWorktreeNote("c", false)}
 	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
 		t.Fatalf("OntoPlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
 	}
@@ -526,7 +526,7 @@ func TestDeletePlanSkipsDirtyLinkedWorktreeFormerChild(t *testing.T) {
 		t.Fatalf("DeletePlan: %v", err)
 	}
 	assertPreviewDidNotMutate(t, f, s, before)
-	wantNotes := []string{skippedWorktreeNote("b")}
+	wantNotes := []string{skippedWorktreeNote("b", false)}
 	if len(preview.Restacked) != 0 || !reflect.DeepEqual(preview.Notes, wantNotes) {
 		t.Fatalf("DeletePlan Restacked/Notes = %v/%v, want empty/%v", preview.Restacked, preview.Notes, wantNotes)
 	}
@@ -743,7 +743,7 @@ func TestRestackPlanMatchesActual(t *testing.T) {
 			if len(preview.Notes) == 0 {
 				t.Fatal("expected a skip note; setup did not produce one")
 			}
-			wantNote := skippedWorktreeNote("c")
+			wantNote := skippedWorktreeNote("c", false)
 			if len(preview.Notes) != 1 || preview.Notes[0] != wantNote {
 				t.Fatalf("preview notes = %v, want [%s]", preview.Notes, wantNote)
 			}

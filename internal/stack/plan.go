@@ -216,20 +216,22 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 }
 
 type restackPreview struct {
-	restacked []string
-	skipped   []string
+	restacked     []string
+	skipped       []string
+	skippedRebase map[string]bool
 }
 
 func (p restackPreview) notes() []string {
-	return skippedWorktreeNotesFrom(p.skipped)
+	return skippedWorktreeNotesFrom(p.skipped, p.skippedRebase)
 }
 
 type restackPreviewAccumulator struct {
-	restacked   []string
-	skipped     []string
-	moved       map[string]bool
-	seen        map[string]bool
-	seenSkipped map[string]bool
+	restacked     []string
+	skipped       []string
+	skippedRebase map[string]bool
+	moved         map[string]bool
+	seen          map[string]bool
+	seenSkipped   map[string]bool
 }
 
 func newRestackPreviewAccumulator() *restackPreviewAccumulator {
@@ -241,7 +243,7 @@ func newRestackPreviewAccumulator() *restackPreviewAccumulator {
 }
 
 func (a *restackPreviewAccumulator) preview() restackPreview {
-	return restackPreview{restacked: a.restacked, skipped: a.skipped}
+	return restackPreview{restacked: a.restacked, skipped: a.skipped, skippedRebase: a.skippedRebase}
 }
 
 func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]string, name string) error {
@@ -256,7 +258,7 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	if !needs && !a.moved[b.Parent] {
 		return nil
 	}
-	skipped, err := wouldSkipDirtyWorktreeRestack(env, s, name)
+	skipped, rebase, err := wouldSkipWorktreeRestack(env, s, name)
 	if err != nil {
 		return err
 	}
@@ -264,6 +266,12 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 		if !a.seenSkipped[name] {
 			a.seenSkipped[name] = true
 			a.skipped = append(a.skipped, name)
+			if rebase {
+				if a.skippedRebase == nil {
+					a.skippedRebase = map[string]bool{}
+				}
+				a.skippedRebase[name] = true
+			}
 		}
 		return nil
 	}
@@ -275,19 +283,30 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	return nil
 }
 
-func wouldSkipDirtyWorktreeRestack(env Env, s *State, branch string) (bool, error) {
+// wouldSkipWorktreeRestack mirrors restackInWorktree's gates for the dry-run
+// preview: a branch owned by another worktree is skipped when that worktree has
+// a rebase in progress (the second return) or a dirty tree — same order and
+// same conditions as the apply path so the preview predicts the real run.
+func wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase bool, err error) {
 	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if !elsewhere {
-		return false, nil
+		return false, false, nil
+	}
+	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
+	if err != nil {
+		return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	if inRebase {
+		return true, true, nil
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
-		return false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+		return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
 	}
-	return !clean, nil
+	return !clean, false, nil
 }
 
 func restackPlanAgainstWithWorktrees(env Env, s *State, start string, tips map[string]string) (restackPreview, error) {
