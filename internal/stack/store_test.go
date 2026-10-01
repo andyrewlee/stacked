@@ -503,3 +503,31 @@ func TestDecodeStateBranchNameIntegrity(t *testing.T) {
 		}
 	})
 }
+
+// CommonDir resolves through the same cwd-keyed cache as stackedDir — same
+// common git dir, one probe per cwd per process. This pins the plan-018b
+// contract: the state-file lookup and the worktree-path derivation share the
+// resolution instead of each spawning rev-parse --git-common-dir.
+func TestCommonDirMatchesStackedDirParent(t *testing.T) {
+	initGitRepo(t)
+
+	common, err := CommonDir()
+	if err != nil {
+		t.Fatalf("CommonDir: %v", err)
+	}
+	stacked, err := stackedDir()
+	if err != nil {
+		t.Fatalf("stackedDir: %v", err)
+	}
+	if filepath.Dir(stacked) != common {
+		t.Fatalf("stackedDir = %q, want it inside CommonDir %q", stacked, common)
+	}
+	// And it is the real common dir, not just internally consistent.
+	raw, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != common {
+		t.Fatalf("CommonDir = %q, want %q", common, raw)
+	}
+}

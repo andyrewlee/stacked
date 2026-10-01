@@ -11,7 +11,13 @@ import (
 	"github.com/andyrewlee/stacked/internal/git"
 )
 
-var stackedDirCache sync.Map // cwd -> dir
+// repoDirs bundles the two rev-parse resolutions every stacked path derives
+// from: the repository's common git dir and the stacked metadata dir under
+// it. Both are cwd-keyed — cmd integration tests chdir between repos in one
+// process, and each cwd must resolve its own pair.
+type repoDirs struct{ stacked, common string }
+
+var stackedDirCache sync.Map // cwd -> repoDirs
 
 // stateSchemaVersion is the version of the state.json schema this binary
 // writes and understands. Save stamps it into every file; Load refuses a file
@@ -35,24 +41,40 @@ const stateSchemaVersion = 1
 // and threading Git into Load/Save/Lock would make s.Save depend on the Env it
 // belongs to.
 func stackedDir() (string, error) {
+	dirs, err := repoDirsForCwd()
+	return dirs.stacked, err
+}
+
+// CommonDir returns the repository's common git dir through the same
+// cwd-keyed resolution as stackedDir, so a process that both locates the
+// state file and derives worktree paths probes `git rev-parse
+// --git-common-dir` once per cwd, not once per consumer.
+func CommonDir() (string, error) {
+	dirs, err := repoDirsForCwd()
+	return dirs.common, err
+}
+
+// repoDirsForCwd resolves (or recalls) the repo's dirs for the current
+// working directory. Keyed by cwd, not sync.Once: cmd integration tests
+// chdir between repos in one process, and each repo must resolve its own
+// common git dir.
+func repoDirsForCwd() (repoDirs, error) {
 	cwd, err := os.Getwd()
 	if err == nil {
-		if dir, ok := stackedDirCache.Load(cwd); ok {
-			return dir.(string), nil
+		if dirs, ok := stackedDirCache.Load(cwd); ok {
+			return dirs.(repoDirs), nil
 		}
 	}
 
 	gitDir, gerr := git.GitCommonDir()
 	if gerr != nil {
-		return "", fmt.Errorf("locate git dir: %w", gerr)
+		return repoDirs{}, fmt.Errorf("locate git dir: %w", gerr)
 	}
-	dir := filepath.Join(gitDir, "stacked")
-	// Key by cwd, not sync.Once: cmd integration tests chdir between repos in
-	// one process, and each repo must resolve its own common git dir.
+	dirs := repoDirs{stacked: filepath.Join(gitDir, "stacked"), common: gitDir}
 	if err == nil {
-		stackedDirCache.Store(cwd, dir)
+		stackedDirCache.Store(cwd, dirs)
 	}
-	return dir, nil
+	return dirs, nil
 }
 
 // statePath returns the absolute path of the stacked state file,
