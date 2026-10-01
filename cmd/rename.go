@@ -14,6 +14,14 @@ func init() {
 		Summary: "Rename a branch and update the stack metadata",
 		Usage:   "st rename [old] <new> [--json]",
 		Run:     runRename,
+		// rename's first positional is the branch to rename — trunk or tracked;
+		// the second is the new name, which has no candidates.
+		Completion: func(cc *completionCtx) []string {
+			if cc.flagName != "" || len(cc.positionals) != 0 {
+				return nil
+			}
+			return trackedAndTrunk(cc.s)
+		},
 	})
 }
 

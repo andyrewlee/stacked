@@ -14,6 +14,15 @@ func init() {
 		Usage:      "st delete <name> [-f|--force] [--dry-run] [--json]",
 		Run:        runDelete,
 		NewFlagSet: deleteFlagSet,
+		// delete's positional is a tracked branch — the engine refuses the
+		// trunk, and the current branch deletes legally (st checks the parent
+		// out first), so every tracked name is a candidate.
+		Completion: func(cc *completionCtx) []string {
+			if cc.flagName != "" || len(cc.positionals) != 0 {
+				return nil
+			}
+			return trackedBranches(cc.s)
+		},
 	})
 }
 
