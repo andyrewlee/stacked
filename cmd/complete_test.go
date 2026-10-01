@@ -127,6 +127,61 @@ func TestCompleteFlagValuePosition(t *testing.T) {
 	}
 }
 
+// TestCompleteDeleteUntrack: delete and untrack act on tracked branches only —
+// candidates exclude the trunk and untracked locals; a second positional
+// offers nothing.
+func TestCompleteDeleteUntrack(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustRun(t, "git", "branch", "scratch")
+
+	for _, name := range []string{"delete", "untrack"} {
+		out, err := runComplete(t, name, "0", "--")
+		if err != nil {
+			t.Fatalf("__complete %s: %v", name, err)
+		}
+		if want := "feat-a\nfeat-b\n"; out != want {
+			t.Fatalf("%s candidates = %q, want %q", name, out, want)
+		}
+	}
+
+	out, err := runComplete(t, "delete", "1", "--", "feat-a")
+	if err != nil {
+		t.Fatalf("__complete delete second positional: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("delete second positional = %q, want empty", out)
+	}
+}
+
+// TestCompleteRename: rename's first positional offers the renamable set —
+// trunk plus every tracked branch; the second (the new name) offers nothing.
+func TestCompleteRename(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustRun(t, "git", "branch", "scratch")
+
+	out, err := runComplete(t, "rename", "0", "--")
+	if err != nil {
+		t.Fatalf("__complete rename: %v", err)
+	}
+	if want := "feat-a\nfeat-b\nmain\n"; out != want {
+		t.Fatalf("rename candidates = %q, want %q", out, want)
+	}
+
+	out, err = runComplete(t, "mv", "1", "--", "feat-a")
+	if err != nil {
+		t.Fatalf("__complete mv second positional: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("rename second positional = %q, want empty", out)
+	}
+}
+
 // TestCompleteDoubleDashPositional: words after -- count as positionals even
 // when flag-shaped; checkout's one positional already consumed completes empty.
 func TestCompleteDoubleDashPositional(t *testing.T) {
@@ -461,6 +516,21 @@ func TestCompleteCandidatesPure(t *testing.T) {
 	if got := completeCandidates("worktree", "", nil, map[string]bool{"all": true}, s, locals, wts, "feat-a"); got != nil {
 		t.Fatalf("worktree --all candidates = %v, want nil", got)
 	}
+	if got := completeCandidates("delete", "", nil, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
+		[]string{"feat-a", "feat-b", "feat-c"}) {
+		t.Fatalf("delete candidates = %v", got)
+	}
+	if got := completeCandidates("untrack", "", nil, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
+		[]string{"feat-a", "feat-b", "feat-c"}) {
+		t.Fatalf("untrack candidates = %v", got)
+	}
+	if got := completeCandidates("rename", "", nil, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
+		[]string{"feat-a", "feat-b", "feat-c", "main"}) {
+		t.Fatalf("rename candidates = %v", got)
+	}
+	if got := completeCandidates("rename", "", []string{"feat-a"}, nil, s, locals, wts, "feat-a"); got != nil {
+		t.Fatalf("rename second positional = %v, want nil", got)
+	}
 }
 
 // TestCompletionRegistryIsSingleSource replaces the old three-list agreement
@@ -480,7 +550,7 @@ func TestCompletionRegistryIsSingleSource(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"checkout", "onto", "track", "worktree"}
+	want := []string{"checkout", "delete", "onto", "rename", "track", "untrack", "worktree"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands with Completion = %v, want %v", got, want)
 	}

@@ -58,6 +58,13 @@ func TestCompleteEndpointContract(t *testing.T) {
 		t.Fatalf("co candidates = %q", res.stdout)
 	}
 
+	// delete's domain is tracked branches only — no trunk, no untracked.
+	res = r.st("__complete", "delete", "0", "--")
+	wantExit(t, res, 0)
+	if res.stdout != "feat-a\n" {
+		t.Fatalf("delete candidates = %q, want feat-a", res.stdout)
+	}
+
 	// Unknown command / non-branch command: silent empty, exit 0.
 	for _, name := range []string{"bogus", "log"} {
 		res = r.st("__complete", name, "0", "--")

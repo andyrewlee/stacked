@@ -12,6 +12,14 @@ func init() {
 		Summary: "Stop tracking a branch (re-parents its children)",
 		Usage:   "st untrack [name] [--json]",
 		Run:     runUntrack,
+		// untrack's optional positional is a tracked branch — the engine
+		// refuses the trunk (bare untrack targets the current branch).
+		Completion: func(cc *completionCtx) []string {
+			if cc.flagName != "" || len(cc.positionals) != 0 {
+				return nil
+			}
+			return trackedBranches(cc.s)
+		},
 	})
 }
 
