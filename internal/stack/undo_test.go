@@ -53,7 +53,7 @@ func TestRecordUndoUsesLocalBranchRefs(t *testing.T) {
 
 	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
 	s.Track("feature", "main", mainSHA)
-	if err := s.RecordUndo(git.Shell{}, "snapshot"); err != nil {
+	if _, err := s.RecordUndo(git.Shell{}, "snapshot"); err != nil {
 		t.Fatalf("RecordUndo: %v", err)
 	}
 
@@ -170,7 +170,7 @@ func setupCountingUndoCloseout(t *testing.T) (*fakeGit, *State, *countingSnapsho
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	counting := &countingSnapshotGit{Git: f}
-	if err := s.RecordUndo(counting, "op"); err != nil {
+	if _, err := s.RecordUndo(counting, "op"); err != nil {
 		t.Fatalf("RecordUndo: %v", err)
 	}
 	counting.revParseCalls = 0
@@ -278,7 +278,7 @@ func TestSnapshotUndoFailsWhenTipsUnavailable(t *testing.T) {
 	if _, err := s.snapshotUndo(g, "op"); !errors.Is(err, boom) {
 		t.Fatalf("snapshotUndo with failing Tips = %v, want wrapped %v", err, boom)
 	}
-	if err := s.RecordUndo(g, "op"); !errors.Is(err, boom) {
+	if _, err := s.RecordUndo(g, "op"); !errors.Is(err, boom) {
 		t.Fatalf("RecordUndo with failing Tips = %v, want wrapped %v", err, boom)
 	}
 }
@@ -313,7 +313,7 @@ func TestLoadUndoRecoversFromCorruptJournal(t *testing.T) {
 	}
 
 	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
-	if err := s.RecordUndo(git.Shell{}, "after-corruption"); err != nil {
+	if _, err := s.RecordUndo(git.Shell{}, "after-corruption"); err != nil {
 		t.Fatalf("RecordUndo after corruption: %v", err)
 	}
 	got, err := loadUndo()
@@ -339,7 +339,7 @@ func TestUndoProtocol(t *testing.T) {
 		initGitRepo(t)
 		f, s, env := newEnvState()
 		mkBranch(t, env, s, f, "main", "a")
-		if err := s.RecordUndo(f, "op"); err != nil {
+		if _, err := s.RecordUndo(f, "op"); err != nil {
 			t.Fatalf("RecordUndo: %v", err)
 		}
 		return protoEnv{f, s}
