@@ -12,7 +12,8 @@ rebased on its parent as the parent changes — `stacked` automates exactly that
 
 - **No host API.** It never opens pull requests or calls a forge API. Remote Git
   commands still contact your configured remotes: `st sync` fetches and `st
-  submit` pushes your branches; you open PRs yourself.
+  submit` pushes your branches; you open PRs yourself (`st open` just launches
+  the printed compare URLs in your browser).
 - **No third-party dependencies.** It is written in pure Go using only the standard
   library and shells out to your system `git`.
 - **Local metadata only.** The stack topology (which branch's parent is which) is
@@ -160,6 +161,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` uses already-fetched refs; `--dry-run` previews). |
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
 | `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
+| `st open [--all] [--remote <name>] [--dry-run]` | | Open the PR compare URLs `st submit` prints in a browser (`--all` opens every tracked branch's; `--dry-run` prints without opening; `--json` emits the URLs as data). |
 | `st undo [<n>] [--list \| --dry-run]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
@@ -332,6 +334,16 @@ per pushed branch (`head -> base`), so each stacked PR can be opened against its
 `--dry-run` prints the plan without pushing. Most stack-mutating commands also accept
 `--json` for machine-readable output.
 
+#### `st open [--all] [--remote <name>] [--dry-run]`
+Opens the compare URLs `st submit` prints — the current branch's, or every
+tracked branch's under `--all` — in your browser (`open` on macOS, `xdg-open`
+elsewhere on unix, `rundll32` on Windows). It is read-only: nothing is pushed
+or written, and no host API is called — a browser spawn is a local process
+launch, not a network call. `--dry-run` prints the URLs it would open and
+`--json` emits them as data; neither spawns anything. When the remote's host
+isn't a recognized github/gitlab shape the command reports "nothing to open"
+rather than guessing a URL.
+
 #### `st abort`
 Aborts an in-progress restack (`git rebase --abort`). Branches that already
 restacked keep their new positions; the conflicted branch is rolled back and still
@@ -454,8 +466,9 @@ st submit                     # or: st submit --dry-run
   branch lands, then restacks the rest of the stack.
 - `st undo` reverts the last mutating command's metadata and branch positions but
   does not modify your working tree.
-- `stacked` deliberately opens no pull requests. After `st submit`, open the PRs
-  it prints (or create them on your host yourself).
+- `stacked` deliberately opens no pull requests. After `st submit`, `st open`
+  launches the PR compare URLs in your browser (or open them on your host
+  yourself).
 - `st absorb` is deliberately strict. `st absorb --dry-run` maps staged hunks
   to the stack commits that own their lines; bare `st absorb` applies any
   zero-refusal plan — each owning branch tip is amended with its own hunks,
