@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -906,6 +907,37 @@ func TestSubmitNoRemote(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	if err := runSubmit(nil); err == nil {
 		t.Fatalf("expected error: remote origin does not exist")
+	}
+}
+
+// TestSubmitTakesAdvisoryLock pins plan-009: submit was the only stack-reading
+// command that never serialized — a concurrent sync/delete/undo mid-submit
+// could publish a stale tip or fail on a vanished branch. With the repo lock
+// held and no wait budget, submit must refuse with ErrLocked before touching
+// state or remotes.
+func TestSubmitTakesAdvisoryLock(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	release, err := stack.Lock()
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	defer release()
+	t.Setenv("ST_LOCK_WAIT", "0")
+
+	for _, args := range [][]string{nil, {"--all"}, {"--dry-run"}} {
+		if err := runSubmit(args); !errors.Is(err, stack.ErrLocked) {
+			t.Fatalf("submit %v under held lock = %v, want ErrLocked", args, err)
+		}
+	}
+	// Nothing was pushed or printed: the refusal happens before any remote work.
+	if out := mustRun(t, "git", "--git-dir", remoteDir, "for-each-ref"); strings.Contains(out, "feat-a") {
+		t.Fatalf("feat-a reached the remote despite the held lock:\n%s", out)
 	}
 }
 
