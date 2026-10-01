@@ -463,12 +463,28 @@ func TestCompleteCandidatesPure(t *testing.T) {
 }
 
 // TestCompletableName: the defensive emitter drops names that would break the
-// one-per-line framing — impossible from git, exercised for the contract.
+// one-per-line framing or smuggle display-changing bytes into the terminal —
+// impossible from git's refname rules, exercised for the contract.
 func TestCompletableName(t *testing.T) {
-	if completableName("") || completableName("a b") || completableName("a\nb") || completableName("a\x7fb") {
-		t.Fatalf("completableName accepted an unframeable name")
+	for _, bad := range []string{
+		"",
+		"a b",              // space would break line framing
+		"a\nb",             // C0: embedded newline
+		"a\x7fb",           // DEL
+		"feat\x85evil",     // C1 control — NEL byte
+		"feat\xff\xfeevil", // invalid UTF-8
+		"feat\u202emal",    // Cf: bidi override reorders the candidate display
+		"feat\u200bmal",    // Cf: zero-width space hides in the list
+	} {
+		if completableName(bad) {
+			t.Fatalf("completableName(%q) = true, want rejected", bad)
+		}
 	}
-	if !completableName("feat/a{b},c[d]") || !completableName("ユニコード") {
-		t.Fatalf("completableName rejected legal refname bytes")
+	// Printable high-Unicode names stay completable — only control/format
+	// classes are dropped.
+	for _, good := range []string{"feat/a{b},c[d]", "ユニコード", "feat-日本語"} {
+		if !completableName(good) {
+			t.Fatalf("completableName(%q) = false, want emitted", good)
+		}
 	}
 }

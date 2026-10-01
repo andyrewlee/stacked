@@ -258,17 +258,18 @@ func sortedKeys(set map[string]bool) []string {
 }
 
 // completableName reports whether name can occupy one output line without
-// breaking the protocol's newline framing. Git refname rules already forbid
-// control bytes and spaces; this is the contract's defensive check — drop the
-// name rather than emit bytes a shell would mangle into a different branch.
+// breaking the protocol's newline framing or smuggling display-changing bytes
+// into the terminal. Git refname rules already forbid control bytes and
+// spaces; this is the contract's defensive check — drop the name rather than
+// emit bytes a shell would mangle into a different branch. Rejects (never
+// sanitizes — completion must echo the exact stored name): C0/DEL/C1
+// controls, Unicode format chars (bidi overrides, zero-width), spaces, and
+// invalid UTF-8 — the same class sanitizeForTerminal handles.
 func completableName(name string) bool {
 	if name == "" {
 		return false
 	}
-	for i := 0; i < len(name); i++ {
-		if name[i] <= ' ' || name[i] == 0x7f {
-			return false
-		}
-	}
-	return true
+	return !needsSanitizing(name, func(r rune) bool {
+		return r == ' ' || isTerminalControl(r)
+	})
 }

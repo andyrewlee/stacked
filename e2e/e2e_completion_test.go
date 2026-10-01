@@ -99,6 +99,36 @@ func TestCompleteEndpointContract(t *testing.T) {
 	}
 }
 
+// TestCompleteDropsTerminalHostileNames pins plan-010 end to end: a branch
+// whose name carries bytes that are legal in a refname but hostile to a
+// terminal (Unicode format chars — bidi overrides, zero-width) must never be
+// emitted as a completion candidate — the endpoint drops it rather than
+// printing a name that displays as a different branch.
+func TestCompleteDropsTerminalHostileNames(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("loose refs are filename-backed; Cf bytes in filenames are unreliable on Windows")
+	}
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	// update-ref accepts names checkout -b refuses to even try; U+202E is a
+	// legal refname byte sequence that reorders terminal display.
+	hostile := "feat\u202eevil"
+	r.git("update-ref", "refs/heads/"+hostile, "feat-a")
+	r.stOK("track", hostile)
+
+	res := r.st("__complete", "checkout", "0", "--")
+	wantExit(t, res, 0)
+	if strings.Contains(res.stdout, hostile) {
+		t.Fatalf("__complete emitted a format-char name: %q", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "feat-a") {
+		t.Fatalf("__complete dropped the safe name too: %q", res.stdout)
+	}
+}
+
 // TestCompleteSilentOutsideRepo: the endpoint degrades to silence where there
 // is nothing to complete — no repo, or a repo with no st state.
 func TestCompleteSilentOutsideRepo(t *testing.T) {
