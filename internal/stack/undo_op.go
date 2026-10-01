@@ -30,6 +30,10 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		return nil, fmt.Errorf("parsing undo state: %w", err)
 	}
 
+	// One batch read answers every existence/tip question below; a failed
+	// read degrades to the per-branch probes this replaced.
+	liveSet := probeLiveBranches(g)
+
 	skipCheckoutRestore := false
 	if entry.LocalBranches != nil {
 		// Branches created by the undone command must be deleted. Candidates are
@@ -48,7 +52,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 		var extra []string
 		for name := range candidates {
-			if entry.CreatesBranch(name) && g.BranchExists(name) {
+			if entry.CreatesBranch(name) && liveSet.exists(g, name) {
 				extra = append(extra, name)
 			}
 		}
@@ -65,7 +69,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 			}
 			target := prev.Trunk
 			if s != nil {
-				if b, ok := s.Get(name); ok && g.BranchExists(b.Parent) {
+				if b, ok := s.Get(name); ok && liveSet.exists(g, b.Parent) {
 					target = b.Parent
 				}
 			}
@@ -76,13 +80,16 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 				// was checked out when the command ran) — for a current-branch rename
 				// that is the restored old name, so no command-label coupling is
 				// needed here.
-				if !g.BranchExists(target) {
+				if !liveSet.exists(g, target) {
 					sha, ok := entry.Refs[target]
 					if !ok {
 						return nil, fmt.Errorf("cannot restore checkout target %q before deleting %q", target, name)
 					}
 					if err := g.UpdateRef(branchTipRef(target), sha); err != nil {
 						return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
+					}
+					if liveSet != nil {
+						liveSet[target] = sha
 					}
 				}
 				if err := g.Checkout(target); err != nil {
@@ -106,6 +113,10 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 			if err := g.DeleteBranch(name, true); err != nil {
 				return nil, fmt.Errorf("deleting branch %q created by undone command: %w", name, err)
 			}
+			// Keep the snapshot truthful for the next doomed branch's
+			// parent/target existence questions — a doomed branch's recorded
+			// parent may be a sibling this loop just deleted.
+			delete(liveSet, name)
 		}
 	}
 
@@ -132,8 +143,15 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	if err := g.UpdateRefs(updates); err != nil {
 		return nil, fmt.Errorf("restoring branch refs: %w", err)
 	}
+	// The transaction may have recreated refs absent from the snapshot —
+	// fold them in so the checkout restore sees them as live.
+	if liveSet != nil {
+		for name, sha := range entry.Refs {
+			liveSet[name] = sha
+		}
+	}
 
-	if !skipCheckoutRestore && entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
+	if !skipCheckoutRestore && entry.CurrentBranch != "" && liveSet.exists(g, entry.CurrentBranch) {
 		if err := g.Checkout(entry.CurrentBranch); err != nil {
 			// Local changes blocking the final checkout are tolerated: the refs are
 			// already restored and HEAD simply stays where it is. A branch that is
@@ -156,6 +174,40 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		res.Notes = append(res.Notes, absorbedCommitsNote(entry.AbsorbedCommits))
 	}
 	return res, nil
+}
+
+// liveBranches is one Tips() snapshot answering "does this local branch
+// exist" and "what is its tip" for every probe a pass needs — one spawn
+// instead of one per ref. A nil map means the batch read failed: every
+// answer then degrades to the per-branch probes the batch replaced.
+type liveBranches map[string]string
+
+// probeLiveBranches reads every local branch tip in one spawn; the error is
+// degraded to nil (per-branch fallback) rather than propagated, matching the
+// tolerance BranchExists' quiet show-ref had.
+func probeLiveBranches(g Git) liveBranches {
+	live, err := g.Tips()
+	if err != nil {
+		return nil
+	}
+	return live
+}
+
+func (l liveBranches) exists(g Git, name string) bool {
+	if l == nil {
+		return g.BranchExists(name)
+	}
+	_, ok := l[name]
+	return ok
+}
+
+func (l liveBranches) tip(g Git, name string) (string, bool) {
+	if l == nil {
+		t, err := g.RevParse(branchTipRef(name))
+		return t, err == nil
+	}
+	t, ok := l[name]
+	return t, ok
 }
 
 func removeCreatedWorktree(env Env, branch, path string) error {
