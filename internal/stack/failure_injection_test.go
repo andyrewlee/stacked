@@ -249,3 +249,116 @@ func TestRestackAgainstTipsRevParseFallback(t *testing.T) {
 		t.Fatal("the missing-parent fallback never RevParsed")
 	}
 }
+
+// TestRestackRestoreFailureComposesTwice pins the doubly-wrapped AlsoFailed:
+// the cascade's per-branch rebase of b fails non-conflict (rebaseErr), the
+// in-loop restore of the expected HEAD (a) ALSO fails (checkoutErr), and then
+// Restack's outer restoreHEADAfterNonConflict fails AGAIN on the same name —
+// composing an AlsoFailed-of-AlsoFailed. Both sentinels must stay errors.Is-
+// matchable through the nesting, and HEAD stays on the failed branch.
+func TestRestackRestoreFailureComposesTwice(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main") // both a and b now drift
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	rebaseErr := errors.New("rebase exploded")
+	checkoutErr := errors.New("cannot restore")
+	f.rebaseErr["b"] = rebaseErr
+	f.checkoutErr["a"] = checkoutErr
+
+	_, err := Restack(env, s)
+	if err == nil {
+		t.Fatal("Restack should fail when the rebase and both restores fail")
+	}
+	if !errors.Is(err, rebaseErr) {
+		t.Fatalf("error %q must keep the rebase sentinel matchable", err)
+	}
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("error %q must keep the checkout sentinel matchable", err)
+	}
+	// The double composition is ugly but honest: the restore was attempted and
+	// failed at BOTH layers, so both arms report it.
+	if n := strings.Count(err.Error(), "additionally failed to restore"); n != 2 {
+		t.Fatalf("error %q should name the restore failure at both layers (got %d)", err, n)
+	}
+	// The fake leaves HEAD wherever the failed rebase parked it — restore
+	// genuinely could not run, so the caller sees b, not a.
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b (the failed-rebase parking spot)", f.head)
+	}
+}
+
+// TestRestackCascadeSaveCheckpointFailure pins the mid-cascade save arm:
+// restackBranch checkpoints state after EVERY branch it rebases, so a failure
+// on the Nth save leaves earlier reparents durable and the Nth branch's in
+// memory only. The sentinel must surface and HEAD must be restored.
+func TestRestackCascadeSaveCheckpointFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 1) // a's checkpoint ok, b's fails
+
+	_, err := Restack(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Restack = %v, want the save sentinel surfaced", err)
+	}
+	if *saves != 2 {
+		t.Fatalf("saves = %d, want 2 (one checkpoint per rebased branch)", *saves)
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a restored after the save failure", f.head)
+	}
+	// Characterize, don't aspire: b's ParentSHA was mutated in memory BEFORE
+	// its save failed — the state object says rebased while the journal
+	// protocol's cleanup decides what persists.
+	if b, _ := s.Get("b"); b == nil || b.ParentSHA == "" {
+		t.Fatal("b should still be tracked with a (rebased) ParentSHA in memory")
+	}
+}
+
+// TestFoldSaveCheckpointFailure pins the epilogue save arm: fold persists the
+// deletion (save 1), then finishUpstack's final checkpoint (save 2) fails —
+// the fold already happened; the error must surface, not be swallowed.
+func TestFoldSaveCheckpointFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 1) // fold's save ok, epilogue fails
+
+	_, err := Fold(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Fold = %v, want the save sentinel surfaced", err)
+	}
+	if *saves != 2 {
+		t.Fatalf("saves = %d, want 2 (post-delete + epilogue)", *saves)
+	}
+	// The fold committed: b is gone from the in-memory state and HEAD sits on
+	// the parent (the epilogue's restoreHEAD never ran — the save failed first).
+	if s.IsTracked("b") {
+		t.Fatal("b should be untracked in memory — the fold applied before the save failure")
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a (fold's parent checkout)", f.head)
+	}
+}
