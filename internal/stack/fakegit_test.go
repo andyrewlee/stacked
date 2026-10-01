@@ -205,6 +205,7 @@ func (f *fakeGit) CurrentBranch() (string, error) {
 }
 
 func (f *fakeGit) BranchExists(name string) bool {
+	f.calls["BranchExists"]++
 	_, ok := f.branches[name]
 	return ok
 }

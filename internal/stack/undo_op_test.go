@@ -719,3 +719,96 @@ func TestUndoEntryAbsorbedCommitsJSON(t *testing.T) {
 		t.Fatalf("non-absorb entry carries the key: %s", plain)
 	}
 }
+
+// TestUndoBatchesExistenceProbes pins plan-016's spawn contract: an undo that
+// dooms several branches performs ONE Tips() batch read and zero per-ref
+// BranchExists/RevParse probes — previously each doomed branch, its parent,
+// and the restore target cost a show-ref spawn apiece.
+func TestUndoBatchesExistenceProbes(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustSnapshot(t, s, f, "track")
+	// Three branches the undone command created — all doomed, all real.
+	for _, name := range []string{"b", "c", "d"} {
+		if err := f.CreateBranch(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry.CreatedBranches = []string{"b", "c", "d"}
+
+	before := f.callsSnapshot()
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	for method, want := range map[string]int{"Tips": 1, "BranchExists": 0, "RevParse": 0} {
+		if got := f.calls[method] - before[method]; got != want {
+			t.Fatalf("%s calls during Undo = %d, want %d", method, got, want)
+		}
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// When the Tips() batch read fails, Undo degrades to per-branch probes rather
+// than failing a recovery path — the same tolerance BranchExists' quiet
+// show-ref had.
+func TestUndoDegradesToPerBranchProbes(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustSnapshot(t, s, f, "track")
+	for _, name := range []string{"b", "c"} {
+		if err := f.CreateBranch(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry.CreatedBranches = []string{"b", "c"}
+
+	f.failErr["Tips"] = errors.New("for-each-ref exploded")
+	before := f.callsSnapshot()
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+	if f.calls["BranchExists"]-before["BranchExists"] == 0 {
+		t.Fatal("Tips failure did not fall back to per-branch BranchExists probes")
+	}
+}
+
+// The preview twin: one Tips() batch answers the created-candidate, doomed
+// HEAD, restore-tip, and checkout-target questions — zero per-ref spawns.
+func TestUndoPreviewBatchesExistenceProbes(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustSnapshot(t, s, f, "track")
+	for _, name := range []string{"b", "c", "d"} {
+		if err := f.CreateBranch(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry.CreatedBranches = []string{"b", "c", "d"}
+
+	before := f.callsSnapshot()
+	res, err := UndoPreview(env, s, entry, true)
+	if err != nil {
+		t.Fatalf("undo preview: %v", err)
+	}
+	for method, want := range map[string]int{"Tips": 1, "BranchExists": 0, "RevParse": 0} {
+		if got := f.calls[method] - before[method]; got != want {
+			t.Fatalf("%s calls during UndoPreview = %d, want %d", method, got, want)
+		}
+	}
+	if len(res.Blockers) != 0 {
+		t.Fatalf("preview blockers = %v, want none", res.Blockers)
+	}
+	if len(res.WouldDelete) != 3 {
+		t.Fatalf("WouldDelete = %v, want b, c, d", res.WouldDelete)
+	}
+}

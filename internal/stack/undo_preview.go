@@ -116,6 +116,10 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 
 	res.JournalDrop = true
 	tips := map[string]*string{}
+	// One batch read answers every existence/tip question below; a failed
+	// read degrades to per-branch probes (the read-only preview mirrors
+	// Undo's degrade — it must never fail on a flaky batch probe).
+	liveSet := probeLiveBranches(g)
 
 	// The snapshot state is needed below to reproduce Undo's intermediate
 	// checkout-target computation (prev.Trunk) for a doomed current branch.
@@ -142,7 +146,7 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 			candidates[name] = true
 		}
 		for name := range candidates {
-			if entry.CreatesBranch(name) && g.BranchExists(name) {
+			if entry.CreatesBranch(name) && liveSet.exists(g, name) {
 				created = append(created, name)
 			}
 		}
@@ -165,7 +169,7 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	// recorded CreatedWorktrees PLUS any discovered created branch whose live
 	// worktree Undo removes (the journal only records worktrees that existed
 	// when the command ran — one materialized later is still doomed).
-	if entry.CreatedWorktrees[cur] != "" || (entry.DoomedBranch(s, cur) && g.BranchExists(cur)) {
+	if entry.CreatedWorktrees[cur] != "" || (entry.DoomedBranch(s, cur) && liveSet.exists(g, cur)) {
 		if _, ok := LinkedOwnerOf(wts, cur); ok && !canTeleport {
 			res.Blockers = append(res.Blockers, "cwd_inside_created_worktree:"+cur)
 		}
@@ -200,7 +204,7 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 			}
 		}
 		res.WouldDelete = append(res.WouldDelete, d)
-		if tip, err := g.RevParse(branchTipRef(name)); err == nil {
+		if tip, ok := liveSet.tip(g, name); ok {
 			t := tip
 			tips[name] = &t
 		} else {
@@ -214,11 +218,11 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 			// refuses when the target is neither live nor recorded.
 			target := prev.Trunk
 			if s != nil {
-				if b, ok := s.Get(name); ok && g.BranchExists(b.Parent) {
+				if b, ok := s.Get(name); ok && liveSet.exists(g, b.Parent) {
 					target = b.Parent
 				}
 			}
-			targetLive := g.BranchExists(target)
+			targetLive := liveSet.exists(g, target)
 			missingTarget := false
 			if !targetLive {
 				if _, ok := entry.Refs[target]; !ok {
@@ -256,8 +260,8 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	for _, name := range names {
 		to := entry.Refs[name]
 		r := UndoRestorePreview{Branch: name, To: to}
-		live, err := g.RevParse(branchTipRef(name))
-		if err != nil {
+		live, ok := liveSet.tip(g, name)
+		if !ok {
 			r.From = zeroSHA
 			r.CommitsLostFromRef = "unknown"
 			tips[name] = nil
@@ -279,7 +283,7 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	// blocker means refusal (no landing to report), a doomed recorded branch
 	// cannot be checked out (the undo itself deletes it), and WouldDetach
 	// means the real run parks HEAD instead.
-	if len(res.Blockers) == 0 && entry.CurrentBranch != "" && !createdSet[entry.CurrentBranch] && !res.WouldDetach && g.BranchExists(entry.CurrentBranch) {
+	if len(res.Blockers) == 0 && entry.CurrentBranch != "" && !createdSet[entry.CurrentBranch] && !res.WouldDetach && liveSet.exists(g, entry.CurrentBranch) {
 		cb := entry.CurrentBranch
 		res.WouldCheckout = &cb
 	}
