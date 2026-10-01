@@ -35,18 +35,25 @@ The tricky logic is a **pure engine** decoupled from git, so it tests in
 milliseconds against an in-memory fake instead of spawning git.
 
 ```
-internal/git/        the git wrapper + git.Shell (the production port impl)
+internal/git/        the git wrapper + git.Shell (the production port impl),
+                     split by domain: diff/index/rebase/refs/remote/worktree.go;
+                     debug.go is the ST_DEBUG spawn trace
 internal/stack/
   git.go             the Git PORT interface + Env{Git, Save}
   stack.go           State/Branch types + topology helpers (Children/Descendants/…)
   restack.go         restack primitives (NeedsRestack/restackBranch/restackUpstack)
                      + the restack dry-run planners (RestackPlan/RestackAllPlan)
   plan.go            dry-run planners for the other mutating ops (FoldPlan/…)
-  engine.go          the operations: Create/Modify/Restack/Fold/Squash/Onto/Delete/
-                     Sync/Abort/Continue/TrackBranch/UntrackBranch/Rename → *OpResult
+  engine.go          shared op machinery (OpResult, env.save, error taxonomy)
+  ops_*.go           the operations by domain: ops_lifecycle (Create/Modify),
+                     ops_restack (Restack), ops_combine (Fold/Squash),
+                     ops_onto (Onto/Continue/Abort),
+                     ops_delete_sync (Delete/Sync/Prune),
+                     ops_track (TrackBranch/UntrackBranch/Rename) → *OpResult
+  submit.go          submit push-order planning + PR hint/URL derivation
   absorb.go          staged-hunk attribution + tip-amend apply (AbsorbPlan/Absorb)
   repair.go          Repair + the problem kinds `st validate` reports
-  worktree*.go       worktree paths/ownership + .worktreeinclude validation
+  worktree*.go       worktree paths/ownership + .worktreeinclude policy
   store.go undo*.go lock_*.go   persistence, undo journal + Undo op, flock
 cmd/                 thin adapters: parse flags → mutate(label, json, engineFn) → render
 cmd/st/main.go       package main → os.Exit(cmd.Execute())
@@ -63,7 +70,8 @@ e2e/                 black-box tests driving the real binary as a subprocess
 
 ## How to add a command (recipe)
 
-1. Add the operation to `internal/stack/engine.go`:
+1. Add the operation to the matching `internal/stack/ops_*.go` file (or a new
+   one for a new domain):
    ```go
    func Frobnicate(env Env, s *State, arg string) (*OpResult, error) {
        // mutate s and call env.Git.* ; checkpoint with env.save() if needed

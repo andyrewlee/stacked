@@ -1,7 +1,7 @@
 // Package stack is the stacked-diff engine. It holds the metadata model (State,
 // Branch) and topology helpers, the persistence (store.go) and undo journal
 // (undo.go), and the git-aware operations — create, modify, restack, fold,
-// squash, onto, delete, sync, continue (engine.go, restack.go). Operations reach
+// squash, onto, delete, sync, continue (ops_*.go, engine.go, restack.go). Operations reach
 // the repository only through the Git and Remote ports (git.go), so they run in
 // tests against an in-memory fake instead of spawning git.
 package stack

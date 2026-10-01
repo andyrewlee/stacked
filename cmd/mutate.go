@@ -39,8 +39,9 @@ func lockAndLoad() (*stack.State, func(), error) {
 // error it cleans up the tentative entry. It does NOT render — callers render
 // from the (possibly mutated) state. This is the single implementation of the
 // locking/undo/save protocol; mutate is the common case, and commands with a
-// custom result shape (sync, repair) call it directly. The op closure may close
-// over a Remote, so remote-dependent mutations fit the same protocol.
+// custom result shape (absorb, create --worktree, repair) call it directly.
+// The op closure may close over a Remote, so remote-dependent mutations fit
+// the same protocol.
 func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) error) error {
 	s, release, err := lockAndLoad()
 	if err != nil {
