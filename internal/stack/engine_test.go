@@ -344,6 +344,47 @@ func TestInferParentDeterministic(t *testing.T) {
 	}
 }
 
+// TestInferParentAmongQualifiesRefs pins plan-007's contract: inferParentAmong
+// takes branch NAMES and qualifies them to refs/heads/ itself — a bare name
+// reaching MergedInto could resolve to a same-named TAG instead of the branch.
+func TestInferParentAmongQualifiesRefs(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("c"); err != nil { // untracked branch off a's tip
+		t.Fatal(err)
+	}
+
+	got, err := inferParentAmong(f, s.Trunk, "c", []string{"a", "main"})
+	if err != nil {
+		t.Fatalf("inferParentAmong: %v", err)
+	}
+	if got != "a" {
+		t.Fatalf("inferParentAmong(c) = %q, want a", got)
+	}
+	want := []string{"refs/heads/c", "refs/heads/main"}
+	if !reflect.DeepEqual(f.mergedIntoRefs, want) {
+		t.Fatalf("MergedInto args = %v, want fully-qualified %v", f.mergedIntoRefs, want)
+	}
+}
+
+// TestMergedBranchesQualifiesBareBasis pins the defensive arm: a bare trunk
+// name reaching mergedBranches is qualified before it can resolve to a tag.
+func TestMergedBranchesQualifiesBareBasis(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	f.mergedIntoRefs = nil
+	if _, err := mergedBranches(f, s, "main"); err != nil {
+		t.Fatalf("mergedBranches: %v", err)
+	}
+	if len(f.mergedIntoRefs) != 1 || f.mergedIntoRefs[0] != "refs/heads/main" {
+		t.Fatalf("MergedInto args = %v, want [refs/heads/main]", f.mergedIntoRefs)
+	}
+}
+
 func TestRestackUpstackUsesSingleTipsReadWhenClean(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

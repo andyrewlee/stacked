@@ -1861,6 +1861,53 @@ func TestSyncNoFetchUsesExistingRemoteRef(t *testing.T) {
 	}
 }
 
+// TestSyncNoFetchNotFooledByTrunkTag pins plan-007: a tag named "main" shadows
+// the bare name in gitrevisions order (refs/tags/ precedes refs/heads/), so an
+// unqualified prune basis would measure mergedness against the TAG's commit —
+// here the tag sits on feat-a's tip, which would make feat-a look merged and
+// prune live work. Dry-run and apply must agree: both keep feat-a.
+func TestSyncNoFetchNotFooledByTrunkTag(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+
+	// Tag "main" at feat-a's tip. `git rev-parse main` resolves to the TAG
+	// (and warns "refname 'main' is ambiguous", which pollutes stdout).
+	mustRun(t, "git", "tag", "main", "feat-a")
+	tagSHA := mustRun(t, "git", "rev-parse", "refs/tags/main")
+	if got := mustRun(t, "git", "rev-parse", "main"); !strings.Contains(got, tagSHA) {
+		t.Fatalf("test setup: bare main should resolve to the tag, got %q want %s", got, tagSHA)
+	}
+
+	// Dry-run: preview says nothing to prune (feat-a is not merged into the
+	// real trunk branch).
+	dryOut := captureStdout(t, func() {
+		if err := runSync([]string{"--dry-run", "--no-fetch"}); err != nil {
+			t.Fatalf("sync --dry-run --no-fetch: %v", err)
+		}
+	})
+	if strings.Contains(dryOut, "feat-a") && strings.Contains(dryOut, "prun") {
+		t.Fatalf("dry-run would prune feat-a — tag shadowed the trunk basis:\n%s", dryOut)
+	}
+
+	// Apply: the branch must survive — mergedness is against refs/heads/main,
+	// not the tag sitting on feat-a's tip.
+	if err := runSync([]string{"--no-fetch"}); err != nil {
+		t.Fatalf("sync --no-fetch: %v", err)
+	}
+	if exec.Command("git", "rev-parse", "--verify", "-q", "refs/heads/feat-a").Run() != nil {
+		t.Fatal("feat-a was pruned — a tag named main shadowed the prune basis")
+	}
+	s, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	if !s.IsTracked("feat-a") {
+		t.Fatal("feat-a was untracked — a tag named main shadowed the prune basis")
+	}
+}
+
 // --- undo --dry-run ---------------------------------------------------------
 
 // The preview changes nothing observable: state.json and undo.json are

@@ -657,7 +657,7 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	parent := b.Parent
 
 	if !force {
-		mergedIntoParent, err := g.IsAncestor(name, parent)
+		mergedIntoParent, err := g.IsAncestor(branchTipRef(name), branchTipRef(parent))
 		if err != nil {
 			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, parent, err)
 		}
@@ -750,8 +750,10 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 	// The prune basis is the local trunk — after a fast-forward it is the
 	// remote tip. Under --no-fetch nothing moves the local trunk, so the
 	// already-fetched remote-tracking ref is the fresher basis when it exists.
+	// Always qualified: a bare "main" resolves through gitrevisions order where
+	// a tag named main would shadow the branch.
 	ffResult := "skipped (no remote)"
-	trunkRef := s.Trunk
+	trunkRef := branchTipRef(s.Trunk)
 	switch {
 	case noFetch:
 		ffResult = "skipped (--no-fetch)"
@@ -1085,7 +1087,7 @@ func restackAll(env Env, s *State) ([]string, error) {
 // contained in the local trunk. It returns the deleted branch names in sorted
 // order. The caller persists.
 func PruneMerged(env Env, s *State) ([]string, error) {
-	return PruneMergedAgainst(env, s, s.Trunk)
+	return PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
 }
 
 // PruneMergedAgainst is PruneMerged against an arbitrary basis ref — the local
@@ -1241,8 +1243,12 @@ func applyPrune(env Env, s *State, candidates []string) ([]string, error) {
 // base is already in trunkRef's tree even though its tip is no ancestor —
 // answered per unmerged branch by ChangesContainedIn's exact tree comparison
 // (never a patch-id heuristic, so a branch carrying unique content is never
-// flagged). trunkRef may be the local trunk or a fetched remote-tracking ref.
+// flagged). trunkRef may be the local trunk or a fetched remote-tracking ref;
+// a bare name is qualified so a tag can never shadow the trunk branch.
 func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
+	if !strings.HasPrefix(trunkRef, "refs/") {
+		trunkRef = branchTipRef(trunkRef)
+	}
 	merged, err := g.MergedInto(trunkRef)
 	if err != nil {
 		return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
@@ -1311,7 +1317,7 @@ func TrackBranch(env Env, s *State, name, parent string) (*OpResult, error) {
 // TrackAllBranches: merge-base the pair and update the forest. The caller
 // persists via env.save() (once per command, not per branch).
 func trackOne(env Env, s *State, name, parent string) error {
-	parentSHA, err := env.Git.MergeBase(parent, name)
+	parentSHA, err := env.Git.MergeBase(branchTipRef(parent), branchTipRef(name))
 	if err != nil {
 		return fmt.Errorf("computing merge base of %q and %q: %w", parent, name, err)
 	}
@@ -1361,7 +1367,7 @@ func TrackAllBranches(env Env, s *State) (*OpResult, error) {
 			// branch also shares no history with the trunk (an orphan like
 			// gh-pages) there is no base to record; skip it rather than fail
 			// the whole adoption.
-			if _, err := g.MergeBase(s.Trunk, name); err != nil {
+			if _, err := g.MergeBase(branchTipRef(s.Trunk), branchTipRef(name)); err != nil {
 				notes = append(notes, fmt.Sprintf("skipped %s: no common commit history with %s", name, s.Trunk))
 				continue
 			}
@@ -1474,12 +1480,14 @@ func inferParent(g Git, s *State, name string) (string, error) {
 // A branch missing from the merged set (e.g. deleted) simply fails the ancestor
 // test — it cannot be a parent. Only the closest-ancestor tie-break still
 // spawns, and just for the few candidates that are actual ancestors of name.
+// name, trunk, and candidates are branch NAMES — this function qualifies them
+// to refs/heads/ itself, so callers can never hand it a shadowable bare name.
 func inferParentAmong(g Git, trunk, name string, candidates []string) (string, error) {
-	mergedIntoName, err := g.MergedInto(name)
+	mergedIntoName, err := g.MergedInto(branchTipRef(name))
 	if err != nil {
 		return "", fmt.Errorf("list branches merged into %q: %w", name, err)
 	}
-	mergedIntoTrunk, err := g.MergedInto(trunk)
+	mergedIntoTrunk, err := g.MergedInto(branchTipRef(trunk))
 	if err != nil {
 		return "", fmt.Errorf("list branches merged into %q: %w", trunk, err)
 	}
@@ -1534,7 +1542,7 @@ func UntrackBranch(env Env, s *State, name string) (*OpResult, error) {
 	children := s.Children(name)
 	mergedIntoParent := false
 	if len(children) > 0 {
-		mergedIntoParent, err = g.IsAncestor(name, b.Parent)
+		mergedIntoParent, err = g.IsAncestor(branchTipRef(name), branchTipRef(b.Parent))
 		if err != nil {
 			if g.BranchExists(name) {
 				return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, b.Parent, err)
