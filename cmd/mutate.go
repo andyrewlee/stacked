@@ -54,10 +54,10 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 	if err := stack.RequireNoPausedRebase(env.Git); err != nil {
 		return err
 	}
-	if err := s.RecordUndo(env.Git, label); err != nil {
+	undoEntry, err := s.RecordUndo(env.Git, label)
+	if err != nil {
 		return err
 	}
-	undoEntry, _, _ := stack.PeekUndo()
 	if err := op(env, s); err != nil {
 		if cleanupErr := stack.CleanupUndoOnError(env.Git, s, err); cleanupErr != nil {
 			return stack.AlsoFailed(err, "clean up undo entry", cleanupErr)

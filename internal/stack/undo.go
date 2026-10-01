@@ -115,20 +115,25 @@ func (s *State) snapshotUndo(g Git, label string) (*UndoEntry, error) {
 	}, nil
 }
 
-// RecordUndo snapshots the current state via snapshotUndo and appends the
-// entry to the undo journal, so the operation about to run can be reverted
-// by st undo.
-func (s *State) RecordUndo(g Git, label string) error {
+// RecordUndo snapshots the current state via snapshotUndo, appends the entry
+// to the undo journal so the operation about to run can be reverted by st
+// undo, and returns the recorded entry — the caller annotates THAT object in
+// FinalizeUndo rather than re-reading the journal (a peek that can only fail
+// or race a concurrent append has nothing to add).
+func (s *State) RecordUndo(g Git, label string) (*UndoEntry, error) {
 	entry, err := s.snapshotUndo(g, label)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	entries, err := loadUndo()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	entries = append(entries, *entry)
-	return writeUndo(entries)
+	if err := writeUndo(entries); err != nil {
+		return nil, err
+	}
+	return entry, nil
 }
 
 // trimUndo bounds the undo log to the most recent entries. Callers run this
@@ -273,7 +278,10 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 // branches — when the failure left real changes behind, including a conflict
 // that left a rebase in progress.
 func CleanupUndoOnError(g Git, s *State, opErr error) error {
-	entry, _, _ := PeekUndo()
+	entry, _, err := PeekUndo()
+	if err != nil {
+		return fmt.Errorf("peek undo journal after failed op: %w", err)
+	}
 	dropped, created, err := dropNoopUndo(g, s, entry, opErr)
 	if err != nil {
 		return err

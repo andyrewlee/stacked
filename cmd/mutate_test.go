@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +108,36 @@ func TestMutateUndoJournalFailureRunsNothing(t *testing.T) {
 	}
 	if s := stateT(t); s.IsTracked("feat-y") || len(s.Branches) != 0 {
 		t.Fatalf("state changed despite the RecordUndo failure: %+v", s.Branches)
+	}
+}
+
+// TestMutateOpFailureSurfacesUnreadableUndoJournal pins plan-008: when the op
+// fails AND the cleanup-time peek of the journal fails, both errors must
+// surface — a swallowed peek error would keep the tentative entry silently
+// unannotated.
+func TestMutateOpFailureSurfacesUnreadableUndoJournal(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	undoPath := stackedFilePath(t, "undo.json")
+
+	err := mutate("create", false, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+		// Between RecordUndo's append (already on disk) and the cleanup peek:
+		// swap the journal file for a directory so PeekUndo fails on read.
+		if err := os.Remove(undoPath); err != nil {
+			return nil, err
+		}
+		if err := os.Mkdir(undoPath, 0o755); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("op exploded")
+	})
+	if err == nil {
+		t.Fatal("mutate with failing op + unreadable journal returned nil error")
+	}
+	if !strings.Contains(err.Error(), "op exploded") {
+		t.Fatalf("mutate error = %v, want the op error surfaced", err)
+	}
+	if !strings.Contains(err.Error(), "clean up undo entry") {
+		t.Fatalf("mutate error = %v, want the journal-peek failure surfaced alongside", err)
 	}
 }
