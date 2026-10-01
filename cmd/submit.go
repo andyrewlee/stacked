@@ -63,6 +63,16 @@ func runSubmit(args []string) error {
 	}
 	asJSON, remote, dryRun := o.asJSON, o.remote, o.dryRun
 
+	// Serialize with every other stack op: submit resolves which commits to
+	// push from stack state + branch tips, and a concurrent sync/delete/undo
+	// mid-flight would publish a stale tip or fail on a vanished branch. The
+	// push itself moves no local refs, so no undo entry — just the lock.
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	state, err := loadState()
 	if err != nil {
 		return err
