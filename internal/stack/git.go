@@ -33,6 +33,11 @@ type Git interface {
 	CreateBranch(name string) error
 	CreateBranchAt(name, ref string) error
 	DeleteBranch(name string, force bool) error
+	// DeleteBranches force-deletes the named local branches in ONE invocation
+	// (git branch -D name...). git processes the arguments independently: a
+	// non-nil error means some branches may still have been deleted — callers
+	// needing the exact outcome re-probe (applyPrune does).
+	DeleteBranches(names []string, force bool) error
 	ForceBranch(name, ref string) error
 	UpdateRef(ref, sha string) error
 	// UpdateRefs applies every ref->SHA update as ONE transaction: on any

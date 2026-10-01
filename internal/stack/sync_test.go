@@ -342,6 +342,82 @@ func TestSyncPersistsEachSuccessfulPrune(t *testing.T) {
 	}
 }
 
+// Plan-019's spawn contract: a multi-branch prune issues ONE batched
+// `git branch -D` (DeleteBranches) instead of a spawn per branch, and the
+// delete fallback never fires when the batch succeeds.
+func TestSyncPruneDeletesInOneBatch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	// All three tracked under main in state, but merged in git: splice the
+	// commit ancestry so main's tip contains every branch's tip.
+	aTip, _ := f.RevParse("a")
+	bTip, _ := f.RevParse("b")
+	cTip, _ := f.RevParse("c")
+	f.commits[cTip].parent = bTip
+	f.commits[bTip].parent = aTip
+	if err := f.ForceBranch("main", cTip); err != nil {
+		t.Fatal(err)
+	}
+
+	before := f.callsSnapshot()
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := f.calls["DeleteBranches"] - before["DeleteBranches"]; got != 1 {
+		t.Fatalf("DeleteBranches calls = %d, want 1 batched delete for 3 pruned branches", got)
+	}
+	if got := f.calls["DeleteBranch"] - before["DeleteBranch"]; got != 0 {
+		t.Fatalf("DeleteBranch calls = %d, want 0 — the fallback only runs on batch failure", got)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if f.BranchExists(name) || s.IsTracked(name) {
+			t.Fatalf("merged branch %q survived the batched prune", name)
+		}
+	}
+}
+
+// When the batched delete partially fails, applyPrune must retry the
+// SURVIVORS per-branch (git's multi-delete already removed the others — a
+// blanket retry would report "no such branch" on them), name the real
+// failure, and still untrack+checkpoint the branches the batch did delete.
+func TestSyncPruneBatchFailureRetriesSurvivors(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	aTip, _ := f.RevParse("a")
+	bTip, _ := f.RevParse("b")
+	cTip, _ := f.RevParse("c")
+	f.commits[cTip].parent = bTip
+	f.commits[bTip].parent = aTip
+	if err := f.ForceBranch("main", cTip); err != nil {
+		t.Fatal(err)
+	}
+	delErr := errors.New("branch checked out elsewhere")
+	f.deleteErr["b"] = delErr
+
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	if !errors.Is(err, delErr) {
+		t.Fatalf("Sync = %v, want %v", err, delErr)
+	}
+	if !strings.Contains(err.Error(), `delete merged branch "b"`) {
+		t.Fatalf("Sync = %v, want the failing branch named", err)
+	}
+	// The batch deleted a and c before b's failure — both must be untracked
+	// and reported, not left half-pruned.
+	if f.BranchExists("a") || f.BranchExists("c") {
+		t.Fatal("branches the batch deleted are still live in the fake")
+	}
+	if s.IsTracked("a") || s.IsTracked("c") {
+		t.Fatal("deleted branches still tracked — checkpoint phase skipped them")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("the failing branch was deleted anyway")
+	}
+}
+
 func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")

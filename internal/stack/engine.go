@@ -1219,18 +1219,52 @@ func pruneMergedNames(env Env, s *State, trunkRef string) ([]string, error) {
 func applyPrune(env Env, s *State, candidates []string) ([]string, error) {
 	g := env.Git
 	var deleted []string
+	// Release phase: every owned worktree is torn down before any deletion —
+	// a dirty owner aborts the whole prune with zero branches gone.
 	for _, name := range candidates {
 		if err := s.releaseOwnedWorktree(env, name); err != nil {
 			return deleted, err
 		}
-		if err := g.DeleteBranch(name, true); err != nil {
-			return deleted, fmt.Errorf("delete merged branch %q: %w", name, err)
+	}
+	// Delete phase: ONE `git branch -D` for the whole set. git deletes what it
+	// can and errors per-arg on the rest, so on failure each candidate is
+	// re-probed and the survivors retried one-by-one — the error names the
+	// branch that actually failed, not just the batch's first complaint.
+	deletedSet := make(map[string]bool, len(candidates))
+	var firstErr error
+	if err := g.DeleteBranches(candidates, true); err == nil {
+		for _, name := range candidates {
+			deletedSet[name] = true
+		}
+	} else {
+		for _, name := range candidates {
+			if !g.BranchExists(name) {
+				deletedSet[name] = true
+				continue
+			}
+			if err := g.DeleteBranch(name, true); err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("delete merged branch %q: %w", name, err)
+				}
+				continue
+			}
+			deletedSet[name] = true
+		}
+	}
+	// Checkpoint each deleted branch's untracking exactly as the per-branch
+	// loop did — the crash-recovery bound is unchanged.
+	for _, name := range candidates {
+		if !deletedSet[name] {
+			continue
 		}
 		s.RemoveBranch(name)
 		deleted = append(deleted, name)
 		if err := env.save(); err != nil {
 			return deleted, fmt.Errorf("save state after pruning %q: %w", name, err)
 		}
+	}
+	if firstErr != nil {
+		return deleted, firstErr
 	}
 	return deleted, nil
 }

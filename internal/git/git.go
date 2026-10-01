@@ -1493,6 +1493,27 @@ func DeleteBranch(name string, force bool) error {
 	return err
 }
 
+// DeleteBranches deletes the named local branches in ONE `git branch -D`
+// invocation — a prune of N merged branches costs one spawn instead of N. git
+// processes the arguments independently: it deletes every branch it can and
+// reports the rest on stderr with a nonzero exit, so a non-nil error means a
+// PARTIAL delete may already have happened. Callers needing the exact set
+// must re-probe.
+func DeleteBranches(names []string, force bool) error {
+	for _, name := range names {
+		if err := validRefArg("branch", name); err != nil {
+			return err
+		}
+	}
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	args := append([]string{"branch", flag}, names...)
+	_, err := Run(args...)
+	return err
+}
+
 // RevParse returns the full commit SHA that the given ref resolves to. The ref
 // is rejected if it begins with "-" so a corrupt or hostile state.json value
 // (e.g. a branch named "--git-dir") cannot be parsed by git as an option.
