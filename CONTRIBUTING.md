@@ -7,9 +7,15 @@ loop, and the engine you'll touch most is tested in milliseconds.
 
 ```sh
 make test-fast   # about a second: pure engine logic over the fake git
+make test        # the in-process suite with -race (cmd + internal, no e2e)
+make e2e         # the black-box suite driving the built binary as a subprocess
 make ci          # the full gate (= the pre-push hook; there is no remote CI)
 make hooks       # install pre-commit (fast loop) + pre-push (make ci)
 ```
+
+Bare `make` is `make ci` — the whole gate. Iterate on `make test-fast`,
+escalate to `make test`/`make e2e` when the change touches their layer, and
+let the pre-push hook run `make ci` before anything lands.
 
 `make ci` is the single source of truth — and the ONLY gate: version-pin
 agreement checks, `fmt-check`, strict `golangci-lint`, `vet` (+ windows/plan9
