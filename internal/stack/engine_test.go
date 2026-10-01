@@ -2242,6 +2242,37 @@ func mkUntracked(t *testing.T, f *fakeGit, parent, name string) {
 	f.commit("c-" + name)
 }
 
+// TestTrackAllBranchesTrunkMergedOnce pins the loop-invariant hoist: the
+// trunk's merged set is computed once for the whole batch, not once per
+// candidate — N untracked branches cost exactly N+1 MergedInto spawns
+// (one per candidate name + one for the trunk), not 2N.
+func TestTrackAllBranchesTrunkMergedOnce(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "a")
+	mkUntracked(t, f, "a", "b")
+	mkUntracked(t, f, "b", "c")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := f.mergedIntoCalls
+
+	if _, err := TrackAllBranches(env, s); err != nil {
+		t.Fatalf("track --all: %v", err)
+	}
+	if got := f.mergedIntoCalls - callsBefore; got != 4 {
+		t.Fatalf("MergedInto calls = %d, want 4 (3 candidates + 1 trunk)", got)
+	}
+	trunkProbes := 0
+	for _, ref := range f.mergedIntoRefs {
+		if ref == "refs/heads/main" {
+			trunkProbes++
+		}
+	}
+	if trunkProbes != 1 {
+		t.Fatalf("trunk MergedInto probes = %d, want 1 — the set is loop-invariant", trunkProbes)
+	}
+}
+
 func TestTrackAllBranchesAdoptsLinearChain(t *testing.T) {
 	f, s, env := newEnvState()
 	mkUntracked(t, f, "main", "a")
