@@ -74,7 +74,11 @@ func repoIdentifier() (key, root string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	commonDir, err := git.GitCommonDir()
+	// The common dir comes through the persistence layer's cwd-keyed cache —
+	// the same resolution stack.Load just performed — so a command that
+	// loads state then derives worktree paths probes rev-parse once, not
+	// twice.
+	commonDir, err := stack.CommonDir()
 	if err != nil {
 		return "", "", err
 	}
@@ -154,12 +158,15 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 		return materializedWorktree{}, err
 	}
 	addErr := git.WorktreeAdd(path, branch)
-	// Invalidate the per-process worktree cache even on error: a failed add can
-	// still have changed registration state, and a spare re-list is cheap.
-	resetWorktreeCache()
 	if addErr != nil {
+		// Invalidate even on error: a failed add can still have changed
+		// registration state, and a spare re-list is cheap.
+		resetWorktreeCache()
 		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, addErr)
 	}
+	// The new worktree's identity is fully known — append it to the cache so
+	// `worktree --all` does not re-list once per add.
+	noteWorktreeAdded(path, branch)
 
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {

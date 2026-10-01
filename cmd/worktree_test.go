@@ -9,23 +9,29 @@ import (
 	"testing"
 
 	"github.com/andyrewlee/stacked/internal/git"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // TestParseIncludePatterns and the direct ValidateWorktreeIncludePath test
 // moved with the pure helpers to internal/stack/worktree_include_test.go
 // (plan 068 slice 1). The fs-bound containment suite below stays here.
 
-func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
-	orig := cachedWorktrees
-	t.Cleanup(func() { cachedWorktrees = orig })
+// seedWorktreeCache injects a worktree list without a git probe, the way a
+// warm cache holds one. Cleanup resets so other tests re-probe.
+func seedWorktreeCache(t *testing.T, wts []git.Worktree) {
+	t.Helper()
+	worktreeCacheState.Lock()
+	worktreeCacheState.wts = wts
+	worktreeCacheState.probed = true
+	worktreeCacheState.Unlock()
+	t.Cleanup(resetWorktreeCache)
+}
 
-	cached := []git.Worktree{
+func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
+	seedWorktreeCache(t, []git.Worktree{
 		{Path: "/repo-z", Branch: "main", Head: "111"},
 		{Path: "/repo-a", Branch: "feat-a", Head: "222"},
-	}
-	cachedWorktrees = func() ([]git.Worktree, error) {
-		return cached, nil
-	}
+	})
 
 	out := captureStdout(t, func() {
 		if err := worktreeList(false); err != nil {
@@ -1196,5 +1202,45 @@ func TestCopyWorktreeIncludesDropsGlobNestedDescendant(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, inner, "node_modules")); !os.IsNotExist(err) {
 		t.Fatalf("spurious nested duplicate under %s exists (stat err = %v)", inner, err)
+	}
+}
+
+// noteWorktreeAdded must leave the cache coherent: a worktree appended after
+// a successful `git worktree add` is visible to the very next worktrees() in
+// this process — the `st worktree --all` loop depends on it (each add's
+// LinkedOwnerOf check consults the list the previous add appended to).
+func TestNoteWorktreeAddedKeepsCacheCoherent(t *testing.T) {
+	newRepo(t)
+	resetWorktreeCache()
+
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees: %v", err)
+	}
+	before := len(wts)
+
+	noteWorktreeAdded("/wt/feat-x", "feat-x")
+
+	again, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees after append: %v", err)
+	}
+	if len(again) != before+1 {
+		t.Fatalf("worktrees() = %d entries, want %d (the appended one)", len(again), before+1)
+	}
+	owner, ok := stack.LinkedOwnerOf(again, "feat-x")
+	if !ok || owner.Path != "/wt/feat-x" {
+		t.Fatalf("LinkedOwnerOf(feat-x) = %+v, %v — appended entry not visible", owner, ok)
+	}
+
+	// And a still-unprobed cache defers to git instead of lying about the
+	// appended path: reset → the phantom entry is gone.
+	resetWorktreeCache()
+	fresh, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees after reset: %v", err)
+	}
+	if _, ok := stack.LinkedOwnerOf(fresh, "feat-x"); ok {
+		t.Fatal("reset cache still reports the appended phantom worktree")
 	}
 }

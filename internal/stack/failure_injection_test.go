@@ -241,7 +241,7 @@ func TestRestackAgainstTipsRevParseFallback(t *testing.T) {
 	}
 
 	// An empty tips map forces every parent lookup down the RevParse arm.
-	_, _, err := s.restackAgainstTips(env, "b", map[string]string{}, "b")
+	_, _, err := s.restackAgainstTips(env, "b", map[string]string{}, s.ChildIndex(), "b")
 	if err != nil {
 		t.Fatalf("restackAgainstTips with an empty tips map: %v", err)
 	}

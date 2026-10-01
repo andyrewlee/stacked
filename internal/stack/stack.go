@@ -182,7 +182,13 @@ func (s *State) Children(name string) []*Branch {
 // (parents appear before their children). The branch name itself is not
 // included. Children at each level are visited in sorted-by-name order.
 func (s *State) Descendants(name string) []string {
-	index := s.ChildIndex()
+	return descendantsOf(s.ChildIndex(), name)
+}
+
+// descendantsOf is Descendants over a precomputed ChildIndex — callers walking
+// several roots against fixed topology (restackForest) build the index once
+// instead of paying for it per subtree.
+func descendantsOf(index map[string][]string, name string) []string {
 	var result []string
 	visited := map[string]bool{name: true}
 	var walk func(parent string)

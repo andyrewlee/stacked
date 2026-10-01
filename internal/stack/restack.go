@@ -256,10 +256,14 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 	}
 	var rebased []string
 	expectedHEAD := currentBranchOr(env.Git)
+	// The topology is fixed for the duration of a cascade (re-parenting
+	// happens before the walk), so the child index is built once for every
+	// root's Descendants walk and the leaf checks inside it.
+	idx := s.ChildIndex()
 	for _, start := range starts {
-		order := append([]string{start}, s.Descendants(start)...)
+		order := append([]string{start}, descendantsOf(idx, start)...)
 		for _, name := range order {
-			did, newHEAD, err := s.restackAgainstTips(env, name, tips, expectedHEAD)
+			did, newHEAD, err := s.restackAgainstTips(env, name, tips, idx, expectedHEAD)
 			expectedHEAD = newHEAD
 			if err != nil {
 				return rebased, err
@@ -276,7 +280,7 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 // parent tip comes from the map (RevParse fallback for parents outside it),
 // and a rebased branch refreshes its own map entry so later dependents see
 // the new tip.
-func (s *State) restackAgainstTips(env Env, name string, tips map[string]string, expectedHEAD string) (did bool, newHEAD string, err error) {
+func (s *State) restackAgainstTips(env Env, name string, tips map[string]string, idx map[string][]string, expectedHEAD string) (did bool, newHEAD string, err error) {
 	b, err := s.tracked(name)
 	if err != nil {
 		return false, expectedHEAD, err
@@ -295,8 +299,9 @@ func (s *State) restackAgainstTips(env Env, name string, tips map[string]string,
 	// Refresh the live tip only when someone will read it: tips[name] is
 	// consumed solely by a LATER branch whose parent is name, so a leaf's
 	// refresh would be a pure wasted spawn. The topology is fixed for the
-	// duration of a cascade (re-parenting happens before the walk).
-	if len(s.Children(name)) > 0 {
+	// duration of a cascade (re-parenting happens before the walk), so the
+	// hoisted child index answers the leaf check.
+	if len(idx[name]) > 0 {
 		newTip, err := env.Git.RevParse(branchTipRef(name))
 		if err != nil {
 			return false, newHEAD, fmt.Errorf("resolve %q after restack: %w", name, err)
