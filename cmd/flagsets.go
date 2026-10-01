@@ -151,12 +151,14 @@ type trackOpts struct {
 	asJSON bool
 	all    bool
 	parent string
+	dryRun bool
 }
 
 func newTrackFlags(o *trackOpts) *flag.FlagSet {
 	fs := newFlagSet("track", &o.asJSON)
 	fs.BoolVar(&o.all, "all", false, "adopt every untracked local branch, inferring topology")
 	fs.StringVar(&o.parent, "parent", "", "parent branch (trunk or a tracked branch)")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "with --all, preview the inferred parent map without tracking")
 	return withDefaults(fs, "track")
 }
 

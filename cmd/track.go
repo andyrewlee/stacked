@@ -11,7 +11,7 @@ func init() {
 	register(&Command{
 		Name:       "track",
 		Summary:    "Start tracking a git branch in the stack",
-		Usage:      "st track [name] [--parent <branch>] [--all] [--json]",
+		Usage:      "st track [name] [--parent <branch>] [--all] [--dry-run] [--json]",
 		Run:        runTrack,
 		NewFlagSet: trackFlagSet,
 		// track's positional offers local branches that are neither tracked nor
@@ -58,12 +58,19 @@ func runTrack(args []string) error {
 		usageUnlessJSON(fs, args)
 		return fmt.Errorf("--all takes no branch name or --parent")
 	}
+	if o.dryRun && !o.all {
+		usageUnlessJSON(fs, args)
+		return fmt.Errorf("--dry-run previews --all's inferred parent map; a single track's parent is already known")
+	}
 	name := ""
 	if len(rest) == 1 {
 		name = rest[0]
 	}
 	asJSON, parent := o.asJSON, o.parent
 
+	if o.dryRun {
+		return preview(asJSON, stack.TrackAllPlan)
+	}
 	return mutate("track", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		if o.all {
 			return stack.TrackAllBranches(env, s)

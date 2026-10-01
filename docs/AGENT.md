@@ -67,7 +67,8 @@ message.
   untracked local branch in one shot, inferring each parent (so an existing
   `a→b→c` stack becomes a real chain); it adds `"tracked": {"name": "parent"}`
   and `notes` entries for skipped branches (e.g. orphans sharing no history
-  with the trunk). `st prune` deletes every tracked branch already merged into
+  with the trunk). `track --all --dry-run` previews the same inferred map with
+  `"dryRun": true` and records nothing (`--dry-run` requires `--all`). `st prune` deletes every tracked branch already merged into
   the trunk (or into `refs/remotes/<remote>/<trunk>` with `--remote`, never
   fetching) and reports them in `deleted`; it never moves HEAD, so it refuses
   when the current branch itself is merged ("check out another branch or run

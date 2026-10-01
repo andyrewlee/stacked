@@ -1681,6 +1681,66 @@ func TestTrackAllAdoptsExistingStack(t *testing.T) {
 	}
 }
 
+// TestTrackAllDryRun pins the preview contract: `track --all --dry-run`
+// reports the inferred parent map under the "would track" label and records
+// nothing — no state mutation, no journal entry.
+func TestTrackAllDryRun(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustRun(t, "git", "checkout", "-q", "-b", "a")
+	write(t, "a.txt", "a\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "a")
+	mustRun(t, "git", "checkout", "-q", "-b", "b")
+	write(t, "b.txt", "b\n")
+	mustRun(t, "git", "add", "-A")
+	mustRun(t, "git", "commit", "-q", "-m", "b")
+	mustRun(t, "git", "checkout", "-q", "main")
+
+	out := captureStdout(t, func() {
+		if err := runTrack([]string{"--all", "--dry-run"}); err != nil {
+			t.Fatalf("track --all --dry-run: %v", err)
+		}
+	})
+	if !strings.Contains(out, "would track: a (parent: main), b (parent: a)") {
+		t.Fatalf("dry-run output = %q, want the inferred parent map", out)
+	}
+	for _, name := range []string{"a", "b"} {
+		if stateT(t).IsTracked(name) {
+			t.Fatalf("dry-run tracked %s", name)
+		}
+	}
+	if entries, err := stack.ListUndo(); err != nil || len(entries) != 0 {
+		t.Fatalf("journal after preview = %v entries err %v, want 0", len(entries), err)
+	}
+
+	// The JSON arm is the shared dryRun shape: dryRun true plus the tracked
+	// parent map.
+	out = captureStdout(t, func() {
+		if err := runTrack([]string{"--all", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("track --all --dry-run --json: %v", err)
+		}
+	})
+	var got stack.OpResult
+	dec := json.NewDecoder(strings.NewReader(out))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("track --all --dry-run --json did not decode: %v\n%s", err, out)
+	}
+	if !got.DryRun || got.Tracked["a"] != "main" || got.Tracked["b"] != "a" {
+		t.Fatalf("payload = %+v, want dryRun with {a:main, b:a}", got)
+	}
+
+	// --dry-run without --all is a usage error — a single track's parent is
+	// already explicit or trivially the infer call.
+	if err := runTrack([]string{"a", "--dry-run"}); err == nil {
+		t.Fatal("track a --dry-run succeeded; want a usage error")
+	}
+	if stateT(t).IsTracked("a") {
+		t.Fatal("refused dry-run tracked a")
+	}
+}
+
 // TestTrackAllJSONShape pins the aggregate payload: tracked maps each adopted
 // name to its inferred parent.
 func TestTrackAllJSONShape(t *testing.T) {
