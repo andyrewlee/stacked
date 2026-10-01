@@ -1355,10 +1355,16 @@ func TrackAllBranches(env Env, s *State) (*OpResult, error) {
 		return &OpResult{Summary: "Nothing to adopt: every local branch is already tracked"}, nil
 	}
 
+	// The trunk's merged set is loop-invariant (the op holds the lock and
+	// never fetches) — compute it once instead of per candidate.
+	mergedIntoTrunk, err := g.MergedInto(branchTipRef(s.Trunk))
+	if err != nil {
+		return nil, fmt.Errorf("list branches merged into %q: %w", s.Trunk, err)
+	}
 	parents := make(map[string]string, len(untracked))
 	var notes []string
 	for _, name := range untracked {
-		parent, err := inferParentAmong(g, s.Trunk, name, candidates)
+		parent, err := inferParentAmongMerged(g, s.Trunk, mergedIntoTrunk, name, candidates)
 		if err != nil {
 			return nil, err
 		}
@@ -1491,7 +1497,23 @@ func inferParentAmong(g Git, trunk, name string, candidates []string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("list branches merged into %q: %w", trunk, err)
 	}
+	return inferParentPick(g, trunk, name, mergedIntoTrunk, mergedIntoName, candidates)
+}
 
+// inferParentAmongMerged is inferParentAmong with the trunk's merged set
+// already computed — TrackAllBranches hoists the loop-invariant probe out of
+// its per-candidate loop.
+func inferParentAmongMerged(g Git, trunk string, mergedIntoTrunk map[string]bool, name string, candidates []string) (string, error) {
+	mergedIntoName, err := g.MergedInto(branchTipRef(name))
+	if err != nil {
+		return "", fmt.Errorf("list branches merged into %q: %w", name, err)
+	}
+	return inferParentPick(g, trunk, name, mergedIntoTrunk, mergedIntoName, candidates)
+}
+
+// inferParentPick selects the closest ancestor of name from candidates given
+// the two precomputed merged sets — the pure half both probe paths share.
+func inferParentPick(g Git, trunk, name string, mergedIntoTrunk, mergedIntoName map[string]bool, candidates []string) (string, error) {
 	best := trunk
 	// Iterate in a fixed order so the choice between incomparable ancestors (two
 	// candidates where neither is an ancestor of the other, e.g. across a
