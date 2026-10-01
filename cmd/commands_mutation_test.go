@@ -2169,3 +2169,233 @@ func TestUndoDryRunDuringRebase(t *testing.T) {
 		t.Fatalf("abort after preview: %v", err)
 	}
 }
+
+// --- multi-step undo (st undo <n>) ------------------------------------------
+
+// `st undo <n>` rewinds the newest n journal entries newest-first: each step
+// is its own unit and the journal ends shortened by n.
+func TestUndoMultiStepRewindsNewestFirst(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
+
+	if before, err := stack.ListUndo(); err != nil || len(before) != 3 {
+		t.Fatalf("journal before = %v entries err %v, want 3", len(before), err)
+	}
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"2"}); err != nil {
+			t.Fatalf("undo 2: %v", err)
+		}
+	})
+	if !strings.Contains(out, "undid: create (step 1 of 2)") ||
+		!strings.Contains(out, "undid: create (step 2 of 2)") {
+		t.Fatalf("undo 2 output = %q, want two step lines", out)
+	}
+	for _, name := range []string{"feat-c", "feat-b"} {
+		if git.BranchExists(name) || stateT(t).IsTracked(name) {
+			t.Fatalf("undo 2 left %s behind", name)
+		}
+	}
+	if cur := curBranch(t); cur != "feat-a" {
+		t.Fatalf("current branch = %q, want feat-a", cur)
+	}
+	entries, err := stack.ListUndo()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("journal after = %v entries err %v, want 1", len(entries), err)
+	}
+	if entries[0].Label != "create" {
+		t.Fatalf("remaining entry label = %q, want create", entries[0].Label)
+	}
+}
+
+// The step count is validated up front: non-integers, zero/negative, extra
+// positionals, a count beyond the journal depth, and a count under --list all
+// refuse before anything mutates.
+func TestUndoStepCountRefusals(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	for _, args := range [][]string{
+		{"0"}, {"-1"}, {"x"}, {"1", "2"}, {"2"}, {"--list", "1"},
+	} {
+		if err := runUndo(args); err == nil {
+			t.Fatalf("undo %v succeeded, want refusal", args)
+		}
+	}
+	if !git.BranchExists("feat-a") || !stateT(t).IsTracked("feat-a") {
+		t.Fatal("a refused undo mutated feat-a")
+	}
+	if entries, err := stack.ListUndo(); err != nil || len(entries) != 1 {
+		t.Fatalf("journal = %v entries err %v, want 1 untouched", len(entries), err)
+	}
+}
+
+// A refusal mid-sequence is per-entry atomic: the completed prefix stays
+// undone and the error names the stopping step.
+func TestUndoMultiStepStopsAtGate(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	var created struct {
+		Branch   string `json:"branch"`
+		Parent   string `json:"parent"`
+		Worktree string `json:"worktree"`
+		Switched bool   `json:"switched"`
+		Summary  string `json:"summary"`
+	}
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
+			t.Fatalf("create feat-a --worktree: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "create --worktree", out, &created)
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	// Dirty feat-a's linked worktree: step 2's worktree removal must refuse.
+	if err := os.WriteFile(filepath.Join(created.Worktree, "dirty.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runUndo([]string{"2"})
+	if err == nil || !strings.Contains(err.Error(), "stopped at step 2 of 2") {
+		t.Fatalf("undo 2 = %v, want stopped-at-step-2 refusal", err)
+	}
+	// Step 1's undo is kept: feat-b is gone; the blocked step left feat-a and
+	// its worktree intact, and its journal entry still recorded.
+	if git.BranchExists("feat-b") || stateT(t).IsTracked("feat-b") {
+		t.Fatal("partial undo left feat-b behind")
+	}
+	if !git.BranchExists("feat-a") {
+		t.Fatal("blocked step deleted feat-a")
+	}
+	if _, serr := os.Stat(created.Worktree); serr != nil {
+		t.Fatalf("blocked step removed worktree %q: %v", created.Worktree, serr)
+	}
+	if entries, lerr := stack.ListUndo(); lerr != nil || len(entries) != 1 {
+		t.Fatalf("journal after partial undo = %v entries err %v, want 1", len(entries), lerr)
+	}
+}
+
+// The same stop in JSON mode emits the partial aggregate on stdout (the
+// worktree rm --all precedent) plus the error envelope on stderr.
+func TestUndoMultiStepPartialJSON(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	var created struct {
+		Branch   string `json:"branch"`
+		Parent   string `json:"parent"`
+		Worktree string `json:"worktree"`
+		Switched bool   `json:"switched"`
+		Summary  string `json:"summary"`
+	}
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
+			t.Fatalf("create feat-a --worktree: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "create --worktree", out, &created)
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	if err := os.WriteFile(filepath.Join(created.Worktree, "dirty.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Undone   bool     `json:"undone"`
+		Count    int      `json:"count"`
+		Restored []string `json:"restored"`
+		Steps    []struct {
+			Index    int      `json:"index"`
+			Label    string   `json:"label"`
+			Restored []string `json:"restored"`
+		} `json:"steps"`
+	}
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--json", "2"}); err == nil {
+			t.Fatal("undo 2 succeeded, want partial stop")
+		}
+	})
+	decodeStrictJSON(t, "undo 2 --json partial", out, &payload)
+	if !payload.Undone || payload.Count != 2 || len(payload.Steps) != 1 || payload.Steps[0].Index != 1 {
+		t.Fatalf("partial payload = %+v, want undone count=2 steps=[index 1]", payload)
+	}
+}
+
+// `st undo <n> --json` reports the multi-step shape: count, per-step
+// index/label/restored, and the deduped restored union.
+func TestUndoMultiStepJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	var payload struct {
+		Undone   bool     `json:"undone"`
+		Count    int      `json:"count"`
+		Restored []string `json:"restored"`
+		Steps    []struct {
+			Index    int      `json:"index"`
+			Label    string   `json:"label"`
+			Restored []string `json:"restored"`
+		} `json:"steps"`
+	}
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--json", "2"}); err != nil {
+			t.Fatalf("undo 2 --json: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "undo 2 --json", out, &payload)
+	if !payload.Undone || payload.Count != 2 || len(payload.Steps) != 2 {
+		t.Fatalf("payload = %+v, want undone count=2 steps=2", payload)
+	}
+	if payload.Steps[0].Index != 1 || payload.Steps[1].Index != 2 {
+		t.Fatalf("step indexes = %d,%d, want 1,2", payload.Steps[0].Index, payload.Steps[1].Index)
+	}
+}
+
+// `st undo --dry-run <n>` previews each step in order against the state that
+// step's real undo would see — and mutates nothing.
+func TestUndoDryRunMultiStep(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	var payload struct {
+		DryRun bool                       `json:"dryRun"`
+		Count  int                        `json:"count"`
+		Steps  []*stack.UndoPreviewResult `json:"steps"`
+	}
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--json", "--dry-run", "2"}); err != nil {
+			t.Fatalf("undo --dry-run 2: %v", err)
+		}
+	})
+	decodeStrictJSON(t, "undo --dry-run 2 --json", out, &payload)
+	if !payload.DryRun || payload.Count != 2 || len(payload.Steps) != 2 {
+		t.Fatalf("payload = %+v, want dryRun count=2 steps=2", payload)
+	}
+	if payload.Steps[0].Observed.EntryIndex != 1 || payload.Steps[1].Observed.EntryIndex != 2 {
+		t.Fatalf("entryIndex = %d,%d, want 1,2",
+			payload.Steps[0].Observed.EntryIndex, payload.Steps[1].Observed.EntryIndex)
+	}
+	// Chained state: step 1 deletes feat-b, step 2 sees it already gone and
+	// deletes feat-a.
+	if len(payload.Steps[0].WouldDelete) != 1 || payload.Steps[0].WouldDelete[0].Branch != "feat-b" {
+		t.Fatalf("step 1 wouldDelete = %+v, want [feat-b]", payload.Steps[0].WouldDelete)
+	}
+	if len(payload.Steps[1].WouldDelete) != 1 || payload.Steps[1].WouldDelete[0].Branch != "feat-a" {
+		t.Fatalf("step 2 wouldDelete = %+v, want [feat-a]", payload.Steps[1].WouldDelete)
+	}
+	if entries, err := stack.ListUndo(); err != nil || len(entries) != 2 {
+		t.Fatalf("journal after preview = %v entries err %v, want 2 untouched", len(entries), err)
+	}
+	if !git.BranchExists("feat-b") {
+		t.Fatal("preview deleted feat-b")
+	}
+}

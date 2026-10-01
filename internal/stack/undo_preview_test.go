@@ -54,7 +54,7 @@ func TestUndoPreviewListsRestore(t *testing.T) {
 	liveTip := f.branches["feat-a"]
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestUndoPreviewDeletesCreatedWithWorktree(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestUndoPreviewFindsLiveOwnerWithoutRecordedWorktree(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestUndoPreviewDirtyCreatedWorktreeBlocker(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestUndoPreviewCwdInsideCreatedWorktree(t *testing.T) {
 	// HEAD stays on feat-x — the caller's worktree is the doomed one.
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestUndoPreviewCwdInsideCreatedWorktree(t *testing.T) {
 	}
 
 	// With the shim available the teleport succeeds — no blocker.
-	res2, err := UndoPreview(env, s, entry, true)
+	res2, err := UndoPreview(env, s, entry, true, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview(canTeleport): %v", err)
 	}
@@ -238,7 +238,7 @@ func TestUndoPreviewCountsDriftAndMissingRef(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestUndoPreviewCountsDriftAndMissingRef(t *testing.T) {
 	// The branch is gone now: missing live ref → "unknown", not 0, not a
 	// blocker (undo restores the ref by name).
 	delete(f.branches, "feat-a")
-	res2, err := UndoPreview(env, s, entry, false)
+	res2, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview missing ref: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	// Current state written by a newer st.
 	s.Version = stateSchemaVersion + 1
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	raw, _ := json.Marshal(doc)
 	future := *entry
 	future.State = raw
-	res, err = UndoPreview(env, s, &future, false)
+	res, err = UndoPreview(env, s, &future, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview future snapshot: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	// Malformed snapshot bytes: label is still readable from the journal.
 	bad := *entry
 	bad.State = json.RawMessage("{bad json\n")
-	res, err = UndoPreview(env, s, &bad, false)
+	res, err = UndoPreview(env, s, &bad, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview malformed: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestUndoPreviewRebaseInProgressBlocker(t *testing.T) {
 	f.rebaseActive = true
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	entry.AbsorbedCommits = map[string]string{"feat-a": amended}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false)
+	res, err := UndoPreview(env, s, entry, false, 1)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}

@@ -183,6 +183,15 @@ func ValidateUndoState(data []byte) error {
 	return err
 }
 
+// DecodeUndoState parses the State snapshot a journal entry carries under the
+// same schema barrier as ValidateUndoState, returning the State itself.
+// Multi-step undo uses it to chain steps: after undoing entry j+1 the live
+// state IS entry j+1's snapshot, so entry j's preview/gates run against
+// DecodeUndoState(entry[j+1].State).
+func DecodeUndoState(data []byte) (*State, error) {
+	return decodeState(data)
+}
+
 // Save atomically writes the state to disk as pretty-printed JSON with a
 // trailing newline. The schema version is stamped on every write so a future
 // (or older) st can tell which schema produced the file.

@@ -83,13 +83,16 @@ type UndoPreviewResult struct {
 // the currently-loaded state (nil when it could not be decoded, mirroring
 // Undo's degrade path); canTeleport is whether the shell shim could move the
 // caller out of a doomed worktree (without it, that case blocks a real undo).
+// journalIndex is the entry's 1-based position in `st undo --list` numbering
+// (1 = the entry a bare undo reverts); it is reported back in
+// Observed.EntryIndex.
 //
 // Gate order mirrors runUndo + Undo: a paused rebase, then the schema
 // barriers (current state, then the snapshot via ValidateUndoState — short
 // circuits, nothing else computed), then the cwd-inside-created-worktree case
 // (cmd's prepareUndoCurrentCreatedWorktree), then per created branch the
 // recorded-vs-live worktree mismatch and dirty-owner checks.
-func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPreviewResult, error) {
+func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalIndex int) (*UndoPreviewResult, error) {
 	g := env.Git
 	res := &UndoPreviewResult{
 		DryRun:   true,
@@ -292,6 +295,6 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	if len(entry.AbsorbedCommits) > 0 {
 		res.Notes = append(res.Notes, absorbedCommitsNote(entry.AbsorbedCommits))
 	}
-	res.Observed = &undoPreviewObserved{EntryIndex: 1, Tips: tips}
+	res.Observed = &undoPreviewObserved{EntryIndex: journalIndex, Tips: tips}
 	return res, nil
 }

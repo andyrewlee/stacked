@@ -160,7 +160,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` uses already-fetched refs; `--dry-run` previews). |
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
 | `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
-| `st undo [--list \| --dry-run]` | | Undo the last stack-mutating command (`--list` lists the journal, `--dry-run` previews the next undo). |
+| `st undo [<n>] [--list \| --dry-run]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
 | `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
@@ -359,13 +359,20 @@ Renames a branch (the current one by default) with `git branch -m` and updates t
 stack metadata: the branch's record, the trunk name if applicable, and every
 child's parent pointer.
 
-#### `st undo [--list | --dry-run]`
+#### `st undo [<n>] [--list | --dry-run]`
 Reverts the last stack-mutating command: the metadata is rolled back and each
 recorded branch is reset to its prior tip. It does **not** touch your working
 tree, so uncommitted changes are preserved (run `git status` to review). The
 journal keeps the last several operations.
 
-`st undo --dry-run` previews the next undo against *live* refs and worktrees —
+`st undo <n>` rewinds the newest `n` journal entries newest-first — the
+numbering matches `--list` (index 1 is what a bare `st undo` reverts). Each
+step is its own unit: a refusal mid-sequence stops with a "stopped at step k
+of n" report and the already-undone prefix stays undone. A count beyond the
+journal depth refuses outright.
+
+`st undo --dry-run [<n>]` previews the next undo — or each of the next `n`
+steps in order — against *live* refs and worktrees —
 what it would restore, which created branches/worktrees it would delete, and
 every blocker a real run would refuse on — changing nothing. `--list` previews
 the recorded journal alone: entries are
