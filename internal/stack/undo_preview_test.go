@@ -18,11 +18,23 @@ var undoPreviewMutators = []string{
 	"AmendTipWithPatch", "ResetHardIn",
 }
 
-func assertNoMutation(t *testing.T, f *fakeGit) {
+// callsSnapshot captures the fake's fail-instrumented call counts so a test
+// can diff them around the code under test — fixture construction legitimately
+// calls instrumented mutators (mkBranch→Create→CreateBranch), so the purity
+// check must compare against a baseline taken after the fixture, not zero.
+func (f *fakeGit) callsSnapshot() map[string]int {
+	cp := make(map[string]int, len(f.calls))
+	for k, v := range f.calls {
+		cp[k] = v
+	}
+	return cp
+}
+
+func assertNoMutation(t *testing.T, f *fakeGit, before map[string]int) {
 	t.Helper()
 	for _, m := range undoPreviewMutators {
-		if f.calls[m] != 0 {
-			t.Fatalf("preview called mutating port method %s %d time(s)", m, f.calls[m])
+		if f.calls[m] != before[m] {
+			t.Fatalf("preview called mutating port method %s %d time(s)", m, f.calls[m]-before[m])
 		}
 	}
 }
@@ -41,11 +53,13 @@ func TestUndoPreviewListsRestore(t *testing.T) {
 	}
 	liveTip := f.branches["feat-a"]
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	assertNoMutation(t, f)
+	assertNoMutation(t, f, callsBefore)
+	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 0 {
 		t.Fatalf("blockers = %v, want none", res.Blockers)
 	}
@@ -88,11 +102,13 @@ func TestUndoPreviewDeletesCreatedWithWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	assertNoMutation(t, f)
+	assertNoMutation(t, f, callsBefore)
+	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 0 {
 		t.Fatalf("blockers = %v", res.Blockers)
 	}
@@ -119,10 +135,12 @@ func TestUndoPreviewFindsLiveOwnerWithoutRecordedWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.WouldDelete) != 1 || res.WouldDelete[0].Worktree != "/wt/later" {
 		t.Fatalf("wouldDelete = %+v, want live owner path", res.WouldDelete)
 	}
@@ -143,10 +161,12 @@ func TestUndoPreviewDirtyCreatedWorktreeBlocker(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.WouldDelete) != 1 || !res.WouldDelete[0].WorktreeDirty {
 		t.Fatalf("wouldDelete = %+v, want dirty marked", res.WouldDelete)
 	}
@@ -169,10 +189,12 @@ func TestUndoPreviewCwdInsideCreatedWorktree(t *testing.T) {
 	entry.CreatedWorktrees = map[string]string{"feat-x": "/wt/feat-x"}
 	// HEAD stays on feat-x — the caller's worktree is the doomed one.
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.WouldDelete) != 1 || !res.WouldDelete[0].IsCurrentWorktree {
 		t.Fatalf("wouldDelete = %+v, want isCurrentWorktree", res.WouldDelete)
 	}
@@ -215,10 +237,12 @@ func TestUndoPreviewCountsDriftAndMissingRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.WouldRestore) == 0 || res.WouldRestore[0].CommitsLostFromRef != 2 {
 		t.Fatalf("wouldRestore = %+v, want commitsLostFromRef=2", res.WouldRestore)
 	}
@@ -249,17 +273,19 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 
 	// Current state written by a newer st.
 	s.Version = stateSchemaVersion + 1
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 1 || res.Blockers[0] != "state_too_new" {
 		t.Fatalf("blockers = %v, want [state_too_new]", res.Blockers)
 	}
 	if res.WouldRestore != nil || res.WouldDelete != nil {
 		t.Fatal("schema barrier must not compute a speculative preview")
 	}
-	assertNoMutation(t, f)
+	assertNoMutation(t, f, callsBefore)
 	s.Version = stateSchemaVersion
 
 	// Snapshot written by a newer st.
@@ -300,17 +326,19 @@ func TestUndoPreviewRebaseInProgressBlocker(t *testing.T) {
 	entry := mustSnapshot(t, s, f, "restack")
 	f.rebaseActive = true
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 1 || res.Blockers[0] != "rebase_in_progress" {
 		t.Fatalf("blockers = %v, want [rebase_in_progress]", res.Blockers)
 	}
 	if res.WouldRestore != nil {
 		t.Fatal("rebase blocker must short-circuit the preview")
 	}
-	assertNoMutation(t, f)
+	assertNoMutation(t, f, callsBefore)
 }
 
 func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
@@ -324,10 +352,12 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
+	assertNoMutation(t, f, callsBefore)
 	want := "recorded_worktree_mismatch:feat-m"
 	found := false
 	for _, b := range res.Blockers {
@@ -359,11 +389,13 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	const amended = "abc123def456"
 	entry.AbsorbedCommits = map[string]string{"feat-a": amended}
 
+	callsBefore := f.callsSnapshot()
 	res, err := UndoPreview(env, s, entry, false)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	assertNoMutation(t, f)
+	assertNoMutation(t, f, callsBefore)
+	assertNoMutation(t, f, callsBefore)
 	joined := strings.Join(res.Notes, "\n")
 	if !strings.Contains(joined, amended) || !strings.Contains(joined, "feat-a") || !strings.Contains(joined, "git cherry-pick") {
 		t.Fatalf("notes = %v, want the amended SHA, branch, and cherry-pick pointer", res.Notes)

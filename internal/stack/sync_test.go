@@ -24,12 +24,13 @@ type fakeRemote struct {
 	gotCheckedOutHere bool
 	called            bool
 	fetches           int
+	fetchErr          error
 }
 
 func (r *fakeRemote) Exists(string) bool { return r.exists }
 func (r *fakeRemote) Fetch(string) error {
 	r.fetches++
-	return nil
+	return r.fetchErr
 }
 
 func (r *fakeRemote) FastForward(trunk, _, ownerDir string, checkedOutHere bool) (string, error) {
@@ -125,6 +126,21 @@ func TestRestackBranchReturnsNonConflictRebaseErrors(t *testing.T) {
 	}
 	if inProgress, _ := f.RebaseInProgress(); inProgress {
 		t.Fatal("rebase should not be in progress")
+	}
+}
+
+func TestSyncFetchFailurePropagates(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	f.remoteRefs["refs/remotes/origin/main"] = "ignored" // remote exists for the exists check
+	boom := errors.New("fetch exploded")
+
+	_, err := Sync(env, &fakeRemote{exists: true, fetchErr: boom}, s, "origin", false, false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `fetch "origin"`) {
+		t.Fatalf("Sync = %v, want the remote named", err)
 	}
 }
 
