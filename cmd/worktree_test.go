@@ -221,6 +221,47 @@ func TestGitIgnoredSet(t *testing.T) {
 	}
 }
 
+// TestGitIgnoredSetPoisonedBatchClassifiesSiblings pins the fallback arm of
+// the batched check-ignore probe: one entry git cannot classify (a path
+// through a symlinked directory — check-ignore dies fatally on it) makes the
+// WHOLE batch exit non-cleanly, so the probe drops to per-entry checks. The
+// sibling entries must still classify correctly — a genuinely ignored path
+// stays ignored, the poison path counts as not ignored. Existing traversal
+// tests only ever feed the fallback entries whose answer is "not ignored"
+// either way; an empty-result regression would be invisible to them.
+func TestGitIgnoredSetPoisonedBatchClassifiesSiblings(t *testing.T) {
+	newRepo(t)
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, ".gitignore", "ignored.txt\nescape\n")
+	mustRun(t, "git", "add", ".gitignore")
+	mustRun(t, "git", "commit", "-q", "-m", "ignore rules")
+
+	// The poison: a path whose parent is a symlink out of the worktree —
+	// check-ignore cannot classify it and the batch dies with a fatal (non-1)
+	// exit, forcing the per-entry fallback.
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "inner.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := gitIgnoredSet(root, []string{"ignored.txt", "escape/inner.txt"})
+	if err != nil {
+		t.Fatalf("gitIgnoredSet: %v", err)
+	}
+	if !got["ignored.txt"] {
+		t.Fatalf("ignored.txt classified %v — the poisoned batch must still classify its ignored siblings", got)
+	}
+	if got["escape/inner.txt"] {
+		t.Fatalf("escape/inner.txt classified %v — the unclassifiable path must count as not ignored", got)
+	}
+}
+
 func TestPlainCopyRecursive(t *testing.T) {
 	src := t.TempDir()
 	dst := filepath.Join(t.TempDir(), "out")
