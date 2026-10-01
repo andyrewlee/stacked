@@ -15,6 +15,14 @@ func init() {
 		Summary: "Check out a tracked branch (lists branches if no name)",
 		Usage:   "st checkout [name] [--json]",
 		Run:     runCheckout,
+		// checkout's one positional is a branch name: trunk plus every
+		// tracked branch.
+		Completion: func(cc *completionCtx) []string {
+			if cc.flagName != "" || len(cc.positionals) != 0 {
+				return nil
+			}
+			return trackedAndTrunk(cc.s)
+		},
 	})
 }
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/andyrewlee/stacked/internal/stack"
 )
@@ -13,6 +14,32 @@ func init() {
 		Usage:      "st track [name] [--parent <branch>] [--all] [--json]",
 		Run:        runTrack,
 		NewFlagSet: trackFlagSet,
+		// track's positional offers local branches that are neither tracked nor
+		// trunk (suppressed by --all, which takes no name); its --parent flag
+		// value completes the tracked set instead.
+		Completion: func(cc *completionCtx) []string {
+			locals := cc.localTips()
+			if locals == nil {
+				return nil
+			}
+			if cc.flagName != "" {
+				if cc.flagName == "parent" {
+					return trackedAndTrunk(cc.s)
+				}
+				return nil
+			}
+			if len(cc.positionals) == 0 && !cc.seen["all"] {
+				var names []string
+				for name := range locals {
+					if name != cc.s.Trunk && !cc.s.IsTracked(name) {
+						names = append(names, name)
+					}
+				}
+				sort.Strings(names)
+				return names
+			}
+			return nil
+		},
 	})
 }
 

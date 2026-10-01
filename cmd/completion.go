@@ -148,7 +148,7 @@ func fishCompletionScript() string {
 		if toks := commandCompletions(c); len(toks) > 0 {
 			fmt.Fprintf(&b, "complete -c st -n \"__fish_seen_subcommand_from %s\" -a %q\n", names, strings.Join(toks, " "))
 		}
-		if branchCompletionCommands[c.Name] {
+		if c.Completion != nil {
 			fmt.Fprintf(&b, "complete -c st -n \"__fish_seen_subcommand_from %s\" -a \"(__st_branch_candidates)\"\n", names)
 		}
 	}
@@ -167,7 +167,7 @@ func bashCompletionScript() string {
 			continue
 		}
 		toks := commandCompletions(c)
-		if branchCompletionCommands[c.Name] {
+		if c.Completion != nil {
 			// Branch names go through `while read`, never compgen -W: compgen
 			// EXPANDS its wordlist, so a refname-legal candidate like
 			// "$(id>pwned)" would be command-substituted. read -r keeps the
@@ -203,7 +203,7 @@ func zshCompletionScript() string {
 		}
 		toks := commandCompletions(c)
 		dyn := ""
-		if branchCompletionCommands[c.Name] {
+		if c.Completion != nil {
 			// "${(@f)$(...)}" splits the endpoint's output on newlines into
 			// separate words without globbing — candidate bytes are data all
 			// the way into compadd, so glob metacharacters in legal refnames
