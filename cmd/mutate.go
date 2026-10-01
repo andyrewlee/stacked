@@ -86,3 +86,25 @@ func mutate(label string, asJSON bool, op func(stack.Env, *stack.State) (*stack.
 	}
 	return renderResult(res, asJSON)
 }
+
+// preview runs a read-only planner with the standard load → env → render
+// pipeline — the --dry-run counterpart of mutate. Planners never lock or
+// save, so no lock or undo entry is involved.
+func preview(asJSON bool, plan func(stack.Env, *stack.State) (*stack.OpResult, error)) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	return previewState(asJSON, s, plan)
+}
+
+// previewState is preview with the state already loaded — for commands whose
+// preamble needed s before the dry-run branch (prune derives the trunk ref
+// from it).
+func previewState(asJSON bool, s *stack.State, plan func(stack.Env, *stack.State) (*stack.OpResult, error)) error {
+	res, err := plan(stackEnv(s, asJSON), s)
+	if err != nil {
+		return err
+	}
+	return renderResult(res, asJSON)
+}

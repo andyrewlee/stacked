@@ -45,15 +45,9 @@ func runSync(args []string) error {
 	}
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
-		res, err := stack.SyncPlanAgainst(stackEnv(s, asJSON), s, noDelete, resolveTrunkRef(remote, s.Trunk))
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.SyncPlanAgainst(env, s, noDelete, resolveTrunkRef(remote, s.Trunk))
+		})
 	}
 
 	return mutate("sync", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {

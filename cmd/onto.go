@@ -32,15 +32,9 @@ func runOnto(args []string) error {
 	target := rest[0]
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
-		res, err := stack.OntoPlan(stackEnv(s, asJSON), s, target)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.OntoPlan(env, s, target)
+		})
 	}
 	return mutate("onto", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Onto(env, s, target)

@@ -24,15 +24,9 @@ func runSquash(args []string) error {
 	asJSON, message, dryRun := o.asJSON, o.message, o.dryRun
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
-		res, err := stack.SquashPlan(stackEnv(s, asJSON), s, message)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.SquashPlan(env, s, message)
+		})
 	}
 	return mutate("squash", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Squash(env, s, message)
