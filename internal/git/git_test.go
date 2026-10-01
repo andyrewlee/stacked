@@ -2545,6 +2545,48 @@ func TestDiffCachedPatchFor(t *testing.T) {
 	applyCheck(t, both)
 }
 
+// TestDiffCachedPatchesForEquivalence is the batch API's safety net: one
+// shared capture must assemble byte-identical per-target patches to N
+// independent DiffCachedPatchFor calls — the delta correction is computed
+// per target against the same stream's omitted hunks.
+func TestDiffCachedPatchesForEquivalence(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "f.txt", "a1\np\nq\nr\ns\nt\nu\nz1\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "seed")
+	writeFile(t, "f.txt", "A1\nA2\nA3\np\nq\nr\ns\nt\nu\nZ1\n")
+	writeFile(t, "g.txt", "new-file\n")
+	mustGit(t, "add", "-A")
+
+	hunks, _, err := DiffCachedHunks()
+	if err != nil {
+		t.Fatalf("DiffCachedHunks: %v", err)
+	}
+	// Split the staged hunks across two targets, then compare the batched
+	// assembly with independent single calls.
+	first, err := DiffCachedPatchFor(hunks[:1])
+	if err != nil {
+		t.Fatalf("DiffCachedPatchFor(first): %v", err)
+	}
+	rest, err := DiffCachedPatchFor(hunks[1:])
+	if err != nil {
+		t.Fatalf("DiffCachedPatchFor(rest): %v", err)
+	}
+	batch, err := DiffCachedPatchesFor(map[string][]Hunk{
+		"early": hunks[:1],
+		"rest":  hunks[1:],
+	})
+	if err != nil {
+		t.Fatalf("DiffCachedPatchesFor: %v", err)
+	}
+	if string(batch["early"]) != string(first) {
+		t.Fatalf("batch[early] differs from single call:\nbatch:\n%s\nsingle:\n%s", batch["early"], first)
+	}
+	if string(batch["rest"]) != string(rest) {
+		t.Fatalf("batch[rest] differs from single call:\nbatch:\n%s\nsingle:\n%s", batch["rest"], rest)
+	}
+}
+
 // TestCommitRange pins the bounded range walk: exclude..include semantics
 // (shared history AND trunk-only commits excluded), the empty range, and the
 // injection guards.

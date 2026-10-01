@@ -389,13 +389,18 @@ func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) 
 	return f.blame[file], nil
 }
 
-// DiffCachedPatchFor ignores the hunk selection (patch content is not
-// modeled; real reassembly is proven by the git-level and e2e tests).
-func (f *fakeGit) DiffCachedPatchFor(_ []git.Hunk) ([]byte, error) {
-	if err := f.fail("DiffCachedPatchFor"); err != nil {
+// DiffCachedPatchesFor ignores the hunk selection (patch content is not
+// modeled; real reassembly is proven by the git-level and e2e tests). Each
+// target gets the same stagedPatch bytes.
+func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][]byte, error) {
+	if err := f.fail("DiffCachedPatchesFor"); err != nil {
 		return nil, err
 	}
-	return f.stagedPatch, nil
+	patches := make(map[string][]byte, len(want))
+	for target := range want {
+		patches[target] = f.stagedPatch
+	}
+	return patches, nil
 }
 
 // AmendTipWithPatch models the temp-index amend: the branch's tip is replaced

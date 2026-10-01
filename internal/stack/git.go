@@ -104,11 +104,12 @@ type Git interface {
 	// there. Implementations must drop entries whose metadata is incomplete
 	// — a missing map key means unattributable, never "fill in defaults".
 	BlamePorcelain(file, rev string) (map[int]git.BlameLine, error)
-	// DiffCachedPatchFor returns a minimal staged patch containing ONLY the
-	// given hunks (keyed by the DiffCachedHunks tuple), with post-image line
-	// numbers corrected for omitted same-file hunks — the per-target bytes
-	// absorb lands with AmendTipWithPatch.
-	DiffCachedPatchFor(hunks []git.Hunk) ([]byte, error)
+	// DiffCachedPatchesFor returns, per target, a minimal staged patch
+	// containing ONLY that target's hunks (keyed by the DiffCachedHunks
+	// tuple), with post-image line numbers corrected for omitted same-file
+	// hunks — assembled from ONE `diff --cached` capture so absorb's
+	// per-target loop does not rerun the full-index diff.
+	DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][]byte, error)
 	// AmendTipWithPatch rewrites branch's tip commit to also contain patch via
 	// a temporary-index amend (read-tree/apply --cached/write-tree/commit-tree)
 	// that touches no worktree and preserves the tip's author, message, and

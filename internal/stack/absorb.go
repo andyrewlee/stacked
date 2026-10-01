@@ -314,20 +314,20 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	// Amend ancestors first (deterministic; the amends are independent — each
 	// reads only its own tip tree, and targets' hunks are line-disjoint by the
 	// multi-owner refusal). If amend k fails, amends 1..k-1 persist and the
-	// undo entry reverts them. DiffCachedPatchFor and AmendTipWithPatch stay
-	// per-target: each lands a DIFFERENT hunk set on a DIFFERENT ref, so no
-	// batching applies.
+	// undo entry reverts them. AmendTipWithPatch stays per-target — each lands
+	// a DIFFERENT hunk set on a DIFFERENT ref — but the staged diff itself is
+	// captured once for all targets.
 	hunksByTarget := map[string][]git.Hunk{}
 	for _, a := range plan.Absorbed {
 		hunksByTarget[a.Branch] = append(hunksByTarget[a.Branch], a.hunk)
 	}
+	patches, err := g.DiffCachedPatchesFor(hunksByTarget)
+	if err != nil {
+		return nil, fmt.Errorf("assembling staged patches: %w", err)
+	}
 	newTips := make(map[string]string, len(targets))
 	for _, target := range targets {
-		patch, err := g.DiffCachedPatchFor(hunksByTarget[target])
-		if err != nil {
-			return nil, fmt.Errorf("assembling %q's patch: %w", target, err)
-		}
-		newTip, err := g.AmendTipWithPatch(target, patch)
+		newTip, err := g.AmendTipWithPatch(target, patches[target])
 		if err != nil {
 			// The temp-index apply is the pre-flight check: THIS target is
 			// untouched; earlier amends persist under the undo entry.
