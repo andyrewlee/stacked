@@ -827,6 +827,53 @@ func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
 	}
 }
 
+// TestAbsorbUndoRecoveryPointer pins the full journal-to-output path over real
+// git: `st absorb` records the amended tip on its undo entry, `st undo
+// --dry-run` warns about the orphaned commit BEFORE undoing, and `st undo`
+// names it again so the staged edit stays recoverable.
+func TestAbsorbUndoRecoveryPointer(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A0\nB0\n", "a")
+
+	// Stage an edit to line 1 — owned by feat-a's tip.
+	write(t, "f.txt", "A2\nB0\n")
+	mustRun(t, "git", "add", "f.txt")
+	if err := runAbsorb(nil); err != nil {
+		t.Fatalf("absorb: %v", err)
+	}
+
+	amended := mustRun(t, "git", "rev-parse", "feat-a")
+	entry, ok, err := stack.PeekUndo()
+	if err != nil || !ok {
+		t.Fatalf("peek undo: %v (ok=%v)", err, ok)
+	}
+	if entry.AbsorbedCommits["feat-a"] != amended {
+		t.Fatalf("absorbedCommits = %v, want feat-a -> %s", entry.AbsorbedCommits, amended)
+	}
+
+	var dryErr error
+	dry := captureStdout(t, func() { dryErr = runUndo([]string{"--dry-run"}) })
+	if dryErr != nil {
+		t.Fatalf("undo --dry-run: %v", dryErr)
+	}
+	if !strings.Contains(dry, amended) || !strings.Contains(dry, "cherry-pick") {
+		t.Fatalf("dry-run = %q, want the amended SHA and recovery hint before undoing", dry)
+	}
+
+	var undoErr error
+	out := captureStdout(t, func() { undoErr = runUndo(nil) })
+	if undoErr != nil {
+		t.Fatalf("undo: %v", undoErr)
+	}
+	if !strings.Contains(out, amended) || !strings.Contains(out, "git cherry-pick "+amended) {
+		t.Fatalf("undo output = %q, want the amended SHA and a cherry-pick command", out)
+	}
+	if got := mustRun(t, "git", "cat-file", "-t", amended); got != "commit" {
+		t.Fatalf("cat-file -t %s = %q, want the orphaned commit still resolvable", amended, got)
+	}
+}
+
 func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

@@ -116,11 +116,15 @@ func runUndo(args []string) error {
 		Undone   bool     `json:"undone"`
 		Label    string   `json:"label"`
 		Restored []string `json:"restored"`
-	}{true, entry.Label, restored}
+		Notes    []string `json:"notes,omitempty"`
+	}{true, entry.Label, restored, res.Notes}
 	return emit(o.asJSON, payload, func() {
 		out("undid: %s\n", sanitizeForTerminal(entry.Label))
 		if len(restored) > 0 {
 			out("restored branches: %s\n", joinTerminalNames(restored))
+		}
+		for _, n := range res.Notes {
+			out("note: %s\n", sanitizeForTerminal(n))
 		}
 		out("note: your working tree was not modified; run `git status` to review.\n")
 	})
@@ -283,6 +287,9 @@ func renderUndoPreview(res *stack.UndoPreviewResult, asJSON bool) error {
 		}
 		for _, b := range res.Blockers {
 			out("  blocked: %s\n", sanitizeForTerminal(b))
+		}
+		for _, n := range res.Notes {
+			out("  note: %s\n", sanitizeForTerminal(n))
 		}
 	})
 }

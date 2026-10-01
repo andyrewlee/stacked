@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // maxUndoEntries bounds the size of the undo journal.
@@ -23,6 +24,10 @@ type UndoEntry struct {
 	CreatedBranches  []string          `json:"createdBranches,omitempty"`
 	CreatedWorktrees map[string]string `json:"createdWorktrees,omitempty"`
 	CurrentBranch    string            `json:"currentBranch,omitempty"`
+	// AbsorbedCommits maps each absorb target branch to the amended tip that
+	// carried the caller's staged edits — recorded so undo can name the
+	// commits it is about to orphan. Written only for absorb entries.
+	AbsorbedCommits map[string]string `json:"absorbedCommits,omitempty"`
 }
 
 func undoPath() (string, error) {
@@ -198,6 +203,40 @@ func SetLastUndoCreatedWorktrees(paths map[string]string) error {
 	}
 	entries[len(entries)-1].CreatedWorktrees = paths
 	return writeUndo(entries)
+}
+
+// SetLastUndoAbsorbed records, on the latest undo entry, the absorb target →
+// amended-tip map so a later undo can tell the caller which commits still hold
+// the staged edits its ref-restore is about to orphan.
+func SetLastUndoAbsorbed(commits map[string]string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	entries[len(entries)-1].AbsorbedCommits = commits
+	return writeUndo(entries)
+}
+
+// absorbedCommitsNote renders the recovery pointer Undo and UndoPreview share
+// for absorb entries: which commits hold the staged edits once the recorded
+// refs are restored, and how to get them back. Deterministic — sorted by
+// branch.
+func absorbedCommitsNote(commits map[string]string) string {
+	names := make([]string, 0, len(commits))
+	for name := range commits {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	pairs := make([]string, 0, len(names))
+	shas := make([]string, 0, len(names))
+	for _, name := range names {
+		pairs = append(pairs, fmt.Sprintf("%s: %s", name, commits[name]))
+		shas = append(shas, commits[name])
+	}
+	return fmt.Sprintf("the staged edits live in commit(s) %s — undo restores the branch refs, not those commits; recover with `git cherry-pick %s`", strings.Join(pairs, ", "), strings.Join(shas, " "))
 }
 
 // FinalizeUndo completes the undo protocol after a successful mutation: the
