@@ -25,15 +25,52 @@ func init() {
 	})
 }
 
-// branchCompletionCommands are the commands whose positional grammar takes a
-// branch name. The generated scripts embed a `st __complete` call for exactly
-// these, and the endpoint's candidate policy switches on the same set — a
-// command not listed here produces no dynamic candidates at all.
-var branchCompletionCommands = map[string]bool{
-	"checkout": true,
-	"onto":     true,
-	"track":    true,
-	"worktree": true,
+// completionCtx carries everything a command's Completion rule can need: where
+// the cursor sits (inside a flag's value, or at the positional index implied by
+// prior positionals plus the flag names already present), the loaded stack
+// state, and the git inventories — fetched lazily through the methods so each
+// command pays only for the probes its rule reads. A nil probe result means
+// the fetch failed; completers return nil on it, which is the endpoint's
+// standard silent-empty outcome.
+type completionCtx struct {
+	flagName    string
+	positionals []string
+	seen        map[string]bool
+	s           *stack.State
+
+	locals      map[string]string
+	localsDone  bool
+	wts         []git.Worktree
+	wtsDone     bool
+	cur         string
+	curDone     bool
+	fetchLocals func() map[string]string
+	fetchWts    func() []git.Worktree
+	fetchCur    func() string
+}
+
+// localTips returns every local branch -> tip, or nil when the probe failed.
+func (c *completionCtx) localTips() map[string]string {
+	if !c.localsDone {
+		c.locals, c.localsDone = c.fetchLocals(), true
+	}
+	return c.locals
+}
+
+// worktrees returns the repository's worktrees, or nil when the probe failed.
+func (c *completionCtx) worktrees() []git.Worktree {
+	if !c.wtsDone {
+		c.wts, c.wtsDone = c.fetchWts(), true
+	}
+	return c.wts
+}
+
+// current returns the checked-out branch, or "" on detached HEAD or failure.
+func (c *completionCtx) current() string {
+	if !c.curDone {
+		c.cur, c.curDone = c.fetchCur(), true
+	}
+	return c.cur
 }
 
 // runCompleteEndpoint prints candidate branch names, one per line, for the
@@ -60,7 +97,7 @@ func runCompleteEndpoint(args []string) error {
 		return fmt.Errorf("usage: st __complete <command> <index> -- <words...>")
 	}
 	c, ok := byName[args[0]]
-	if !ok || c.Hidden || !branchCompletionCommands[c.Name] {
+	if !ok || c.Hidden || c.Completion == nil {
 		return nil
 	}
 	flagName, positionals, seen := completionCursor(completionFlagSet(c), words)
@@ -69,30 +106,16 @@ func runCompleteEndpoint(args []string) error {
 	if err != nil {
 		return nil
 	}
-	var (
-		locals map[string]string
-		wts    []git.Worktree
-		cur    string
-	)
-	switch c.Name {
-	case "onto":
-		if b, err := currentBranch(); err == nil {
-			cur = b
-		}
-	case "track":
-		l, err := git.Tips()
-		if err != nil {
-			return nil
-		}
-		locals = l
-	case "worktree":
-		w, err := git.Worktrees()
-		if err != nil {
-			return nil
-		}
-		wts = w
+	cc := &completionCtx{
+		flagName:    flagName,
+		positionals: positionals,
+		seen:        seen,
+		s:           s,
+		fetchLocals: func() map[string]string { l, _ := git.Tips(); return l },
+		fetchWts:    func() []git.Worktree { w, _ := git.Worktrees(); return w },
+		fetchCur:    func() string { b, _ := currentBranch(); return b },
 	}
-	for _, name := range completeCandidates(c.Name, flagName, positionals, seen, s, locals, wts, cur) {
+	for _, name := range c.Completion(cc) {
 		if completableName(name) {
 			out("%s\n", name)
 		}
@@ -148,68 +171,26 @@ func completionCursor(fs *flag.FlagSet, words []string) (flagName string, positi
 	return "", positionals, seen
 }
 
-// completeCandidates is the pure policy behind __complete: the command's
-// canonical name, where the cursor sits (a flag's value, or the positional
-// index implied by the prior positionals), the loaded state, and the
-// branch/worktree inventories in, sorted names out — never history, remotes,
-// or the working tree.
+// completeCandidates is the pure-policy view of a command's Completion rule —
+// it feeds the literal inventories tests supply into the registry's completer
+// so the policy can be exercised without a repo. In production the endpoint
+// calls c.Completion directly with lazily-fetched probes.
 func completeCandidates(cmd, flagName string, positionals []string, seen map[string]bool,
 	s *stack.State, locals map[string]string, wts []git.Worktree, cur string,
 ) []string {
-	if flagName != "" {
-		// The one flag whose value is a branch name; other value flags
-		// (messages, remotes, counts) get no candidates.
-		if cmd == "track" && flagName == "parent" {
-			return trackedAndTrunk(s)
-		}
+	c, ok := byName[cmd]
+	if !ok || c.Completion == nil {
 		return nil
 	}
-	posIdx := len(positionals)
-	switch cmd {
-	case "checkout":
-		if posIdx == 0 {
-			return trackedAndTrunk(s)
-		}
-	case "onto":
-		if posIdx == 0 {
-			// Moving a subtree onto itself is refused; every other branch —
-			// trunk included — is a legal target.
-			excl := map[string]bool{cur: true}
-			for _, d := range s.Descendants(cur) {
-				excl[d] = true
-			}
-			return minusNames(trackedAndTrunk(s), excl)
-		}
-	case "track":
-		if posIdx == 0 && !seen["all"] {
-			var names []string
-			for name := range locals {
-				if name != s.Trunk && !s.IsTracked(name) {
-					names = append(names, name)
-				}
-			}
-			sort.Strings(names)
-			return names
-		}
-	case "worktree":
-		if seen["all"] {
-			return nil
-		}
-		owned := linkedOwnerNames(wts)
-		if posIdx == 0 {
-			// The create form offers tracked branches that lack their own
-			// worktree; trunk owns the main worktree, so it never qualifies.
-			excl := map[string]bool{s.Trunk: true}
-			for n := range owned {
-				excl[n] = true
-			}
-			return minusNames(trackedAndTrunk(s), excl)
-		}
-		if posIdx == 1 && (positionals[0] == "rm" || positionals[0] == "remove") {
-			return sortedKeys(owned)
-		}
-	}
-	return nil
+	return c.Completion(&completionCtx{
+		flagName:    flagName,
+		positionals: positionals,
+		seen:        seen,
+		s:           s,
+		fetchLocals: func() map[string]string { return locals },
+		fetchWts:    func() []git.Worktree { return wts },
+		fetchCur:    func() string { return cur },
+	})
 }
 
 // trackedAndTrunk returns the trunk plus every tracked branch, sorted.

@@ -45,6 +45,12 @@ type Command struct {
 	// once and `help --json` cannot drift from what Run parses. Commands whose
 	// only flag is --json leave it nil.
 	NewFlagSet func() *flag.FlagSet
+	// Completion, when set, produces the command's dynamic branch-name
+	// candidates for the __complete endpoint. It is the single source both the
+	// endpoint and the generated shell scripts read: nil means the command
+	// takes no completable positional or flag value, so the endpoint answers
+	// nothing and no script wires a `st __complete` call for it.
+	Completion func(*completionCtx) []string
 	// Hidden marks machinery commands (st __complete) that dispatch normally but
 	// never appear in help, help --json, word-1 completion candidates, generated
 	// case arms, or did-you-mean suggestions.

@@ -17,6 +17,31 @@ func init() {
 		Usage:      "st worktree <branch> | --all | ls|list | rm|remove <branch> | rm --all [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
+		// worktree completes tracked branches that lack a linked worktree in
+		// the create form, and worktree owners after `rm`/`remove`. --all takes
+		// no names at all.
+		Completion: func(cc *completionCtx) []string {
+			wts := cc.worktrees()
+			if wts == nil {
+				return nil
+			}
+			if cc.flagName != "" || cc.seen["all"] {
+				return nil
+			}
+			owned := linkedOwnerNames(wts)
+			if len(cc.positionals) == 0 {
+				// Trunk owns the main worktree, so it never qualifies.
+				excl := map[string]bool{cc.s.Trunk: true}
+				for n := range owned {
+					excl[n] = true
+				}
+				return minusNames(trackedAndTrunk(cc.s), excl)
+			}
+			if len(cc.positionals) == 1 && (cc.positionals[0] == "rm" || cc.positionals[0] == "remove") {
+				return sortedKeys(owned)
+			}
+			return nil
+		},
 	})
 }
 

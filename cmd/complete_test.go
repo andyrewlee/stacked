@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -459,6 +460,45 @@ func TestCompleteCandidatesPure(t *testing.T) {
 	}
 	if got := completeCandidates("worktree", "", nil, map[string]bool{"all": true}, s, locals, wts, "feat-a"); got != nil {
 		t.Fatalf("worktree --all candidates = %v, want nil", got)
+	}
+}
+
+// TestCompletionRegistryIsSingleSource replaces the old three-list agreement
+// (endpoint map + generator list + per-command switch) with a declared pin:
+// exactly these commands carry a Completion rule, and each is wired into every
+// generated script's dynamic-candidate path. Adding a branch-positional
+// grammar to a command now means setting Completion on its registration —
+// this test fails if the set changes without that intent being made explicit.
+func TestCompletionRegistryIsSingleSource(t *testing.T) {
+	var got []string
+	for _, c := range registry {
+		if c.Completion != nil {
+			if c.Hidden {
+				t.Errorf("hidden command %q declares a Completion", c.Name)
+			}
+			got = append(got, c.Name)
+		}
+	}
+	sort.Strings(got)
+	want := []string{"checkout", "onto", "track", "worktree"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands with Completion = %v, want %v", got, want)
+	}
+
+	// The scripts derive the dynamic-candidate wiring from the same field, so
+	// agreement is structural; this pins the one observable consequence: each
+	// completing command's bash case arm embeds the __complete call.
+	bash := bashCompletionScript()
+	for _, name := range want {
+		arm := casePattern(byName[name]) + ")"
+		i := strings.Index(bash, arm)
+		if i < 0 {
+			t.Errorf("bash script has no case arm for %q", name)
+			continue
+		}
+		if !strings.Contains(bash[i:min(i+600, len(bash))], "__complete") {
+			t.Errorf("bash script arm for %q lacks a __complete call", name)
+		}
 	}
 }
 
