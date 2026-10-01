@@ -22,8 +22,9 @@ agreement checks, `fmt-check`, strict `golangci-lint`, `vet` (+ windows/plan9
 cross-vet), `build`, race tests, black-box e2e, a merged-coverage gate (≥75%),
 and the installer checks (`sh -n install.sh`, plus the goreleaser asset-parity
 and minisign signature-matrix scripts when those tools are installed —
-`CI_STRICT=1` makes them mandatory, e.g. before a release). If it's green, you
-can commit.
+`CI_STRICT=1` makes them mandatory, e.g. before a release). A `check-shell`
+leg runs shellcheck over the shell scripts and hooks when it's installed
+(same optional/CI_STRICT contract). If it's green, you can commit.
 
 The Makefile, `scripts/cover.sh`, and the git hooks assume a POSIX shell — on
 Windows run them under git-bash or WSL (the engine and tests themselves are

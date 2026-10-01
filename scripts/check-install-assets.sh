@@ -99,6 +99,7 @@ for target in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
 done
 if [ "$fail" -ne 0 ]; then
 	echo "dist/ tarballs actually produced:" >&2
+	# shellcheck disable=SC2012 # failure-context listing, not file discovery
 	ls dist/*.tar.gz 2>/dev/null | sed 's/^/  /' >&2 || true
 	exit 1
 fi
@@ -109,6 +110,7 @@ grep -q '^ARCHIVE="stacked"$' install.sh ||
 	{ echo 'FAIL: install.sh ARCHIVE is no longer "stacked"' >&2; exit 1; }
 grep -q '^BINARY="st"$' install.sh ||
 	{ echo 'FAIL: install.sh BINARY is no longer "st"' >&2; exit 1; }
+# shellcheck disable=SC2016 # the single quotes are the point: matching the literal ${VAR} template
 grep -q 'ARCHIVE}_\${VERSION_NUM}_\${OS}_\${ARCH}\.tar\.gz' install.sh ||
 	{ echo 'FAIL: install.sh FILENAME template changed' >&2; exit 1; }
 grep -q 'checksums\.txt' install.sh ||
@@ -123,6 +125,7 @@ grep -q 'cmd: minisign' .goreleaser.yaml ||
 	{ echo 'FAIL: .goreleaser.yaml no longer signs with minisign' >&2; exit 1; }
 grep -q 'artifacts: checksum' .goreleaser.yaml ||
 	{ echo 'FAIL: .goreleaser.yaml signing no longer targets the checksum artifact' >&2; exit 1; }
+# shellcheck disable=SC2016 # matching the literal ${artifact} placeholder
 grep -qF '${artifact}.minisig' .goreleaser.yaml ||
 	{ echo 'FAIL: .goreleaser.yaml signature name no longer <artifact>.minisig' >&2; exit 1; }
 
