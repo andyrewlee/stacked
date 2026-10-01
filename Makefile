@@ -204,8 +204,10 @@ check-install:
 	else echo "skip: minisign not installed (set CI_STRICT=1 to require)"; fi
 
 # Regenerate golden test fixtures after an intended, reviewed output change.
+# -timeout 20m defeats Go's default 10m ceiling: a hung regeneration should
+# report a timeout, not panic mid-write.
 golden:
-	go test ./cmd -run Golden -update
+	go test -timeout 20m ./cmd -run Golden -update
 
 # The lint binary must be exactly $(GOLANGCI_VERSION) — the documented pin.
 # A different golangci-lint release ships a different bundled gofumpt and
@@ -216,6 +218,7 @@ check-golangci:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "golangci-lint not found on PATH."; \
 		echo "install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)"; \
+		echo "  (the binary lands in $$(go env GOPATH 2>/dev/null || echo "$${HOME:-~}/go")/bin — ensure it is on PATH)"; \
 		exit 1; \
 	}
 	@have=$$(golangci-lint version --short 2>/dev/null); \
@@ -239,12 +242,16 @@ test-fast:
 	go test ./internal/stack/... -count=1
 
 # In-process suite with the race detector (cmd + internal); no e2e.
+# -timeout 20m defeats Go's default 10m ceiling — the cmd suite already
+# approaches it (cover.sh needed the same bump); a hang must report a
+# timeout, not die with a bare panic.
 test:
-	go test ./cmd/... ./internal/... -race -count=1
+	go test -timeout 20m ./cmd/... ./internal/... -race -count=1
 
 # Black-box e2e suite: builds and drives the real binary as a subprocess.
+# -timeout 20m for the same reason as `test`.
 e2e:
-	go test ./e2e/... -count=1
+	go test -timeout 20m ./e2e/... -count=1
 
 # Whole suite, once: race-checked in-process tests + e2e, merged coverage, gated.
 cover:
