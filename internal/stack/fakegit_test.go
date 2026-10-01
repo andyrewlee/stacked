@@ -658,6 +658,21 @@ func (f *fakeGit) DeleteBranch(name string, force bool) error {
 	return nil
 }
 
+// DeleteBranches mirrors real `git branch -D a b c`: every deletable name is
+// deleted even when another fails, and the first failure is returned — a
+// non-nil error may accompany a partial delete, which is what applyPrune's
+// per-survivor retry path exists to sort out.
+func (f *fakeGit) DeleteBranches(names []string, force bool) error {
+	f.calls["DeleteBranches"]++
+	var firstErr error
+	for _, name := range names {
+		if err := f.DeleteBranch(name, force); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func (f *fakeGit) ForceBranch(name, ref string) error {
 	if err := f.fail("ForceBranch"); err != nil {
 		return err

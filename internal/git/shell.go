@@ -27,11 +27,14 @@ func (Shell) MergedInto(ref string) (map[string]bool, error) {
 func (Shell) ChangesContainedIn(upstream, branch string) (bool, error) {
 	return ChangesContainedIn(upstream, branch)
 }
-func (Shell) Checkout(name string) error                  { return Checkout(name) }
-func (Shell) CheckoutDetach(ref string) error             { return CheckoutDetach(ref) }
-func (Shell) CreateBranch(name string) error              { return CreateBranch(name) }
-func (Shell) CreateBranchAt(name, ref string) error       { return CreateBranchAt(name, ref) }
-func (Shell) DeleteBranch(name string, force bool) error  { return DeleteBranch(name, force) }
+func (Shell) Checkout(name string) error                 { return Checkout(name) }
+func (Shell) CheckoutDetach(ref string) error            { return CheckoutDetach(ref) }
+func (Shell) CreateBranch(name string) error             { return CreateBranch(name) }
+func (Shell) CreateBranchAt(name, ref string) error      { return CreateBranchAt(name, ref) }
+func (Shell) DeleteBranch(name string, force bool) error { return DeleteBranch(name, force) }
+func (Shell) DeleteBranches(names []string, force bool) error {
+	return DeleteBranches(names, force)
+}
 func (Shell) ForceBranch(name, ref string) error          { return ForceBranch(name, ref) }
 func (Shell) UpdateRef(ref, sha string) error             { return UpdateRef(ref, sha) }
 func (Shell) UpdateRefs(updates map[string]string) error  { return UpdateRefs(updates) }
