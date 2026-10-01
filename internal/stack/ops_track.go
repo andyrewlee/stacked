@@ -66,48 +66,43 @@ func trackOne(env Env, s *State, name, parent string) error {
 	return nil
 }
 
-// TrackAllBranches adopts every untracked local branch in one operation,
-// inferring each branch's parent from the full local-branch set — so an
-// existing a→b→c stack comes in as a proper chain rather than three
-// trunk-parented orphans. The proposed parent map is checked for cycles
-// (possible on odd DAGs) before anything is recorded: a cyclic proposal fails
-// the whole command naming the cycle members, which need explicit --parent
-// calls. Branches are applied parents-first; one env.save() persists the
-// whole batch so a single undo entry covers it.
-func TrackAllBranches(env Env, s *State) (*OpResult, error) {
-	g := env.Git
+// trackAllPlan is the read-only core TrackAllBranches and TrackAllPlan share:
+// enumerate the untracked local branches, infer each one's parent (skipping
+// orphans with a note), and refuse cyclic proposals. It returns the proposed
+// parent map plus the untracked count so callers can pick the right
+// nothing-to-adopt message — and it never mutates the state or saves.
+func trackAllPlan(g Git, s *State) (parents map[string]string, notes []string, untracked int, err error) {
 	tips, err := g.Tips()
 	if err != nil {
-		return nil, fmt.Errorf("list local branches: %w", err)
+		return nil, nil, 0, fmt.Errorf("list local branches: %w", err)
 	}
 	candidates := []string{s.Trunk}
-	var untracked []string
+	var names []string
 	for name := range tips {
 		if name == s.Trunk {
 			continue
 		}
 		candidates = append(candidates, name)
 		if !s.IsTracked(name) {
-			untracked = append(untracked, name)
+			names = append(names, name)
 		}
 	}
-	sort.Strings(untracked)
-	if len(untracked) == 0 {
-		return &OpResult{Summary: "Nothing to adopt: every local branch is already tracked"}, nil
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, nil, 0, nil
 	}
 
 	// The trunk's merged set is loop-invariant (the op holds the lock and
 	// never fetches) — compute it once instead of per candidate.
 	mergedIntoTrunk, err := g.MergedInto(branchTipRef(s.Trunk))
 	if err != nil {
-		return nil, fmt.Errorf("list branches merged into %q: %w", s.Trunk, err)
+		return nil, nil, 0, fmt.Errorf("list branches merged into %q: %w", s.Trunk, err)
 	}
-	parents := make(map[string]string, len(untracked))
-	var notes []string
-	for _, name := range untracked {
+	parents = make(map[string]string, len(names))
+	for _, name := range names {
 		parent, err := inferParentAmongMerged(g, s.Trunk, mergedIntoTrunk, name, candidates)
 		if err != nil {
-			return nil, err
+			return nil, nil, 0, err
 		}
 		if parent == s.Trunk {
 			// The trunk fallback means nothing else is an ancestor — if the
@@ -122,7 +117,7 @@ func TrackAllBranches(env Env, s *State) (*OpResult, error) {
 		parents[name] = parent
 	}
 	if len(parents) == 0 {
-		return &OpResult{Summary: "Nothing to adopt: no adoptable untracked branches", Notes: notes}, nil
+		return nil, notes, len(names), nil
 	}
 	adoptable := make([]string, 0, len(parents))
 	for name := range parents {
@@ -130,8 +125,55 @@ func TrackAllBranches(env Env, s *State) (*OpResult, error) {
 	}
 	sort.Strings(adoptable)
 	if cyclic := adoptionCycles(adoptable, parents); len(cyclic) > 0 {
-		return nil, fmt.Errorf("cannot infer parents for %v (their proposals form a cycle): track them one at a time with --parent", cyclic)
+		return nil, nil, 0, fmt.Errorf("cannot infer parents for %v (their proposals form a cycle): track them one at a time with --parent", cyclic)
 	}
+	return parents, notes, len(names), nil
+}
+
+// TrackAllPlan previews a bulk adopt: the inferred parent map (Tracked) plus
+// per-branch skip notes, with nothing recorded — the dry-run half of
+// TrackAllBranches, identical apart from the apply.
+func TrackAllPlan(env Env, s *State) (*OpResult, error) {
+	parents, notes, untracked, err := trackAllPlan(env.Git, s)
+	if err != nil {
+		return nil, err
+	}
+	res := &OpResult{DryRun: true, Tracked: parents, Notes: notes}
+	switch {
+	case untracked == 0:
+		res.Summary = "Nothing to adopt: every local branch is already tracked"
+	case len(parents) == 0:
+		res.Summary = "Nothing to adopt: no adoptable untracked branches"
+	default:
+		res.Summary = fmt.Sprintf("Would track %d branch(es)", len(parents))
+	}
+	return res, nil
+}
+
+// TrackAllBranches adopts every untracked local branch in one operation,
+// inferring each branch's parent from the full local-branch set — so an
+// existing a→b→c stack comes in as a proper chain rather than three
+// trunk-parented orphans. The proposed parent map is checked for cycles
+// (possible on odd DAGs) before anything is recorded: a cyclic proposal fails
+// the whole command naming the cycle members, which need explicit --parent
+// calls. Branches are applied parents-first; one env.save() persists the
+// whole batch so a single undo entry covers it.
+func TrackAllBranches(env Env, s *State) (*OpResult, error) {
+	parents, notes, untracked, err := trackAllPlan(env.Git, s)
+	if err != nil {
+		return nil, err
+	}
+	if untracked == 0 {
+		return &OpResult{Summary: "Nothing to adopt: every local branch is already tracked"}, nil
+	}
+	if len(parents) == 0 {
+		return &OpResult{Summary: "Nothing to adopt: no adoptable untracked branches", Notes: notes}, nil
+	}
+	adoptable := make([]string, 0, len(parents))
+	for name := range parents {
+		adoptable = append(adoptable, name)
+	}
+	sort.Strings(adoptable)
 	for _, name := range adoptionOrder(adoptable, parents) {
 		if err := trackOne(env, s, name, parents[name]); err != nil {
 			return nil, err

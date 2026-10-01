@@ -2301,6 +2301,34 @@ func TestTrackAllBranchesAdoptsLinearChain(t *testing.T) {
 	}
 }
 
+// TestTrackAllPlanMutatesNothing pins the dry-run contract: TrackAllPlan
+// computes the same inferred parent map TrackAllBranches applies — but
+// records nothing, so no branch becomes tracked.
+func TestTrackAllPlanMutatesNothing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "a")
+	mkUntracked(t, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := TrackAllPlan(env, s)
+	if err != nil {
+		t.Fatalf("TrackAllPlan: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatal("TrackAllPlan did not mark the result a dry-run")
+	}
+	if res.Tracked["a"] != "main" || res.Tracked["b"] != "a" {
+		t.Fatalf("tracked = %v, want {a:main, b:a}", res.Tracked)
+	}
+	for _, name := range []string{"a", "b"} {
+		if s.IsTracked(name) {
+			t.Fatalf("preview tracked %s", name)
+		}
+	}
+}
+
 // TestTrackAllBranchesParentsBeforeChildren builds an untracked fork off an
 // untracked base and asserts the base is recorded before the child — the
 // child can only be tracked once its parent is in the forest.
