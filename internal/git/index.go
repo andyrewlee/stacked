@@ -41,7 +41,7 @@ func CheckIgnored(root string, rels []string) (map[string]bool, error) {
 	cmd := exec.Command("git", "-C", root, "check-ignore", "-z", "--stdin")
 	cmd.Env = gitEnv()
 	cmd.Stdin = bytes.NewReader([]byte(strings.Join(rels, "\x00") + "\x00"))
-	out, err := cmd.Output()
+	out, err := spawnOutput(cmd)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
@@ -100,7 +100,7 @@ func UnmergedFiles() ([]string, error) {
 func HasStagedChanges() (bool, error) {
 	cmd := exec.Command("git", "diff", "--cached", "--quiet")
 	cmd.Env = gitEnv()
-	err := cmd.Run()
+	err := spawnRun(cmd)
 	if err == nil {
 		return false, nil
 	}
@@ -118,7 +118,7 @@ func HasStagedChanges() (bool, error) {
 func HasUnstagedChanges() (bool, error) {
 	cmd := exec.Command("git", "diff", "--quiet")
 	cmd.Env = gitEnv()
-	err := cmd.Run()
+	err := spawnRun(cmd)
 	if err == nil {
 		out, err := Run("ls-files", "--others", "--exclude-standard")
 		if err != nil {

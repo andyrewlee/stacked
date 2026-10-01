@@ -79,7 +79,7 @@ func worktreeListZ() (stdout, stderr string, err error) {
 	var so, se strings.Builder
 	cmd.Stdout = &so
 	cmd.Stderr = &se
-	err = cmd.Run()
+	err = spawnRun(cmd)
 	return so.String(), se.String(), err
 }
 

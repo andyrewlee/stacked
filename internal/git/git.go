@@ -42,7 +42,7 @@ func runWith(extraEnv []string, stdin []byte, args ...string) (string, error) {
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := spawnRun(cmd)
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -61,7 +61,7 @@ func runWith(extraEnv []string, stdin []byte, args ...string) (string, error) {
 func ok(args ...string) bool {
 	cmd := exec.Command("git", args...)
 	cmd.Env = gitEnv()
-	return cmd.Run() == nil
+	return spawnRun(cmd) == nil
 }
 
 // Run runs "git args..." and returns the trimmed combined stdout. The returned
@@ -79,7 +79,7 @@ func RunInteractive(args ...string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := spawnRun(cmd); err != nil {
 		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return nil

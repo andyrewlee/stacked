@@ -680,3 +680,40 @@ func TestUndoUnreadableJournal(t *testing.T) {
 		t.Fatalf("state.json changed across failed undo:\nbefore: %s\nafter: %s", stateBefore, stateAfter)
 	}
 }
+
+// TestDebugSpawnTraceKeepsStdoutClean pins the ST_DEBUG contract: the spawn
+// trace lands on stderr while stdout and the exit code stay byte-identical to
+// a run with the trace off — --json consumers must never see it.
+func TestDebugSpawnTraceKeepsStdoutClean(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "feat a")
+
+	plain := r.stOK("log", "--json")
+	debug := r.stInEnv(r.dir, []string{"ST_DEBUG=1"}, "log", "--json")
+	wantExit(t, debug, 0)
+	if debug.stdout != plain.stdout {
+		t.Fatalf("ST_DEBUG changed stdout:\nplain: %q\ndebug: %q", plain.stdout, debug.stdout)
+	}
+	if plain.stderr != "" {
+		t.Fatalf("plain run wrote stderr: %q", plain.stderr)
+	}
+	wantStderrContains(t, debug, "st: git ")
+	// Each trace line names the spawn and carries a duration.
+	for _, line := range strings.Split(strings.TrimSpace(debug.stderr), "\n") {
+		if strings.Contains(line, "coverage meta-data") {
+			continue // harness noise, not the trace
+		}
+		if !strings.HasPrefix(line, "st: git ") || !strings.HasSuffix(line, "ms)") {
+			t.Fatalf("unexpected stderr line: %q", line)
+		}
+	}
+
+	// ST_DEBUG=0 is the explicit off — no trace.
+	off := r.stInEnv(r.dir, []string{"ST_DEBUG=0"}, "log", "--json")
+	wantExit(t, off, 0)
+	if off.stderr != "" {
+		t.Fatalf("ST_DEBUG=0 wrote stderr: %q", off.stderr)
+	}
+}
