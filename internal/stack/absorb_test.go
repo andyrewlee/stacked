@@ -495,6 +495,22 @@ func TestAbsorbApply(t *testing.T) {
 		}
 	})
 
+	// Plan-017's spawn contract: two targets must share ONE staged-diff
+	// capture — the per-target DiffCachedPatchFor loop ran the full-index
+	// diff once per target.
+	t.Run("multi-target absorb captures the staged diff once", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwoTargets(f, tips)
+
+		before := f.callsSnapshot()
+		if _, err := Absorb(env, s); err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		if got := f.calls["DiffCachedPatchesFor"] - before["DiffCachedPatchesFor"]; got != 1 {
+			t.Fatalf("DiffCachedPatchesFor calls = %d, want 1 (batched) for two targets", got)
+		}
+	})
+
 	t.Run("one undo entry reverts a multi-target absorb", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		stageTwoTargets(f, tips)
@@ -948,18 +964,18 @@ func TestAbsorbPreAmendProbeFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("DiffCachedPatchFor fails", func(t *testing.T) {
+	t.Run("DiffCachedPatchesFor fails", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		stage(f, tips)
 		boom := errors.New("diff exploded")
-		f.failErr["DiffCachedPatchFor"] = boom
+		f.failErr["DiffCachedPatchesFor"] = boom
 
 		_, err := Absorb(env, s)
 		if !errors.Is(err, boom) {
 			t.Fatalf("Absorb = %v, want %v", err, boom)
 		}
-		if !strings.Contains(err.Error(), `assembling "a"'s patch`) {
-			t.Fatalf("Absorb = %v, want the target's patch step named", err)
+		if !strings.Contains(err.Error(), "assembling staged patches") {
+			t.Fatalf("Absorb = %v, want the patch-assembly step named", err)
 		}
 		if f.branches["a"] != tips["a"] {
 			t.Fatal("a's tip moved — a pre-amend probe failure must not mutate")

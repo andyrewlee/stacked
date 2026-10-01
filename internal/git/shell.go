@@ -78,8 +78,8 @@ func (Shell) BlamePorcelain(file, rev string) (map[int]BlameLine, error) {
 	return BlamePorcelain(file, rev)
 }
 
-func (Shell) DiffCachedPatchFor(hunks []Hunk) ([]byte, error) {
-	return DiffCachedPatchFor(hunks)
+func (Shell) DiffCachedPatchesFor(want map[string][]Hunk) (map[string][]byte, error) {
+	return DiffCachedPatchesFor(want)
 }
 
 func (Shell) AmendTipWithPatch(branch string, patch []byte) (string, error) {

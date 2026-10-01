@@ -701,6 +701,30 @@ func DiffCachedPatchFor(want []Hunk) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return assemblePatchFor(out, want), nil
+}
+
+// DiffCachedPatchesFor is the batched twin: ONE `diff --cached` capture feeds
+// every target's assembly. Absorb's per-target loop would otherwise run the
+// same full-index diff once per target — T identical captures + parses.
+func DiffCachedPatchesFor(wantByTarget map[string][]Hunk) (map[string][]byte, error) {
+	out, err := run(diffCachedArgs()...)
+	if err != nil {
+		return nil, err
+	}
+	patches := make(map[string][]byte, len(wantByTarget))
+	for target, want := range wantByTarget {
+		patches[target] = assemblePatchFor(out, want)
+	}
+	return patches, nil
+}
+
+// assemblePatchFor emits the minimal patch containing only the wanted hunks
+// of the given `diff --cached` capture. The delta correction is per emitted
+// patch, computed against the capture's OMITTED hunks — running it per target
+// over a shared capture is sound because the refusal contract keeps targets'
+// hunk sets line-disjoint.
+func assemblePatchFor(out string, want []Hunk) []byte {
 	wanted := make(map[Hunk]bool, len(want))
 	for _, h := range want {
 		wanted[h] = true
@@ -772,7 +796,7 @@ func DiffCachedPatchFor(want []Hunk) ([]byte, error) {
 			i++
 		}
 	}
-	return []byte(buf.String()), nil
+	return []byte(buf.String())
 }
 
 // formatHunkHeader renders "@@ -<old> +<new> @@" with git's single-line
