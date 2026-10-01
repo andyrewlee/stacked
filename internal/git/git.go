@@ -1472,11 +1472,14 @@ func DeleteBranch(name string, force bool) error {
 // RevParse returns the full commit SHA that the given ref resolves to. The ref
 // is rejected if it begins with "-" so a corrupt or hostile state.json value
 // (e.g. a branch named "--git-dir") cannot be parsed by git as an option.
+// Bare local branch names are qualified first — like MergedInto, IsAncestor,
+// MergeBase, and ChangesContainedIn — so a tag or SHA-shaped string of the
+// same name cannot shadow the branch.
 func RevParse(ref string) (string, error) {
 	if err := validRefArg("ref", ref); err != nil {
 		return "", err
 	}
-	return Run("rev-parse", ref)
+	return Run("rev-parse", localBranchRef(ref))
 }
 
 // localBranchRef qualifies a bare local branch name to refs/heads/<name> so

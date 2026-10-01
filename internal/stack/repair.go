@@ -159,7 +159,7 @@ func Repair(env Env, s *State) (*OpResult, error) {
 // recorded base after re-parenting onto trunk), or the trunk tip when no merge
 // base exists.
 func repairedParentSHA(g Git, trunk, branch, fallback string) string {
-	if sha, err := g.MergeBase(trunk, branch); err == nil {
+	if sha, err := g.MergeBase(branchTipRef(trunk), branchTipRef(branch)); err == nil {
 		return sha
 	}
 	return fallback

@@ -61,6 +61,7 @@ type fakeGit struct {
 	commitErr       error
 	isAncestorCalls int
 	mergedIntoCalls int
+	mergedIntoRefs  []string
 	// detachedAt is the commit a CheckoutDetach left HEAD on ("" when HEAD is
 	// on a branch).
 	detachedAt string
@@ -287,6 +288,7 @@ func (g *tipReadSpyGit) Worktrees() ([]git.Worktree, error) {
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 	f.mergedIntoCalls++
+	f.mergedIntoRefs = append(f.mergedIntoRefs, ref)
 	if err := f.fail("MergedInto"); err != nil {
 		return nil, err
 	}

@@ -538,6 +538,27 @@ func TestRevParseRejectsFlagLikeRef(t *testing.T) {
 	}
 }
 
+// TestRevParsePrefersBranchOverTag pins the port-level qualification: a tag
+// named like the trunk shadows the bare name in gitrevisions order
+// (refs/tags/ precedes refs/heads/), so RevParse must resolve the BRANCH.
+func TestRevParsePrefersBranchOverTag(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "commit", "--allow-empty", "-m", "move-main")
+	mustGit(t, "tag", "main", "HEAD~1") // tag main at the OLDER commit
+	branchTip := mustGit(t, "rev-parse", "refs/heads/main")
+	tagTip := mustGit(t, "rev-parse", "refs/tags/main")
+	if branchTip == tagTip {
+		t.Fatal("test setup: tag and branch should differ")
+	}
+	got, err := RevParse("main")
+	if err != nil {
+		t.Fatalf("RevParse: %v", err)
+	}
+	if got != branchTip {
+		t.Fatalf("RevParse(main) = %s, want branch tip %s (not tag %s)", got, branchTip, tagTip)
+	}
+}
+
 func TestUpdateRefRejectsFlagLikeRef(t *testing.T) {
 	newRepo(t)
 	first := mustGit(t, "rev-parse", "HEAD")

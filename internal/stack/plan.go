@@ -172,7 +172,7 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	parent := b.Parent
 
 	if !force {
-		mergedIntoParent, err := g.IsAncestor(name, parent)
+		mergedIntoParent, err := g.IsAncestor(branchTipRef(name), branchTipRef(parent))
 		if err != nil {
 			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, parent, err)
 		}
