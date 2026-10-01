@@ -32,7 +32,7 @@ GIT_MIN_VERSION := 2.17
 # tests three times. check-install covers the installer legs (install.sh
 # syntax, goreleaser schema/asset parity, the minisign decision matrix); its
 # optional tools skip loudly unless CI_STRICT=1.
-ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools fmt-check vet vet-cross build lint cover check-install
+ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools check-shell fmt-check vet vet-cross build lint cover check-install
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -174,17 +174,33 @@ check-goreleaser-version:
 # CI_STRICT=1 makes check-install require goreleaser and minisign.
 check-tools:
 	@missing=""; \
-	for t in curl tar goreleaser minisign; do \
+	for t in curl tar goreleaser minisign shellcheck; do \
 		command -v $$t >/dev/null 2>&1 || missing="$$missing $$t"; \
 	done; \
 	if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then \
 		missing="$$missing sha256sum-or-shasum"; \
 	fi; \
 	if [ -n "$$missing" ]; then \
-		echo "optional install/release tools absent:$$missing (their legs skip; CI_STRICT=1 requires goreleaser+minisign)"; \
+		echo "optional install/release tools absent:$$missing (their legs skip; CI_STRICT=1 requires goreleaser+minisign+shellcheck)"; \
 	else \
-		echo "tools: curl, tar, sha256, goreleaser, minisign all present"; \
+		echo "tools: curl, tar, sha256, goreleaser, minisign, shellcheck all present"; \
 	fi
+
+# Shellcheck is presence-optional like minisign (its diagnostics aren't
+# pin-sensitive for this repo, so no version check): absent skips loudly,
+# CI_STRICT=1 requires. `-s sh` pins the POSIX scripts' dialect; the bash
+# scripts/hooks run under their own shebangs with -x so sourced-path checks
+# work. Findings are fixed or annotated inline — never globally disabled.
+check-shell:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -s sh install.sh scripts/check-release-ready.sh && \
+		shellcheck -x scripts/check-install-assets.sh \
+			scripts/check-install-signatures.sh scripts/cover.sh \
+			.githooks/pre-commit .githooks/pre-push && \
+		echo "shellcheck: 7 scripts clean"; \
+	elif [ "$${CI_STRICT:-0}" = "1" ]; then \
+		echo "shellcheck required for the shell leg (CI_STRICT=1)"; exit 1; \
+	else echo "skip: shellcheck not installed (set CI_STRICT=1 to require)"; fi
 
 # The installer checks local CI runs around the test suite: install.sh syntax,
 # the installer↔goreleaser asset-name parity check, and the minisign signature
