@@ -104,7 +104,7 @@ func TestRestackPlanRejectsUntrackedBranch(t *testing.T) {
 
 // TestTrackBranchInferParentUsesMergedRefScans pins inferParent's spawn
 // shape: two bounded `for-each-ref --merged` scans (MergedInto) instead of
-// unbounded `rev-list` history walks (AncestorSet) or a per-branch TipsFor.
+// unbounded `rev-list` history walks or a per-branch TipsFor.
 func TestTrackBranchInferParentUsesMergedRefScans(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

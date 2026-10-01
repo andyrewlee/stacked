@@ -630,7 +630,7 @@ func TestAbsorbApply(t *testing.T) {
 // TestAbsorbPlanSpawnDiet is a deliberate perf ratchet in the style of
 // restack_spawn_test.go: it pins the spawn STRATEGY, not behavior. The stack
 // set comes from one bounded CommitRange (no per-tip RevParse, no unbounded
-// AncestorSet trunk walk) and the current branch is read exactly once.
+// trunk-history walk) and the current branch is read exactly once.
 func TestAbsorbPlanSpawnDiet(t *testing.T) {
 	f, s, env, tips := absorbEnv(t)
 	f.staged = true

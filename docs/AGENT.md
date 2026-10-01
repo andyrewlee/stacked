@@ -196,7 +196,7 @@ message.
     `blockers` lists, in the real undo's gate order, everything a real run
     would refuse on: `rebase_in_progress`, `state_too_new`,
     `malformed_snapshot`, `cwd_inside_created_worktree:<b>`,
-    `worktree_dirty:<b>`, `recorded_worktree_mismatch:<b>`,
+    `recorded_worktree_mismatch:<b>`, `worktree_dirty:<b>`,
     `missing_restore_target:<b>` — a missing ref is NOT a blocker (undo
     restores it). `wouldCheckout` is the landing branch a real run performs,
     or null when the recorded branch would be deleted by the undo itself,

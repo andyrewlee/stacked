@@ -211,10 +211,11 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 // SyncPlanAgainst previews what a sync would do against the supplied trunk
 // ref — which merged branches it would prune and which branches it would
 // restack — without fetching, fast-forwarding, or mutating anything. Used by
-// the CLI dry-run path after fetching the selected remote's trunk.
+// the CLI dry-run path against the already-fetched remote trunk ref (the
+// dry run never fetches).
 func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResult, error) {
 	g := env.Git
-	// The real Sync requires a clean tree (engine.go Sync), so the preview must
+	// The real Sync requires a clean tree (Sync, above), so the preview must
 	// too — otherwise it reports branches it "would restack" that the real
 	// command will refuse to touch, returning exit 0 instead of the dirty-tree
 	// exit code.

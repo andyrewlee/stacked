@@ -21,7 +21,7 @@ func TestCrashShapeRecovery(t *testing.T) {
 	}{
 		{
 			name: "modify_mid_upstack_parent_amended",
-			// engine.go Modify (~line 242) amends the parent before
+			// ops_lifecycle.go Modify amends the parent before
 			// finishUpstack restacks descendants and records their new bases.
 			build: func(r *repo) {
 				r.stOK("checkout", "feat-a")
@@ -35,7 +35,7 @@ func TestCrashShapeRecovery(t *testing.T) {
 		},
 		{
 			name: "fold_after_git_before_save",
-			// engine.go Fold (~line 393) force-moves the parent,
+			// ops_combine.go Fold force-moves the parent,
 			// checks it out, and deletes the folded branch before RemoveBranch is
 			// saved to state.json.
 			build: func(r *repo) {
@@ -49,7 +49,7 @@ func TestCrashShapeRecovery(t *testing.T) {
 		},
 		{
 			name: "delete_after_state_save_before_child_restack",
-			// engine.go Delete (~line 611) removes the branch, saves
+			// ops_delete_sync.go Delete removes the branch, saves
 			// children re-parented onto the grandparent, then restacks those
 			// children to drop the deleted branch's commits.
 			build: func(r *repo) {
@@ -68,7 +68,7 @@ func TestCrashShapeRecovery(t *testing.T) {
 		},
 		{
 			name: "create_after_checkout_before_save",
-			// engine.go Create (~line 155) checks out the new git
+			// ops_lifecycle.go Create checks out the new git
 			// branch before Track/save. An untracked branch is legal for
 			// validate; `st track` adopts it as the current stack tip.
 			build: func(r *repo) {
