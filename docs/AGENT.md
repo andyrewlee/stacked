@@ -181,7 +181,7 @@ message.
     { "dryRun": true, "label": "…",
       "wouldRestore": [{"branch","from","to","commitsLostFromRef"}],
       "wouldDelete":  [{"branch","worktree","worktreeDirty","isCurrentWorktree"}],
-      "wouldCheckout": "main", "journalDrop": true,
+      "wouldCheckout": "main", "wouldDetach": true, "journalDrop": true,
       "observed": {"entryIndex": 1, "tips": {}}, "blockers": [],
       "notes": ["…"] }
     ```
@@ -193,8 +193,16 @@ message.
     `blockers` lists, in the real undo's gate order, everything a real run
     would refuse on: `rebase_in_progress`, `state_too_new`,
     `malformed_snapshot`, `cwd_inside_created_worktree:<b>`,
-    `worktree_dirty:<b>`, `recorded_worktree_mismatch:<b>` — a missing ref is
-    NOT a blocker (undo restores it). `notes` is `omitempty`: advisory
+    `worktree_dirty:<b>`, `recorded_worktree_mismatch:<b>`,
+    `missing_restore_target:<b>` — a missing ref is NOT a blocker (undo
+    restores it). `wouldCheckout` is the landing branch a real run performs,
+    or null when the recorded branch would be deleted by the undo itself,
+    and when `wouldDetach` is set — the
+    doomed-current-branch path whose intermediate checkout a real run
+    predicts will be blocked (target already checked out in another
+    worktree, or local changes in the caller's worktree): a real run parks
+    HEAD detached and skips the recorded-branch restore rather than
+    refusing. `notes` is `omitempty`: advisory
     warnings a real undo would also print — e.g. undoing an `absorb` entry
     names the amended commits (still carrying the staged edits) that the
     ref-restore orphans, with a `git cherry-pick` recovery pointer. A

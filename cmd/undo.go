@@ -280,7 +280,9 @@ func renderUndoPreview(res *stack.UndoPreviewResult, asJSON bool) error {
 			}
 			out("%s\n", line)
 		}
-		if res.WouldCheckout != nil {
+		if res.WouldDetach {
+			out("  detach: HEAD would end detached — the checkout target is blocked\n")
+		} else if res.WouldCheckout != nil {
 			out("  checkout: %s\n", sanitizeForTerminal(*res.WouldCheckout))
 		} else if len(res.Blockers) == 0 {
 			out("  checkout: (recorded branch no longer exists)\n")
