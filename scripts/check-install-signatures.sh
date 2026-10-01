@@ -24,16 +24,16 @@
 # and each is matched on its specific diagnostic so an unrelated curl/tar
 # failure cannot count as a pass.
 #
-# Requires minisign, curl, tar and the platform sha256sum/shasum — CI installs
-# minisign on the Ubuntu leg; a dev box without it skips cleanly (the sibling
-# asset check skips the same way without goreleaser).
+# Requires minisign, curl, tar and the platform sha256sum/shasum — a dev box
+# without them skips cleanly (the sibling asset check skips the same way
+# without goreleaser); CI_STRICT=1 in check-install makes them required.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 for tool in minisign curl tar; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
-		echo "check-install-signatures: $tool not installed; skipping signature matrix (CI installs minisign on the ubuntu leg)"
+		echo "check-install-signatures: $tool not installed; skipping signature matrix (install it or run check-install with CI_STRICT=1 to require)"
 		exit 0
 	fi
 done

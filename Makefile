@@ -22,17 +22,17 @@ GIT_MIN_VERSION := 2.17
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
 
 # THE gate: there is no remote CI — this Makefile is the whole pipeline.
 # Fails fast, in order. The Go-toolchain-only steps (vet/vet-cross/build) run
 # before lint, so a missing or wrong golangci-lint never hides a compile/vet
 # failure; lint still precedes the slow `cover` step. `cover` runs the whole
 # suite once (race + combined in-process/e2e coverage), so ci does not run the
-# tests three times. check-install covers what a remote runner used to add
-# (install.sh syntax, goreleaser schema/asset parity, the minisign decision
-# matrix); its optional tools skip loudly unless CI_STRICT=1.
-ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version fmt-check vet vet-cross build lint cover check-install
+# tests three times. check-install covers the installer legs (install.sh
+# syntax, goreleaser schema/asset parity, the minisign decision matrix); its
+# optional tools skip loudly unless CI_STRICT=1.
+ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools fmt-check vet vet-cross build lint cover check-install
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -110,8 +110,11 @@ check-go-version:
 	echo "go pin: $$want consistent across go.mod, README, CONTRIBUTING"
 
 # The git floor ($(GIT_MIN_VERSION)) is the documented runtime requirement —
-# check it here so the gate fails on the maintainer's own ancient git rather
-# than deep in a test. st itself enforces the same floor in cmd.Execute.
+# declared in three hand-synced places (this var, the README/CONTRIBUTING
+# "Git N.NN+" prose, and internal/git's MinVersion), each enforced here: the
+# installed git must meet it AND every declaration must agree, so a floor bump
+# cannot silently leave the docs or the runtime check behind (the same hazard
+# check-lint-version/check-go-version guard).
 check-git-version:
 	@have=$$(git version 2>/dev/null | sed -nE 's/.*git version ([0-9]+)\.([0-9]+)(\.[0-9]+)?.*/\1.\2/p'); \
 	if [ -z "$$have" ]; then \
@@ -123,7 +126,21 @@ check-git-version:
 		echo "git $$have is below the required floor $(GIT_MIN_VERSION)"; \
 		exit 1; \
 	fi; \
-	echo "git floor: $$have >= $(GIT_MIN_VERSION)"
+	agree=1; \
+	for f in README.md CONTRIBUTING.md; do \
+		pin=$$(grep -oE 'Git [0-9]+\.[0-9]+\+' $$f | head -1 | sed -nE 's/Git ([0-9.]+)\+/\1/p'); \
+		if [ "$$pin" != "$(GIT_MIN_VERSION)" ]; then \
+			echo "$$f documents 'Git $${pin:-<none>}+' (want Git $(GIT_MIN_VERSION)+ from Makefile)"; \
+			agree=0; \
+		fi; \
+	done; \
+	code=$$(sed -nE 's/.*MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}.*/\1.\2/p' internal/git/git.go | head -1); \
+	if [ "$$code" != "$(GIT_MIN_VERSION)" ]; then \
+		echo "internal/git MinVersion is '$${code:-<none>}' (want $(GIT_MIN_VERSION) from Makefile)"; \
+		agree=0; \
+	fi; \
+	[ $$agree -eq 1 ] || exit 1; \
+	echo "git floor: $$have >= $(GIT_MIN_VERSION); pin agrees across Makefile, README, CONTRIBUTING, internal/git"
 
 # The GoReleaser pin lives in GORELEASER_VERSION (Makefile) — it is the version
 # release tooling installs. Its major must match the .goreleaser.yaml config
@@ -147,7 +164,29 @@ check-goreleaser-version:
 		echo "goreleaser pin: $(GORELEASER_VERSION); .goreleaser.yaml schema v$$cfg matches (binary not installed — fine for non-release work)"; \
 	fi
 
-# The checks a remote runner used to add around `make ci`: install.sh syntax,
+# Inventory of every external tool the build/release/install paths touch
+# beyond the POSIX coreutils the scripts assume (sed/grep/awk/sort/sh) and the
+# go/git toolchains (check-go-version/check-git-version). Each entry is either
+# pinned — verified by its own check-* target (golangci-lint, goreleaser) — or
+# optional: optional tools gate only the legs that use them (installer checks,
+# release signing/verify), which skip loudly when they are absent. Presence is
+# reported here so a missing tool surfaces in the gate, not mid-release;
+# CI_STRICT=1 makes check-install require goreleaser and minisign.
+check-tools:
+	@missing=""; \
+	for t in curl tar goreleaser minisign; do \
+		command -v $$t >/dev/null 2>&1 || missing="$$missing $$t"; \
+	done; \
+	if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then \
+		missing="$$missing sha256sum-or-shasum"; \
+	fi; \
+	if [ -n "$$missing" ]; then \
+		echo "optional install/release tools absent:$$missing (their legs skip; CI_STRICT=1 requires goreleaser+minisign)"; \
+	else \
+		echo "tools: curl, tar, sha256, goreleaser, minisign all present"; \
+	fi
+
+# The installer checks local CI runs around the test suite: install.sh syntax,
 # the installer↔goreleaser asset-name parity check, and the minisign signature
 # decision matrix. goreleaser and minisign are OPTIONAL locally — absent tools
 # skip loudly; CI_STRICT=1 (pre-release runs) makes them required.

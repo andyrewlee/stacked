@@ -16,7 +16,8 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 # PLACEHOLDER: the operator fills in the real base64 public key (the "RW…" line
 # of the provisioned stacked.pub) when the release signing keypair is created —
 # see the signing runbook in CONTRIBUTING.md's Releasing section. It must match
-# the MINISIGN_KEY secret the release workflow signs with. While empty,
+# the key file MINISIGN_KEY_FILE points to at release time (`make release`
+# signs locally). While empty,
 # signature verification cannot run and this script fails closed (see below).
 MINISIGN_PUBKEY=""
 
