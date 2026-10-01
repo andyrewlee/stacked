@@ -176,6 +176,13 @@ snapshot/dev installs only, and it never bypasses an actual signature mismatch.
 
 ## Troubleshooting
 
+### Seeing what `st` shells out to
+
+`ST_DEBUG=1 st <cmd>` writes one stderr line per git spawn (`st: git -C /path
+<argv> (<n>ms)`) — useful for "st is slow" / "what did it run" reports. It
+never writes to stdout, so `--json` output stays byte-identical; URL-shaped
+args are redacted to `<url>`.
+
 ### `stale-lock reclaim guard … is abandoned`
 
 On platforms without `flock` (Windows, plan9, js/wasm) `st` serializes mutating

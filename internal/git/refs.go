@@ -146,7 +146,7 @@ func ChangesContainedIn(upstream, branch string) (bool, error) {
 	// pathspec magic (":(glob)" etc.) from being reinterpreted on the way back
 	// in.
 	cmd.Env = append(gitEnv(), "GIT_LITERAL_PATHSPECS=1")
-	err = cmd.Run()
+	err = spawnRun(cmd)
 	if err == nil {
 		return true, nil
 	}
@@ -241,7 +241,7 @@ func catFile(stdin []string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := spawnRun(cmd)
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -415,7 +415,7 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	descendantRef := localBranchRef(descendant)
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestorRef, descendantRef)
 	cmd.Env = gitEnv()
-	out, err := cmd.CombinedOutput()
+	out, err := spawnCombined(cmd)
 	if err == nil {
 		return true, nil
 	}
@@ -546,7 +546,7 @@ func UpdateRefs(updates map[string]string) error {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := spawnRun(cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())

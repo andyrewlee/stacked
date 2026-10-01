@@ -172,7 +172,7 @@ func RebaseContinue() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
-	if err := cmd.Run(); err != nil {
+	if err := spawnRun(cmd); err != nil {
 		return fmt.Errorf("git rebase --continue: %w", err)
 	}
 	return nil
@@ -184,7 +184,7 @@ func RebaseContinueQuiet() error {
 	cmd := exec.Command("git", "rebase", "--continue")
 	cmd.Stdin = os.Stdin
 	cmd.Env = append(gitEnv(), "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true")
-	out, err := cmd.CombinedOutput()
+	out, err := spawnCombined(cmd)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {
