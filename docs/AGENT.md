@@ -170,6 +170,19 @@ message.
     edits) plus a `git cherry-pick` recovery pointer. An
     empty journal is still a success: `{ "undone": false }` on stdout, exit 0
     (text mode prints `nothing to undo`).
+  - `undo <n> --json` (n > 1) rewinds the newest `n` entries newest-first and
+    returns the multi-step shape:
+    `{ "undone": true, "count": n, "restored": [], "steps": [ { "index",
+    "label", "restored": [], "notes": [] } ], "notes": [] }` — `count` is the
+    requested depth, `restored` the deduped union across steps, `steps` one
+    entry per completed undo (`index` is the `--list` position as of when the
+    command ran; per-step `notes` is `omitempty`, as is the top-level `notes`
+    union). A count beyond the journal depth is a usage error (exit 1), as
+    are `n <= 0` and a non-integer count. A refusal mid-sequence stops there:
+    the partial aggregate (same shape, `steps` listing what already ran,
+    `undone` true once anything was reverted) is emitted on stdout and the
+    error envelope names the stopping step — `stopped at step k of n undoing
+    "<label>": …`.
   - `undo --list --json` previews the journal without reverting:
     `{ "entries": [ { "index", "label", "currentBranch", "createdBranches": [],
       "createdWorktrees": {}, "refs": {} } ] }`, newest first — `index` 1 is
@@ -215,6 +228,14 @@ message.
     mutually exclusive (exit 1). The preview holds the advisory lock but
     mutates nothing — state, journal, refs, worktrees, and cwd are unchanged,
     and a later real `st undo` revalidates everything (no reservation).
+  - `undo --dry-run <n> --json` (n > 1) previews each of the newest `n` steps
+    in undo order: `{ "dryRun": true, "count": n, "steps": [ <preview object>,
+    … ] }` where each element is the single-entry preview shape above with
+    `observed.entryIndex` set to its `--list` position. Each step is computed
+    against the state that step's real undo would see (the live state for
+    step 1, then the snapshot the preceding step would restore); live
+    refs/tips still reflect the pre-undo world — a real run revalidates
+    everything at each step.
   - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
     `fixes` is non-empty; both are present on every run).
 
@@ -238,7 +259,9 @@ message.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not
-  touch the working tree.
+  touch the working tree. `undo <n>` rewinds the newest `n` journal entries
+  newest-first with per-step atomicity: a refusal mid-sequence leaves the
+  already-undone prefix in place (rerunning after fixing the cause is safe).
 - Concurrent `st` processes in one repo are serialized by an advisory lock (a
   second one fails fast rather than corrupting state): flock on unix-like
   platforms, an exclusive lock file elsewhere. A contender exits 5

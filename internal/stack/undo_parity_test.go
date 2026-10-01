@@ -230,7 +230,7 @@ func TestUndoPreviewParity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pf, ps, pe := tc.build(t)
 			callsBefore := pf.callsSnapshot()
-			preview, err := UndoPreview(Env{Git: pf}, ps, pe, tc.canTeleport)
+			preview, err := UndoPreview(Env{Git: pf}, ps, pe, tc.canTeleport, 1)
 			if err != nil {
 				t.Fatalf("UndoPreview: %v", err)
 			}

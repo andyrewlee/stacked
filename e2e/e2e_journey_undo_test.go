@@ -409,3 +409,70 @@ func TestSyncUndoRestoresPrunedBranchesAndTrunk(t *testing.T) {
 	}
 	r.stOK("validate")
 }
+
+// TestUndoMultiStepJourney is the black-box pin for `st undo <n>`: four
+// mutations (three creates + an onto) land four journal entries; `undo 3`
+// rewinds the newest three newest-first — the onto is reverted, then the two
+// newest creates are deleted — leaving only the oldest entry, with the repo
+// back at the pre-onto state.
+func TestUndoMultiStepJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+
+	preA := r.rev("feat-a")
+	// Reparent the current branch (feat-c) off feat-b onto feat-a so undo must
+	// restore topology, not just delete branches. Journal: create-a, create-b,
+	// create-c, onto — `undo 3` reverts onto, create-c, and create-b, leaving
+	// only the first create recorded.
+	r.stOK("onto", "feat-a")
+	res := r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "1: onto")
+	wantStdoutContains(t, res, "2: create")
+
+	res = r.stOK("undo", "3")
+	wantStdoutContains(t, res, "step 1 of 3")
+	wantStdoutContains(t, res, "step 3 of 3")
+
+	if r.branchExists("feat-c") || r.branchExists("feat-b") {
+		t.Fatal("undo 3 left created branches behind")
+	}
+	if got := r.rev("feat-a"); got != preA {
+		t.Fatalf("feat-a after undo 3 = %s, want %s", got, preA)
+	}
+	if got := r.currentBranch(); got != "feat-a" {
+		t.Fatalf("current branch = %q, want feat-a", got)
+	}
+	res = r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "1: create")
+	if strings.Contains(res.stdout, "2:") {
+		t.Fatalf("undo 3 left extra journal entries: %s", res.stdout)
+	}
+	r.stOK("validate")
+}
+
+// TestUndoStepCountBeyondJournal is the depth-refusal e2e pin: asking for more
+// steps than the journal holds refuses before anything mutates (exit 1, the
+// journal and branches untouched).
+func TestUndoStepCountBeyondJournal(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	res := r.st("undo", "9")
+	if res.exitCode == 0 {
+		t.Fatalf("undo 9 on a 1-entry journal succeeded: %s", res.stdout)
+	}
+	if !strings.Contains(res.stderr, "only 1 undoable") {
+		t.Fatalf("undo 9 stderr = %q, want the depth refusal", res.stderr)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("refused undo deleted feat-a")
+	}
+	res = r.stOK("undo", "--list")
+	wantStdoutContains(t, res, "1: create")
+}
