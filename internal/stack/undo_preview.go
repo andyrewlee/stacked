@@ -57,12 +57,21 @@ type undoPreviewObserved struct {
 // WouldRestore/WouldDelete are sorted by branch. Notes carries advisory
 // warnings a real undo would also print (e.g. the commits an undone absorb
 // leaves unreachable) — advisory, never a refusal.
+//
+// WouldCheckout is the branch a real undo ends on when everything goes to
+// plan — it is nil when the recorded branch would not exist after the undo
+// (e.g. the entry created it) or when WouldDetach is set. WouldDetach marks
+// the doomed-current-branch path whose intermediate checkout a real undo
+// predicts will fail (target already checked out in another worktree, or
+// local changes in the caller's own worktree): the real op parks HEAD
+// detached and skips the recorded-branch restore rather than refusing.
 type UndoPreviewResult struct {
 	DryRun        bool                 `json:"dryRun"`
 	Label         string               `json:"label,omitempty"`
 	WouldRestore  []UndoRestorePreview `json:"wouldRestore,omitempty"`
 	WouldDelete   []UndoDeletePreview  `json:"wouldDelete,omitempty"`
 	WouldCheckout *string              `json:"wouldCheckout"`
+	WouldDetach   bool                 `json:"wouldDetach,omitempty"`
 	JournalDrop   bool                 `json:"journalDrop,omitempty"`
 	Observed      *undoPreviewObserved `json:"observed,omitempty"`
 	Blockers      []string             `json:"blockers"`
@@ -107,6 +116,15 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 
 	res.JournalDrop = true
 	tips := map[string]*string{}
+
+	// The snapshot state is needed below to reproduce Undo's intermediate
+	// checkout-target computation (prev.Trunk) for a doomed current branch.
+	// ValidateUndoState already passed, so this cannot fail.
+	prev, err := decodeState(entry.State)
+	if err != nil {
+		res.Blockers = append(res.Blockers, "malformed_snapshot")
+		return res, nil
+	}
 
 	// Branches the undone command created — the same discovery Undo performs:
 	// current-state branches ∪ the recorded CreatedBranches, minus the
@@ -153,6 +171,14 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 		}
 	}
 
+	var createdSet map[string]bool
+	if len(created) > 0 {
+		createdSet = make(map[string]bool, len(created))
+		for _, name := range created {
+			createdSet[name] = true
+		}
+	}
+
 	for _, name := range created {
 		d := UndoDeletePreview{Branch: name}
 		if owner, ok := LinkedOwnerOf(wts, name); ok {
@@ -179,6 +205,42 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 			tips[name] = &t
 		} else {
 			tips[name] = nil
+		}
+
+		if name == cur {
+			// Mirror undo_op.go: HEAD sits on the doomed branch, so the real
+			// op first resolves the checkout target — the snapshot's trunk,
+			// or the branch's recorded parent when that still exists — and
+			// refuses when the target is neither live nor recorded.
+			target := prev.Trunk
+			if s != nil {
+				if b, ok := s.Get(name); ok && g.BranchExists(b.Parent) {
+					target = b.Parent
+				}
+			}
+			targetLive := g.BranchExists(target)
+			missingTarget := false
+			if !targetLive {
+				if _, ok := entry.Refs[target]; !ok {
+					res.Blockers = append(res.Blockers, "missing_restore_target:"+name)
+					missingTarget = true
+				}
+			}
+			if !missingTarget {
+				// The intermediate checkout(target) is swallowed when it is
+				// blocked — the target checked out in a linked worktree, or
+				// local changes in the caller's worktree — and HEAD parks
+				// detached while the branch is deleted. A dirty LINKED owner
+				// of cur already refused above, so the local-changes case
+				// applies only when cur is not linked-owned.
+				if _, owned := LinkedOwnerOf(wts, target); targetLive && owned {
+					res.WouldDetach = true
+				} else if _, curLinked := LinkedOwnerOf(wts, cur); !curLinked {
+					if clean, err := g.IsClean(); err == nil && !clean {
+						res.WouldDetach = true
+					}
+				}
+			}
 		}
 	}
 
@@ -213,7 +275,11 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 		res.WouldRestore = append(res.WouldRestore, r)
 	}
 
-	if entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
+	// The recorded final checkout only describes a run that would proceed: a
+	// blocker means refusal (no landing to report), a doomed recorded branch
+	// cannot be checked out (the undo itself deletes it), and WouldDetach
+	// means the real run parks HEAD instead.
+	if len(res.Blockers) == 0 && entry.CurrentBranch != "" && !createdSet[entry.CurrentBranch] && !res.WouldDetach && g.BranchExists(entry.CurrentBranch) {
 		cb := entry.CurrentBranch
 		res.WouldCheckout = &cb
 	}
