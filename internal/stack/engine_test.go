@@ -317,6 +317,122 @@ func TestFoldRollsBackParentWhenDeleteAndRestoreCheckoutFail(t *testing.T) {
 	}
 }
 
+// TestFoldCheckoutParentFailsRollsBack covers the forward-checkout arm of
+// Fold's UpdateRef rollback: the parent was already advanced to cur's tip when
+// Checkout(parent) fails, so the rollback must restore the parent ref and the
+// error names the checkout.
+func TestFoldCheckoutParentFailsRollsBack(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	aTip, _ := f.RevParse("a")
+	checkoutErr := errors.New("checkout exploded")
+	f.checkoutErr["a"] = checkoutErr
+
+	_, err := Fold(env, s)
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Fold error = %v, want wrapped %v", err, checkoutErr)
+	}
+	if !strings.Contains(err.Error(), `checking out "a"`) {
+		t.Fatalf("Fold error = %v, want it to name the parent checkout", err)
+	}
+	// The UpdateRef rollback ran: the parent is back at its original tip, cur
+	// is untouched, and HEAD never moved (the failed checkout was a no-op).
+	if after, _ := f.RevParse("a"); after != aTip {
+		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("failed fold destroyed branch b or its metadata")
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q after failed fold, want b (checkout never landed)", f.head)
+	}
+}
+
+// TestFoldCheckoutParentFailsRollbackAlsoFails pins the worst arm: checkout
+// fails AND the UpdateRef rollback fails, so AlsoFailed composes both and the
+// parent is left holding cur's commits — a repo/state divergence the error
+// must name rather than hide.
+func TestFoldCheckoutParentFailsRollbackAlsoFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	bTip, _ := f.RevParse("b")
+	checkoutErr := errors.New("checkout exploded")
+	updateErr := errors.New("ref update exploded")
+	f.checkoutErr["a"] = checkoutErr
+	f.failErr["UpdateRef"] = updateErr
+
+	_, err := Fold(env, s)
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Fold error = %v, want checkout sentinel matchable", err)
+	}
+	if !errors.Is(err, updateErr) {
+		t.Fatalf("Fold error = %v, want rollback sentinel matchable", err)
+	}
+	if !strings.Contains(err.Error(), `roll back "a"`) {
+		t.Fatalf("Fold error = %v, want the rollback step named", err)
+	}
+	// Diverged end state, characterized not aspired: a still points at b's
+	// commits while state.json still lists b as a's child.
+	if after, _ := f.RevParse("a"); after != bTip {
+		t.Fatalf("a tip = %s, want %s — rollback failed so a keeps b's commits", after, bTip)
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("failed fold destroyed branch b or its metadata")
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b (checkout never landed)", f.head)
+	}
+}
+
+// TestFoldDeleteFailsRollbackAlsoFails covers the sibling arm: the parent
+// checkout already succeeded when DeleteBranch fails, then the UpdateRef
+// rollback fails too — AlsoFailed composes delete + rollback, and the engine
+// never attempts the re-checkout restore (which would only have cleaned up
+// HEAD, not the ref).
+func TestFoldDeleteFailsRollbackAlsoFails(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	bTip, _ := f.RevParse("b")
+	deleteErr := errors.New("delete exploded")
+	updateErr := errors.New("ref update exploded")
+	f.deleteErr["b"] = deleteErr
+	f.failErr["UpdateRef"] = updateErr
+
+	_, err := Fold(env, s)
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("Fold error = %v, want delete sentinel matchable", err)
+	}
+	if !errors.Is(err, updateErr) {
+		t.Fatalf("Fold error = %v, want rollback sentinel matchable", err)
+	}
+	if !strings.Contains(err.Error(), `deleting "b"`) || !strings.Contains(err.Error(), `roll back "a"`) {
+		t.Fatalf("Fold error = %v, want both the delete and the rollback named", err)
+	}
+	// Diverged: a still holds b's commits; HEAD sits on a (the checkout had
+	// already landed — no restore was attempted past the failed rollback).
+	if after, _ := f.RevParse("a"); after != bTip {
+		t.Fatalf("a tip = %s, want %s — rollback failed so a keeps b's commits", after, bTip)
+	}
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a (checkout landed before the delete failed)", f.head)
+	}
+}
+
 // TestInferParentDeterministic checks inferParent picks the closest tracked
 // ancestor and returns a stable result across runs (candidates are iterated in
 // sorted order, not map order) — ENG-5. The fake git models a single-parent DAG,

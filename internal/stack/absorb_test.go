@@ -833,3 +833,219 @@ func TestAbsorbPlanSharedTipDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestAbsorbOwnerWorktreeSyncFails pins the post-amend cleanup arm: once a
+// foreign target's temp-index amend lands, syncing that target's OWNING
+// worktree can fail (ResetHardIn). The amend already persists — the error must
+// name the worktree so the divergence is visible.
+func TestAbsorbOwnerWorktreeSyncFails(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedPatch = []byte("fake patch")
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+	f.addWorktree("/wt/a", "a") // a checked out in a clean linked worktree
+
+	resetErr := errors.New("reset exploded")
+	f.failErr["ResetHardIn"] = resetErr
+
+	_, err := Absorb(env, s)
+	if !errors.Is(err, resetErr) {
+		t.Fatalf("Absorb = %v, want the reset sentinel surfaced", err)
+	}
+	if !strings.Contains(err.Error(), "syncing worktree /wt/a") {
+		t.Fatalf("Absorb = %v, want the diverged worktree named", err)
+	}
+	// The temp-index amend already committed: a's tip moved even though the
+	// worktree sync failed — that is the documented no-rollback contract.
+	if f.branches["a"] == tips["a"] {
+		t.Fatal("a's tip unchanged — the failing arm runs AFTER the amend lands")
+	}
+	if f.staged {
+		// The caller-worktree drop never ran (the owner reset failed first) —
+		// the staged copies are still live AND committed at a's tip.
+		t.Log("staged copies remain — expected: cleanup failed before the drop")
+	}
+}
+
+// TestAbsorbCallerResetFails covers the caller-tree arm of the same cleanup:
+// the foreign target is unowned (no worktree), so the first and only
+// ResetHardIn is the caller's drop-the-copies reset. Its failure leaves the
+// edits staged locally AND committed at the target's tip.
+func TestAbsorbCallerResetFails(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedPatch = []byte("fake patch")
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+
+	resetErr := errors.New("reset exploded")
+	f.failErr["ResetHardIn"] = resetErr
+
+	_, err := Absorb(env, s)
+	if !errors.Is(err, resetErr) {
+		t.Fatalf("Absorb = %v, want the reset sentinel surfaced", err)
+	}
+	if !strings.Contains(err.Error(), "dropping the absorbed staged copies") {
+		t.Fatalf("Absorb = %v, want the drop-copies step named", err)
+	}
+	if f.branches["a"] == tips["a"] {
+		t.Fatal("a's tip unchanged — the failing arm runs AFTER the amend lands")
+	}
+	if !f.staged {
+		t.Fatal("the staged copies should still be live — the failed reset was the drop")
+	}
+	if len(f.resetHardDirs) != 0 {
+		t.Fatalf("resetHardDirs = %q, want none recorded (the call failed)", f.resetHardDirs)
+	}
+}
+
+// TestAbsorbPreAmendProbeFailures pins the pre-amend probe arms: each one must
+// surface its error wrapped and leave every tip untouched — nothing has been
+// committed yet, so failure is clean.
+func TestAbsorbPreAmendProbeFailures(t *testing.T) {
+	stage := func(f *fakeGit, tips map[string]string) {
+		f.staged = true
+		f.stagedPatch = []byte("fake patch")
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+	}
+
+	t.Run("Worktrees probe fails", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips)
+		boom := errors.New("worktree list exploded")
+		f.failErr["Worktrees"] = boom
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want %v", err, boom)
+		}
+		if f.branches["a"] != tips["a"] {
+			t.Fatal("a's tip moved — a pre-amend probe failure must not mutate")
+		}
+		if !f.staged {
+			t.Fatal("staged copies dropped before the amend even ran")
+		}
+	})
+
+	t.Run("IsCleanIn probe fails", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips)
+		f.addWorktree("/wt/a", "a")
+		boom := errors.New("clean probe exploded")
+		f.failErr["IsCleanIn"] = boom
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want %v", err, boom)
+		}
+		if !strings.Contains(err.Error(), "checking worktree /wt/a") {
+			t.Fatalf("Absorb = %v, want the probed worktree named", err)
+		}
+		if f.branches["a"] != tips["a"] {
+			t.Fatal("a's tip moved — a pre-amend probe failure must not mutate")
+		}
+	})
+
+	t.Run("DiffCachedPatchFor fails", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips)
+		boom := errors.New("diff exploded")
+		f.failErr["DiffCachedPatchFor"] = boom
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want %v", err, boom)
+		}
+		if !strings.Contains(err.Error(), `assembling "a"'s patch`) {
+			t.Fatalf("Absorb = %v, want the target's patch step named", err)
+		}
+		if f.branches["a"] != tips["a"] {
+			t.Fatal("a's tip moved — a pre-amend probe failure must not mutate")
+		}
+	})
+}
+
+// TestAbsorbPostAmendProbeFailures pins the three post-mutation arms after the
+// cascade: re-reading amended tips, the epilogue save, and the HEAD restore.
+// In each the amends and the cascade have already committed — the error
+// surfaces but cannot roll anything back.
+func TestAbsorbPostAmendProbeFailures(t *testing.T) {
+	stage := func(f *fakeGit, tips map[string]string) {
+		f.staged = true
+		f.stagedPatch = []byte("fake patch")
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+	}
+
+	t.Run("TipsFor re-read fails", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips)
+		boom := errors.New("tips exploded")
+		// TipsFor is read once before the post-cascade re-read: the plan-time
+		// tip snapshot at absorbPlan. (The cascade snapshots via Tips, a
+		// different method.) Fail the second TipsFor call.
+		f.failErr["TipsFor"] = boom
+		f.failAfter["TipsFor"] = 1
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want %v", err, boom)
+		}
+		if !strings.Contains(err.Error(), "re-reading amended tips") {
+			t.Fatalf("Absorb = %v, want the tip re-read named", err)
+		}
+		if f.branches["a"] == tips["a"] {
+			t.Fatal("a's tip unchanged — the failure is post-mutation")
+		}
+		// The cascade ran: b re-pointed at a's amended tip.
+		b, _ := s.Get("b")
+		if b.ParentSHA != f.branches["a"] {
+			t.Fatalf("b.ParentSHA = %q, want a's live tip %q (cascade committed)", b.ParentSHA, f.branches["a"])
+		}
+	})
+
+	t.Run("epilogue save fails", func(t *testing.T) {
+		f, s, _, tips := absorbEnv(t)
+		stage(f, tips)
+		boom := errors.New("save exploded")
+		// The cascade checkpoints once per rebased branch (b, c); absorb's own
+		// epilogue save is the third — fail exactly that one.
+		env2, saves := envWithSaveErr(f, boom, 2)
+
+		_, err := Absorb(env2, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want the save sentinel surfaced", err)
+		}
+		if *saves != 3 {
+			t.Fatalf("saves = %d, want 3 (two cascade checkpoints + epilogue)", *saves)
+		}
+		if f.branches["a"] == tips["a"] {
+			t.Fatal("a's tip unchanged — the failure is post-mutation")
+		}
+	})
+
+	t.Run("HEAD restore fails", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips)
+		// Park HEAD mid-stack so the cascade's last rebase leaves HEAD on c and
+		// restoreHEAD must actually check cur back out.
+		if err := f.Checkout("b"); err != nil {
+			t.Fatal(err)
+		}
+		boom := errors.New("restore exploded")
+		f.checkoutErr["b"] = boom
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want the restore sentinel surfaced", err)
+		}
+		if !strings.Contains(err.Error(), `restore branch "b"`) {
+			t.Fatalf("Absorb = %v, want the restore target named", err)
+		}
+		if f.branches["a"] == tips["a"] {
+			t.Fatal("a's tip unchanged — the failure is post-mutation")
+		}
+	})
+}
