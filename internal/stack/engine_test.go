@@ -1975,6 +1975,72 @@ func TestRestackAllOpSkipsDirtyOwnedWorktree(t *testing.T) {
 	}
 }
 
+// TestRestackAllOpWarnsUnreachable pins plan-006: a tracked branch the trunk
+// walk never reaches (dangling parent or parent cycle) is named in Notes as a
+// repair-pointing warning — not an error — while the reachable forest still
+// restacks.
+func TestRestackAllOpWarnsUnreachable(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	// Dangling parent: "lost" is tracked but nothing under main reaches it.
+	s.Track("lost", "ghost", "sha-ghost")
+	// Detached cycle: cy-a and cy-b parent each other, never reaching trunk.
+	s.Track("cy-a", "cy-b", "sha-b")
+	s.Track("cy-b", "cy-a", "sha-a")
+
+	res, err := RestackAllOp(env, s)
+	if err != nil {
+		t.Fatalf("RestackAllOp: %v", err)
+	}
+	if len(res.Restacked) != 1 || res.Restacked[0] != "feat-a" {
+		t.Fatalf("restacked = %v, want [feat-a]", res.Restacked)
+	}
+	found := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, "unreachable") && strings.Contains(note, "lost") &&
+			strings.Contains(note, "cy-a") && strings.Contains(note, "cy-b") &&
+			strings.Contains(note, "st repair") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want an unreachable warning naming lost/cy-a/cy-b", res.Notes)
+	}
+}
+
+// TestSyncWarnsUnreachable pins the same advisory on the sync path: merged
+// pruning and restacking proceed, and the warning rides in Notes.
+func TestSyncWarnsUnreachable(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	// "lost" exists in git and is tracked, but its recorded parent dangles —
+	// sync validates existence, so the branch itself must be real.
+	mkBranch(t, env, s, f, "main", "lost")
+	lost, _ := s.Get("lost")
+	lost.Parent = "ghost"
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	found := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, "unreachable") && strings.Contains(note, "lost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v, want an unreachable warning naming lost", res.Notes)
+	}
+}
+
 // TestDeleteSingleTipsRead pins delete's spawn diet: restacking the
 // re-parented children (and their descendants) reads the full branch-tips map
 // exactly ONCE, however many children the deleted branch had.

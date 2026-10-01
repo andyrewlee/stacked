@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -64,18 +65,19 @@ func runLog(args []string) error {
 	}
 
 	d := logData{
-		index:     index,
-		cur:       cur,
-		drift:     drift,
-		tips:      tips,
-		subjects:  subjects,
-		ancestors: ancestors,
-		wtInfo:    wtInfo,
+		index:       index,
+		cur:         cur,
+		drift:       drift,
+		tips:        tips,
+		subjects:    subjects,
+		ancestors:   ancestors,
+		wtInfo:      wtInfo,
+		unreachable: s.UnreachableBranches(),
 	}
 	if asJSON {
-		return printLogJSON(s, d)
+		return printLogJSON(s, &d)
 	}
-	printLogTree(s, d)
+	printLogTree(s, &d)
 	return nil
 }
 
@@ -145,22 +147,26 @@ type logNode struct {
 	Worktree     string     `json:"worktree,omitempty"`
 	Dirty        bool       `json:"dirty,omitempty"`
 	Children     []*logNode `json:"children"`
+	// Unreachable names tracked branches no trunk-rooted walk visits (a
+	// parent cycle or a dangling parent) — populated on the ROOT node only.
+	Unreachable []string `json:"unreachable,omitempty"`
 }
 
 // logData bundles the render context both log printers share: the child index,
 // the current branch ("" when detached), per-branch drift, the tip/subject/
 // ancestor maps from the batched cat-file reads, and worktree annotations.
 type logData struct {
-	index     map[string][]string
-	cur       string
-	drift     map[string]bool
-	tips      map[string]string
-	subjects  map[string]string
-	ancestors map[ancestorPair]bool
-	wtInfo    map[string]worktreeInfo
+	index       map[string][]string
+	cur         string
+	drift       map[string]bool
+	tips        map[string]string
+	subjects    map[string]string
+	ancestors   map[ancestorPair]bool
+	wtInfo      map[string]worktreeInfo
+	unreachable []string
 }
 
-func printLogJSON(s *stack.State, d logData) error {
+func printLogJSON(s *stack.State, d *logData) error {
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
 		node := &logNode{Name: name, Parent: parent, Current: name == d.cur, Children: []*logNode{}}
@@ -181,6 +187,7 @@ func printLogJSON(s *stack.State, d logData) error {
 		return node
 	}
 	root := build(s.Trunk, "")
+	root.Unreachable = d.unreachable
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return err
@@ -191,7 +198,7 @@ func printLogJSON(s *stack.State, d logData) error {
 
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
-func printLogTree(s *stack.State, d logData) {
+func printLogTree(s *stack.State, d *logData) {
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
 		for _, child := range d.index[name] {
@@ -230,6 +237,10 @@ func printLogTree(s *stack.State, d logData) {
 		out("%s\n", line)
 	}
 	printBranch(s.Trunk, 0)
+	if len(d.unreachable) > 0 {
+		out("%s\n", paint(fmt.Sprintf("warning: tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st repair`",
+			sanitizeForTerminal(s.Trunk), sanitizeForTerminal(strings.Join(d.unreachable, ", "))), ansiYellow))
+	}
 }
 
 // ancestorPair is one ancestry question: is the child's tip reachable from the
