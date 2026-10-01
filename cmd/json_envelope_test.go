@@ -179,14 +179,14 @@ func jsonJoin(args []string) string {
 // exit 1, code "error".
 func TestJSONEnvelopeUsageError(t *testing.T) {
 	cases := [][]string{
-		{"create"},             // missing branch name
-		{"delete"},             // missing branch name
-		{"onto"},               // missing target
-		{"rename", "only-one"}, // missing new name
-		{"worktree"},           // no subcommand at all
-		{"undo", "extra"},      // rejects positionals
-		{"status", "extra"},    // rejects positionals
-		{"untrack"},            // missing branch name
+		{"create"},                // missing branch name
+		{"delete"},                // missing branch name
+		{"onto"},                  // missing target
+		{"rename", "a", "b", "c"}, // too many positionals (one or two are legal)
+		{"worktree"},              // no subcommand at all
+		{"undo", "1", "2"},        // rejects extra positionals
+		{"status", "extra"},       // rejects positionals
+		{"untrack", "a", "b"},     // rejects positionals past the optional branch
 	}
 	for _, args := range cases {
 		t.Run(jsonJoin(args), func(t *testing.T) {
