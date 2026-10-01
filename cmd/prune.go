@@ -57,11 +57,9 @@ func runPrune(args []string) error {
 	}
 
 	if dryRun {
-		res, err := stack.PrunePlan(stackEnv(s, asJSON), s, trunkRef)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return previewState(asJSON, s, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.PrunePlan(env, s, trunkRef)
+		})
 	}
 	return mutate("prune", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Prune(env, s, trunkRef)

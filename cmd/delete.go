@@ -32,15 +32,9 @@ func runDelete(args []string) error {
 	name := rest[0]
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
-		res, err := stack.DeletePlan(stackEnv(s, asJSON), s, name, force)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.DeletePlan(env, s, name, force)
+		})
 	}
 	return mutate("delete", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Delete(env, s, name, force)

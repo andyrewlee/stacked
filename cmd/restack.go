@@ -25,19 +25,11 @@ func runRestack(args []string) error {
 	asJSON, dryRun, all := o.asJSON, o.dryRun, o.all
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
 		plan := stack.RestackPlan
 		if all {
 			plan = stack.RestackAllPlan
 		}
-		res, err := plan(stackEnv(s, asJSON), s)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, plan)
 	}
 	if all {
 		return mutate("restack", asJSON, stack.RestackAllOp)

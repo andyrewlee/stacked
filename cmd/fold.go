@@ -24,15 +24,7 @@ func runFold(args []string) error {
 	asJSON, dryRun := o.asJSON, o.dryRun
 
 	if dryRun {
-		s, err := loadState()
-		if err != nil {
-			return err
-		}
-		res, err := stack.FoldPlan(stackEnv(s, asJSON), s)
-		if err != nil {
-			return err
-		}
-		return renderResult(res, asJSON)
+		return preview(asJSON, stack.FoldPlan)
 	}
 	return mutate("fold", asJSON, stack.Fold)
 }
