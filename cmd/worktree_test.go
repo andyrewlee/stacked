@@ -199,7 +199,7 @@ func TestGitIgnoredSet(t *testing.T) {
 
 	got, err := gitIgnoredSet(root, []string{"node_modules", "dist", "with space.txt", "tracked.txt", "nonexistent"})
 	if err != nil {
-		t.Fatalf("gitIgnoredSet: %v", err)
+		t.Fatalf("git.CheckIgnored: %v", err)
 	}
 	want := map[string]bool{"node_modules": true, "dist": true, "with space.txt": true}
 	if len(got) != len(want) {
@@ -258,7 +258,7 @@ func TestGitIgnoredSetPoisonedBatchClassifiesSiblings(t *testing.T) {
 
 	got, err := gitIgnoredSet(root, []string{"ignored.txt", "escape/inner.txt"})
 	if err != nil {
-		t.Fatalf("gitIgnoredSet: %v", err)
+		t.Fatalf("git.CheckIgnored: %v", err)
 	}
 	if !got["ignored.txt"] {
 		t.Fatalf("ignored.txt classified %v — the poisoned batch must still classify its ignored siblings", got)
@@ -908,7 +908,7 @@ func TestDropNestedEntries(t *testing.T) {
 	for _, e := range entries {
 		allIgnored[e] = true
 	}
-	got := dropNestedEntries(root, entries, allIgnored)
+	got := stack.DropNestedIncludeDirs(root, entries, allIgnored)
 	want := []string{"a", "ax", "c"}
 	if len(got) != len(want) {
 		t.Fatalf("dropNestedEntries = %v, want %v", got, want)
