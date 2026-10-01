@@ -161,7 +161,10 @@ message.
 - **operational** — each emits a small fixed object:
   - `abort --json` → `{ "aborted": true, "summary" }`.
   - `undo --json` → `{ "undone": true, "label", "restored": [] }` (`label` names the
-    reverted command; `restored` lists branches whose tips were moved back). An
+    reverted command; `restored` lists branches whose tips were moved back).
+    `notes` is `omitempty`: advisory warnings — undoing an `absorb` entry adds
+    the amended commits the ref-restore orphaned (they still carry the staged
+    edits) plus a `git cherry-pick` recovery pointer. An
     empty journal is still a success: `{ "undone": false }` on stdout, exit 0
     (text mode prints `nothing to undo`).
   - `undo --list --json` previews the journal without reverting:
@@ -179,7 +182,8 @@ message.
       "wouldRestore": [{"branch","from","to","commitsLostFromRef"}],
       "wouldDelete":  [{"branch","worktree","worktreeDirty","isCurrentWorktree"}],
       "wouldCheckout": "main", "journalDrop": true,
-      "observed": {"entryIndex": 1, "tips": {}}, "blockers": [] }
+      "observed": {"entryIndex": 1, "tips": {}}, "blockers": [],
+      "notes": ["…"] }
     ```
     `commitsLostFromRef` counts commits reachable from the live tip but not
     the recorded one (per-ref — other refs may still reach them); it is the
@@ -190,7 +194,11 @@ message.
     would refuse on: `rebase_in_progress`, `state_too_new`,
     `malformed_snapshot`, `cwd_inside_created_worktree:<b>`,
     `worktree_dirty:<b>`, `recorded_worktree_mismatch:<b>` — a missing ref is
-    NOT a blocker (undo restores it). A computed preview exits 0 even with
+    NOT a blocker (undo restores it). `notes` is `omitempty`: advisory
+    warnings a real undo would also print — e.g. undoing an `absorb` entry
+    names the amended commits (still carrying the staged edits) that the
+    ref-restore orphans, with a `git cherry-pick` recovery pointer. A
+    computed preview exits 0 even with
     blockers (they are data); an empty journal emits
     `{ "dryRun": true, "undone": false }`. `--dry-run` and `--list` are
     mutually exclusive (exit 1). The preview holds the advisory lock but

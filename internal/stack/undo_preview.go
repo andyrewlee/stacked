@@ -54,7 +54,9 @@ type undoPreviewObserved struct {
 // UndoPreviewResult is the `st undo --dry-run` payload. Blockers lists — in
 // the real undo's gate order — everything a real run would refuse on; it is
 // always non-nil and empty means "would proceed". Everything else is intent:
-// WouldRestore/WouldDelete are sorted by branch.
+// WouldRestore/WouldDelete are sorted by branch. Notes carries advisory
+// warnings a real undo would also print (e.g. the commits an undone absorb
+// leaves unreachable) — advisory, never a refusal.
 type UndoPreviewResult struct {
 	DryRun        bool                 `json:"dryRun"`
 	Label         string               `json:"label,omitempty"`
@@ -64,6 +66,7 @@ type UndoPreviewResult struct {
 	JournalDrop   bool                 `json:"journalDrop,omitempty"`
 	Observed      *undoPreviewObserved `json:"observed,omitempty"`
 	Blockers      []string             `json:"blockers"`
+	Notes         []string             `json:"notes,omitempty"`
 }
 
 // UndoPreview computes what undoing entry would do — the same gates as Undo,
@@ -213,6 +216,11 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool) (*UndoPr
 	if entry.CurrentBranch != "" && g.BranchExists(entry.CurrentBranch) {
 		cb := entry.CurrentBranch
 		res.WouldCheckout = &cb
+	}
+	// The same advisory a real undo prints for absorb entries — name the
+	// amended commits before the user orphaning them has to be discovered.
+	if len(entry.AbsorbedCommits) > 0 {
+		res.Notes = append(res.Notes, absorbedCommitsNote(entry.AbsorbedCommits))
 	}
 	res.Observed = &undoPreviewObserved{EntryIndex: 1, Tips: tips}
 	return res, nil

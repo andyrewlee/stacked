@@ -356,6 +356,50 @@ func TestAbsorbApply(t *testing.T) {
 		assertUndoRestored(t, f, s, entry)
 	})
 
+	t.Run("undo names the amended commit the ref-restore orphans", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips, "a")
+		entry := mustSnapshot(t, s, f, "absorb")
+
+		res, err := Absorb(env, s)
+		if err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		// What cmd/absorb.go writes via SetLastUndoAbsorbed: the amended tip
+		// carrying the staged edit.
+		entry.AbsorbedCommits = map[string]string{"a": res.Absorbed[0].Commit}
+		undo, err := Undo(env, s, entry)
+		if err != nil {
+			t.Fatalf("Undo: %v", err)
+		}
+		joined := strings.Join(undo.Notes, "\n")
+		if !strings.Contains(joined, res.Absorbed[0].Commit) || !strings.Contains(joined, "git cherry-pick") {
+			t.Fatalf("undo notes = %v, want the amended tip and a cherry-pick pointer", undo.Notes)
+		}
+		assertUndoRestored(t, f, s, entry)
+	})
+
+	t.Run("absorb apply and dry-run explain undo restores refs not the staged copies", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stage(f, tips, "a")
+
+		plan, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if joined := strings.Join(plan.Notes, "\n"); !strings.Contains(joined, "staged working-tree") {
+			t.Fatalf("dry-run notes = %v, want the undo/working-tree caveat", plan.Notes)
+		}
+		res, err := Absorb(env, s)
+		if err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		joined := strings.Join(res.Notes, "\n")
+		if !strings.Contains(joined, res.Absorbed[0].Commit) || !strings.Contains(joined, "git cherry-pick") {
+			t.Fatalf("apply notes = %v, want the amended tip and a cherry-pick pointer", res.Notes)
+		}
+	})
+
 	t.Run("absorbing into the current branch needs no reset", func(t *testing.T) {
 		f, s, env, tips := absorbEnv(t)
 		stage(f, tips, "c")

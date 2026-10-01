@@ -112,6 +112,74 @@ func TestAbsorbApplyJourney(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestAbsorbUndoRecoveryPointerJourney pins the end-to-end recovery contract:
+// `st undo` after an absorb restores the pre-absorb refs, which orphans the
+// amended commit carrying the staged edit — so both `undo --dry-run` and
+// `undo` must NAME that commit, and `git cherry-pick` on it must reproduce
+// the absorbed content.
+func TestAbsorbUndoRecoveryPointerJourney(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.writeFile("shared.txt", "A0\np\nq\nB0\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "seed")
+	r.create("feat-a", "shared.txt", "A1\np\nq\nB0\n", "a")
+	r.create("feat-b", "shared.txt", "A1\np\nq\nB1\n", "b")
+
+	// Stage an edit to line 1, owned by feat-a's tip.
+	r.writeFile("shared.txt", "A2\np\nq\nB1\n")
+	r.git("add", "shared.txt")
+
+	out := r.stOK("absorb", "--json").stdout
+	var res struct {
+		Absorbed []struct {
+			Branch string `json:"branch"`
+			Commit string `json:"commit"`
+		} `json:"absorbed"`
+		Notes []string `json:"notes"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decode absorb json: %v\n%s", err, out)
+	}
+	if len(res.Absorbed) != 1 {
+		t.Fatalf("absorbed = %+v, want one hunk", res.Absorbed)
+	}
+	amended := res.Absorbed[0].Commit
+	if joined := strings.Join(res.Notes, "\n"); !strings.Contains(joined, amended) || !strings.Contains(joined, "cherry-pick") {
+		t.Fatalf("absorb notes = %v, want the amended commit and a recovery pointer", res.Notes)
+	}
+
+	// The dry-run warns BEFORE the user orphans the commit.
+	dry := r.stOK("undo", "--dry-run")
+	if !strings.Contains(dry.stdout, amended) || !strings.Contains(dry.stdout, "cherry-pick") {
+		t.Fatalf("undo --dry-run = %q, want the amended SHA and recovery hint", dry.stdout)
+	}
+
+	undo := r.stOK("undo")
+	if !strings.Contains(undo.stdout, amended) || !strings.Contains(undo.stdout, "git cherry-pick "+amended) {
+		t.Fatalf("undo = %q, want the amended SHA and a cherry-pick command", undo.stdout)
+	}
+	if got := r.git("cat-file", "-t", amended); got != "commit" {
+		t.Fatalf("cat-file -t %s = %q after undo, want a still-resolvable commit", amended, got)
+	}
+	if got := r.git("show", amended+":shared.txt"); got != "A2\np\nq\nB0" {
+		t.Fatalf("%s:shared.txt = %q, want the absorbed staged edit", amended, got)
+	}
+
+	// Recovery per the note: cherry-pick the named commit onto its own
+	// parent — the absorbed edit is reproduced in full. Undo deliberately
+	// never touches the worktree, so the leftover absorbed content is still
+	// there; force the detached checkout, then restore feat-b's files.
+	r.git("checkout", "-qf", "--detach", amended+"^")
+	r.git("cherry-pick", amended)
+	if got := r.git("show", "HEAD:shared.txt"); got != "A2\np\nq\nB0" {
+		t.Fatalf("cherry-picked HEAD:shared.txt = %q, want the recovered edit", got)
+	}
+	r.git("checkout", "-qf", "feat-b")
+	r.stOK("validate")
+}
+
 // absorbConflictFixture builds the adjacency fixture: feat-a owns line 1,
 // feat-b edits the ADJACENT line 2, so absorbing a line-1 edit forces a
 // genuine rebase conflict when feat-b cascades onto the amended feat-a. It

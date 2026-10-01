@@ -678,3 +678,44 @@ func TestUndoRefRestoreFailure(t *testing.T) {
 		t.Fatalf("b = %q after failed restore, want unchanged %q", got, postB)
 	}
 }
+
+// TestUndoEntryAbsorbedCommitsJSON pins the journal encoding of the absorb
+// recovery map: it round-trips through marshal/unmarshal, and entries written
+// before the field existed (no key at all) still decode with a nil map —
+// journal format is additive, not versioned.
+func TestUndoEntryAbsorbedCommitsJSON(t *testing.T) {
+	entry := UndoEntry{
+		Label:           "absorb",
+		State:           json.RawMessage(`{"version":1}`),
+		Refs:            map[string]string{"main": "aaa"},
+		AbsorbedCommits: map[string]string{"feat-a": "abc123"},
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded UndoEntry
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.AbsorbedCommits["feat-a"] != "abc123" {
+		t.Fatalf("absorbedCommits = %v, want feat-a -> abc123", decoded.AbsorbedCommits)
+	}
+
+	// An entry written by an st that predates the field: no key, decodes nil.
+	var old UndoEntry
+	if err := json.Unmarshal([]byte(`{"label":"absorb","state":{},"refs":{}}`), &old); err != nil {
+		t.Fatalf("unmarshal old-format entry: %v", err)
+	}
+	if old.AbsorbedCommits != nil {
+		t.Fatalf("old-format absorbedCommits = %v, want nil", old.AbsorbedCommits)
+	}
+	// And omitempty keeps new entries without absorbed commits byte-identical.
+	plain, err := json.Marshal(UndoEntry{Label: "modify", State: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatalf("marshal plain: %v", err)
+	}
+	if strings.Contains(string(plain), "absorbedCommits") {
+		t.Fatalf("non-absorb entry carries the key: %s", plain)
+	}
+}

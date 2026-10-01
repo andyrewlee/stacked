@@ -349,3 +349,28 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 		}
 	}
 }
+
+func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	entry := mustSnapshot(t, s, f, "absorb")
+	// The recorded amended tip is the commit undo is about to orphan — the
+	// preview must name it before the user decides.
+	const amended = "abc123def456"
+	entry.AbsorbedCommits = map[string]string{"feat-a": amended}
+
+	res, err := UndoPreview(env, s, entry, false)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	assertNoMutation(t, f)
+	joined := strings.Join(res.Notes, "\n")
+	if !strings.Contains(joined, amended) || !strings.Contains(joined, "feat-a") || !strings.Contains(joined, "git cherry-pick") {
+		t.Fatalf("notes = %v, want the amended SHA, branch, and cherry-pick pointer", res.Notes)
+	}
+	for _, b := range res.Blockers {
+		if strings.Contains(b, amended) {
+			t.Fatalf("absorb advisory is not a refusal, but landed in blockers: %v", res.Blockers)
+		}
+	}
+}

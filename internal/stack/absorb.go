@@ -68,7 +68,13 @@ func requireNoUnstaged(g Git) error {
 // repeated text, silently).
 func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	res, _, err := absorbPlan(env, s)
-	return res, err
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Absorbed) > 0 && len(res.Refused) == 0 {
+		res.Notes = append(res.Notes, "once applied, `st undo` restores the branch refs and state — not the staged working-tree copies; the edits live on in the amended tip commit(s) reported on apply")
+	}
+	return res, nil
 }
 
 // absorbPlan is AbsorbPlan plus the resolved current branch, so Absorb can
@@ -378,6 +384,13 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 		if tip, ok := finalTips[plan.Absorbed[i].Branch]; ok {
 			plan.Absorbed[i].Commit = tip
 		}
+	}
+	if len(plan.Absorbed) > 0 {
+		commits := map[string]string{}
+		for _, a := range plan.Absorbed {
+			commits[a.Branch] = a.Commit
+		}
+		plan.Notes = append(plan.Notes, absorbedCommitsNote(commits))
 	}
 	plan.Notes = append(plan.Notes, skippedWorktreeNotes(s)...)
 	if err := env.save(); err != nil {

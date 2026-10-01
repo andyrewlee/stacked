@@ -145,11 +145,17 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 	}
 
-	return &OpResult{
+	res := &OpResult{
 		Summary:   "undid: " + entry.Label,
 		Restacked: names,
-		Notes:     []string{entry.Label},
-	}, nil
+	}
+	// An undo of an absorb restores the pre-absorb refs — the amended tips
+	// that now carry the caller's staged edits become unreachable. Point at
+	// them explicitly or the edits vanish into reflog-only limbo.
+	if len(entry.AbsorbedCommits) > 0 {
+		res.Notes = append(res.Notes, absorbedCommitsNote(entry.AbsorbedCommits))
+	}
+	return res, nil
 }
 
 func removeCreatedWorktree(env Env, branch, path string) error {
