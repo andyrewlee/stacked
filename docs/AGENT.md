@@ -14,6 +14,9 @@ resolve the files, `git add` them, and run `st continue` (or `st abort`).
 Remote Git operations use your configured Git transport. `st sync` may fetch and
 `st submit` may push, so credentials, SSH agents, and host prompts behave like
 the corresponding `git fetch`/`git push` commands in your environment.
+`st open` only reads remote configuration — it never contacts a host; its one
+side effect is spawning the platform's URL opener (`open`/`xdg-open`/`rundll32`),
+and only in text mode (`--json`/`--dry-run` never spawn).
 `st sync --no-fetch` performs no remote calls at all (the prune/restack basis is
 the already-fetched `refs/remotes/<remote>/<trunk>` or the local trunk), and
 `st prune` never fetches either — it measures "merged" against the local trunk,
@@ -159,6 +162,17 @@ message.
   non-zero with the error envelope on stderr. A ref whose outcome the push did
   not confirm is reported in neither field — the stderr message describes the
   uncertainty instead.
+- **`open --json`** — the compare-URL list `submit` prints, without the push:
+  `{ "remote", "dryRun", "repoURL", "prHints": [ { "head", "base", "compareURL" } ],
+  "summary" }` (`repoURL`, `prHints`, and `summary` are `omitempty`; a hint's
+  `compareURL` is absent for unrecognized forge hosts). `--json` never spawns a
+  browser — the URLs are data for the agent to route — and neither does
+  `--dry-run`, which prints `would open` lines instead. Bare `st open` opens the
+  current branch's compare URL; `--all` opens every tracked branch's. Text mode
+  is the one command that leaves the terminal: it spawns the platform opener
+  (`open`/`xdg-open`/`rundll32`) once per URL. The command is read-only — no
+  lock, no undo entry, no ref moves — so an agent can safely run the JSON form
+  to collect URLs instead of spawning anything.
 - **`init --json`** — one shape for both outcomes:
   `{ "trunk", "initialized": bool, "alreadyInitialized": bool }` (a fresh init
   sets `initialized`; an already-initialized repo sets `alreadyInitialized`).

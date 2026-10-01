@@ -20,6 +20,7 @@ var guideSteps = []string{
 	"st restack                   # rebase after drift; on conflict -> st continue / st abort",
 	"st sync                      # fast-forward trunk, prune merged branches, restack",
 	"st submit                    # push the stack (login-free; prints the repo URL)",
+	"st open                      # open the current branch's PR compare page in a browser",
 	"st undo                      # revert the last stack-mutating command",
 	"# parallel work (one worktree per branch):",
 	"st shell install             # once per shell: eval its output so st can cd between worktrees",

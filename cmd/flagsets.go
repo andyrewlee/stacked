@@ -181,6 +181,23 @@ func newSubmitFlags(o *submitOpts) *flag.FlagSet {
 
 func submitFlagSet() *flag.FlagSet { return newSubmitFlags(&submitOpts{}) }
 
+type openOpts struct {
+	asJSON bool
+	all    bool
+	remote string
+	dryRun bool
+}
+
+func newOpenFlags(o *openOpts) *flag.FlagSet {
+	fs := newFlagSet("open", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "open every tracked branch's compare URL, not just the current branch's")
+	fs.StringVar(&o.remote, "remote", "origin", "remote whose URL the compare links derive from")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "print the compare URLs without opening them")
+	return fs
+}
+
+func openFlagSet() *flag.FlagSet { return newOpenFlags(&openOpts{}) }
+
 type syncOpts struct {
 	asJSON   bool
 	noDelete bool
