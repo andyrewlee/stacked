@@ -200,6 +200,26 @@ func (s *State) Descendants(name string) []string {
 	return result
 }
 
+// UnreachableBranches returns tracked branches the trunk forest walk never
+// reaches — members of a parent cycle, or branches whose recorded parent
+// dangles (untracked or missing) — sorted. A healthy state returns nil. Every
+// Descendants-based consumer (log, restack, sync) silently skips these, so
+// callers surface them via unreachableNotes instead.
+func (s *State) UnreachableBranches() []string {
+	reached := map[string]bool{s.Trunk: true}
+	for _, d := range s.Descendants(s.Trunk) {
+		reached[d] = true
+	}
+	var out []string
+	for name := range s.Branches {
+		if !reached[name] {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ChildIndex returns a map from each branch name to its child branch names in
 // sorted order, built in a single pass. Callers that walk the whole forest (log
 // rendering, restacking) use it to avoid the repeated O(n) scans that calling

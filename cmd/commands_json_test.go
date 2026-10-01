@@ -142,6 +142,62 @@ func TestLogJSONTrunkOnly(t *testing.T) {
 	}
 }
 
+// TestLogWarnsUnreachable pins plan-006: tracked branches the trunk walk never
+// reaches (a parent cycle or a dangling parent) are named in a text warning
+// and in the JSON root's `unreachable` field — the reachable tree still renders.
+func TestLogWarnsUnreachable(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	sha := mustRun(t, "git", "rev-parse", "feat-a")
+	mustRun(t, "git", "branch", "lost", "feat-a")
+	mustRun(t, "git", "branch", "cy-a", "feat-a")
+	mustRun(t, "git", "branch", "cy-b", "feat-a")
+	// Corrupt the saved state: "lost" dangles off a missing parent, and
+	// cy-a/cy-b form a detached cycle — both invisible to the trunk walk.
+	s, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	s.Track("lost", "ghost", sha)
+	s.Track("cy-a", "cy-b", sha)
+	s.Track("cy-b", "cy-a", sha)
+	if err := s.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	text := captureStdout(t, func() {
+		if err := runLog(nil); err != nil {
+			t.Fatalf("log: %v", err)
+		}
+	})
+	if !strings.Contains(text, "feat-a") {
+		t.Fatalf("log text missing reachable branch:\n%s", text)
+	}
+	if !strings.Contains(text, "unreachable") || !strings.Contains(text, "lost") ||
+		!strings.Contains(text, "cy-a") || !strings.Contains(text, "cy-b") ||
+		!strings.Contains(text, "st repair") {
+		t.Fatalf("log text missing the unreachable warning:\n%s", text)
+	}
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("log --json not valid JSON: %v\n%s", err, jsonOut)
+	}
+	want := []string{"cy-a", "cy-b", "lost"}
+	if !reflect.DeepEqual(root.Unreachable, want) {
+		t.Fatalf("root.unreachable = %v, want %v", root.Unreachable, want)
+	}
+	if len(root.Children) != 1 || root.Children[0].Name != "feat-a" {
+		t.Fatalf("reachable tree wrong: %+v", root.Children)
+	}
+}
+
 func TestLogNeedsRestackFlag(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

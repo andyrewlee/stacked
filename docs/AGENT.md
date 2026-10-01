@@ -126,7 +126,10 @@ message.
   In a multi-worktree repo each node may also carry `worktree` (the on-disk path
   of the linked worktree the branch lives in) and `dirty` (true when that
   worktree has uncommitted changes); both are `omitempty`, so single-tree output
-  is unchanged.
+  is unchanged. When tracked branches are unreachable from the trunk (a parent
+  cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
+  the sorted names, `omitempty` — since they cannot appear in the tree; text
+  prints the same list as a `warning:` line advising `st repair`.
 - **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the linked worktree the current branch lives in, `omitempty`).
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another

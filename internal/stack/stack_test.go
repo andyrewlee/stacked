@@ -86,6 +86,40 @@ func TestDescendantsDoesNotReturnRootInCycle(t *testing.T) {
 	}
 }
 
+func TestUnreachableBranches(t *testing.T) {
+	t.Run("healthy state reports none", func(t *testing.T) {
+		if got := newTestState().UnreachableBranches(); len(got) != 0 {
+			t.Errorf("UnreachableBranches = %v, want empty", got)
+		}
+	})
+
+	t.Run("dangling parent", func(t *testing.T) {
+		s := newTestState()
+		s.Track("lost", "ghost", "sha-ghost")
+		if got := s.UnreachableBranches(); !reflect.DeepEqual(got, []string{"lost"}) {
+			t.Errorf("UnreachableBranches = %v, want [lost]", got)
+		}
+	})
+
+	t.Run("cycle members", func(t *testing.T) {
+		s := newTestState()
+		s.Track("cy-a", "cy-b", "sha-b")
+		s.Track("cy-b", "cy-a", "sha-a")
+		if got := s.UnreachableBranches(); !reflect.DeepEqual(got, []string{"cy-a", "cy-b"}) {
+			t.Errorf("UnreachableBranches = %v, want [cy-a cy-b]", got)
+		}
+	})
+
+	t.Run("dangling chain keeps its subtree", func(t *testing.T) {
+		s := newTestState()
+		s.Track("lost", "ghost", "sha-ghost")
+		s.Track("lost-child", "lost", "sha-lost")
+		if got := s.UnreachableBranches(); !reflect.DeepEqual(got, []string{"lost", "lost-child"}) {
+			t.Errorf("UnreachableBranches = %v, want both unreachable", got)
+		}
+	})
+}
+
 func TestAncestors(t *testing.T) {
 	s := newTestState()
 

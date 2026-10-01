@@ -355,7 +355,7 @@ func restackEpilogue(env Env, s *State, start string, rebased []string) (*OpResu
 	if err := restoreHEAD(env, start, s.Trunk); err != nil {
 		return nil, err
 	}
-	notes := skippedWorktreeNotes(s)
+	notes := append(skippedWorktreeNotes(s), unreachableNotes(s)...)
 	if len(rebased) == 0 && len(notes) == 0 {
 		return &OpResult{Summary: "everything up to date"}, nil
 	}
@@ -389,6 +389,18 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 func skippedWorktreeNotes(s *State) []string {
 	skipped, rebase := s.drainSkippedWorktrees()
 	return skippedWorktreeNotesFrom(skipped, rebase)
+}
+
+// unreachableNotes turns the tracked branches no trunk forest walk can reach
+// — cycle members, dangling parents — into a repair-pointing warning. st
+// validate and st repair already classify both kinds (ParentUntracked,
+// ParentMissing, ParentCycle), so the advice actually resolves the condition.
+func unreachableNotes(s *State) []string {
+	un := s.UnreachableBranches()
+	if len(un) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st repair`", s.Trunk, joinComma(un))}
 }
 
 func skippedWorktreeNotesFrom(skipped []string, rebase map[string]bool) []string {
@@ -821,7 +833,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 		Summary:   "sync complete",
 		Deleted:   deleted,
 		Restacked: rebased,
-		Notes:     append(notes, skippedWorktreeNotes(s)...),
+		Notes:     append(notes, append(skippedWorktreeNotes(s), unreachableNotes(s)...)...),
 	}, nil
 }
 
