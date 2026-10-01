@@ -362,3 +362,359 @@ func TestFoldSaveCheckpointFailure(t *testing.T) {
 		t.Fatalf("HEAD = %q, want a (fold's parent checkout)", f.head)
 	}
 }
+
+// TestCreateStageFailurePropagates drives the Add knob: `st create -a` whose
+// staging step fails must surface the error wrapped, and leave no branch.
+func TestCreateStageFailurePropagates(t *testing.T) {
+	f, s, env := newEnvState()
+	boom := errors.New("add exploded")
+	f.failErr["Add"] = boom
+
+	if _, err := Create(env, s, "x", "msg", true); !errors.Is(err, boom) {
+		t.Fatalf("Create -a = %v, want wrapped %v", err, boom)
+	}
+	if f.BranchExists("x") || s.IsTracked("x") {
+		t.Fatal("a failed stage must not create or track the branch")
+	}
+}
+
+// TestCreateBranchFailurePropagates drives the CreateBranch knob: the branch
+// create itself fails (rather than only its precondition checks).
+func TestCreateBranchFailurePropagates(t *testing.T) {
+	f, s, env := newEnvState()
+	boom := errors.New("create exploded")
+	f.failErr["CreateBranch"] = boom
+
+	_, err := Create(env, s, "x", "", false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Create = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `creating branch "x"`) {
+		t.Fatalf("Create = %v, want the branch named", err)
+	}
+	if s.IsTracked("x") {
+		t.Fatal("a failed create must not track the branch")
+	}
+}
+
+// TestRenameBranchFailurePropagates drives the RenameBranch knob: the git-side
+// rename fails after all preconditions pass — state must be untouched.
+func TestRenameBranchFailurePropagates(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	boom := errors.New("rename exploded")
+	f.failErr["RenameBranch"] = boom
+
+	_, err := Rename(env, s, "a", "a2")
+	if !errors.Is(err, boom) {
+		t.Fatalf("Rename = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "renaming branch") {
+		t.Fatalf("Rename = %v, want the rename step named", err)
+	}
+	if !s.IsTracked("a") || s.IsTracked("a2") || !f.BranchExists("a") {
+		t.Fatal("a failed rename must leave the branch and its record intact")
+	}
+}
+
+// TestRebaseContinueGenericFailure pins a non-restall RebaseContinue failure:
+// while a rebase is paused on a known branch, a generic continue error is
+// reported as a ConflictError (the rebase is still in progress — 'conflicted'
+// is the truthful classification of the state the user is in).
+func TestRebaseContinueGenericFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	f.conflictOn("feat-b")
+
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want the pause conflict", err)
+	}
+	boom := errors.New("continue exploded")
+	f.failErr["RebaseContinue"] = boom
+
+	_, err := Continue(env, s)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Continue = %v, want it classified as still-conflicted", err)
+	}
+	var ce *ConflictError
+	if !errors.As(err, &ce) || ce.Branch != "feat-b" {
+		t.Fatalf("Continue = %#v, want ConflictError on feat-b", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("the paused rebase must survive a failed continue")
+	}
+}
+
+// TestProbeFailuresSurface is the inventory table: every instrumented port
+// probe whose failure arm was dormant gets driven once — the injected error
+// must surface wrapped (never a panic, never swallowed into a wrong
+// classification). `setup` builds the fixture; `run` invokes the op.
+func TestProbeFailuresSurface(t *testing.T) {
+	boom := errors.New("probe exploded")
+
+	stack2 := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		return f, s, env
+	}
+	drift := func(t *testing.T, f *fakeGit) {
+		t.Helper()
+		if err := f.Checkout("main"); err != nil {
+			t.Fatal(err)
+		}
+		f.commit("advance-main")
+	}
+
+	cases := []struct {
+		name    string
+		method  string
+		after   int // failAfter; -1 = fail every call
+		setup   func(t *testing.T) (*fakeGit, *State, Env)
+		run     func(env Env, f *fakeGit, s *State) error
+		wantSub string
+	}{
+		{
+			name:   "restack forest tips read",
+			method: "Tips",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				drift(t, f)
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Restack(env, s); return err },
+			wantSub: "read branch tips",
+		},
+		{
+			name:   "post-rebase tip refresh",
+			method: "RevParse",
+			after:  0, // the refresh is the first RevParse on this path
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				drift(t, f)
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Restack(env, s); return err },
+			wantSub: `resolve "a" after restack`,
+		},
+		{
+			name:   "prune tip read",
+			method: "TipsFor",
+			after:  -1,
+			setup:  stack2,
+			run: func(env Env, f *fakeGit, s *State) error {
+				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+				return err
+			},
+			wantSub: "read tracked branch tips",
+		},
+		{
+			name:   "prune merged probe",
+			method: "MergedInto",
+			after:  -1,
+			setup:  stack2,
+			run: func(env Env, f *fakeGit, s *State) error {
+				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+				return err
+			},
+			wantSub: boom.Error(),
+		},
+		{
+			name:   "squash subject read",
+			method: "CommitSubjects",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := newEnvState()
+				mkBranch(t, env, s, f, "main", "a")
+				f.commit("a2") // squash needs >1 commit
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Squash(env, s, "sq"); return err },
+			wantSub: boom.Error(),
+		},
+		{
+			name:    "requireClean probe",
+			method:  "IsClean",
+			after:   -1,
+			setup:   stack2,
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Restack(env, s); return err },
+			wantSub: "checking working tree",
+		},
+		{
+			name:   "staged-changes probe",
+			method: "HasStagedChanges",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := newEnvState()
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Create(env, s, "x", "", false); return err },
+			wantSub: "checking staged changes",
+		},
+		{
+			name:   "unstaged-changes probe",
+			method: "HasUnstagedChanges",
+			after:  -1,
+			setup:  stack2, // descendants(cur) non-empty only from a or main
+			run: func(env Env, f *fakeGit, s *State) error {
+				if err := f.Checkout("a"); err != nil {
+					return err
+				}
+				_, err := Modify(env, s, "m", false, false)
+				return err
+			},
+			wantSub: "checking unstaged changes",
+		},
+		{
+			name:   "inferParent merged probe",
+			method: "MergedInto",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				if err := f.Checkout("b"); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.CreateBranch("loose"); err != nil {
+					t.Fatal(err)
+				}
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := TrackBranch(env, s, "loose", ""); return err },
+			wantSub: boom.Error(),
+		},
+		{
+			name:   "sync worktree snapshot",
+			method: "Worktrees",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				if err := f.Checkout("a"); err != nil {
+					t.Fatal(err)
+				}
+				return f, s, env
+			},
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := Sync(env, &fakeRemote{}, s, "origin", true, true)
+				return err
+			},
+			wantSub: boom.Error(),
+		},
+		{
+			name:   "undo created-worktree probe",
+			method: "Worktrees",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				if err := f.CreateBranchAt("c", "main"); err != nil {
+					t.Fatal(err)
+				}
+				f.addWorktree("/wt/c", "c")
+				return f, s, env
+			},
+			run: func(env Env, f *fakeGit, s *State) error {
+				entry := mustSnapshot(t, s, f, "worktree")
+				entry.CreatedBranches = []string{"c"}
+				_, err := Undo(env, s, entry)
+				return err
+			},
+			wantSub: boom.Error(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, env := tc.setup(t)
+			f.failErr[tc.method] = boom
+			if tc.after >= 0 {
+				f.failAfter[tc.method] = tc.after
+			}
+			err := tc.run(env, f, s)
+			if !errors.Is(err, boom) {
+				t.Fatalf("%s probe failure = %v, want wrapped %v", tc.method, err, boom)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("%s probe failure = %v, want message containing %q", tc.method, err, tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestSnapshotUndoCurrentBranchDegrade pins the deliberate degrade the audit
+// found unpinned: snapshotUndo swallows a CurrentBranch failure and records ""
+// — indistinguishable from detached HEAD — so the undo of that operation skips
+// the final checkout restore entirely.
+func TestSnapshotUndoCurrentBranchDegrade(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	f.failErr["CurrentBranch"] = errors.New("probe exploded")
+	entry, err := s.snapshotUndo(f, "create")
+	if err != nil {
+		t.Fatalf("snapshotUndo: %v — a dead CurrentBranch probe must not fail the snapshot", err)
+	}
+	if entry.CurrentBranch != "" {
+		t.Fatalf("entry.CurrentBranch = %q, want the swallowed-probe degrade", entry.CurrentBranch)
+	}
+	f.failErr["CurrentBranch"] = nil
+
+	// Undoing with the degraded entry must not check a branch back out: HEAD
+	// stays wherever the user left it (here main, not the restored a).
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if f.head == "a" {
+		t.Fatal("undo restored HEAD to a despite the snapshot recording no current branch")
+	}
+}
+
+// TestCascadeExpectedHeadDegrade pins the sibling degrade: currentBranchOr
+// swallows the same probe for the cascade's expectedHEAD, so a mid-cascade
+// rebase failure skips the in-loop restore ("" = never restore). The OUTER
+// restoreHEAD still tries the original start — the difference from the
+// healthy run is one "additionally failed to restore" layer, not two (contrast
+// TestRestackRestoreFailureComposesTwice).
+func TestCascadeExpectedHeadDegrade(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	rebaseErr := errors.New("rebase exploded")
+	checkoutErr := errors.New("cannot restore")
+	f.rebaseErr["b"] = rebaseErr
+	f.checkoutErr["a"] = checkoutErr
+	// f.calls counts fixture calls too (mkBranch→Create probes CurrentBranch).
+	// Anchor on the live count: Restack's own start read and restackBranch's
+	// expectedHEAD read stay healthy (+2); the forest's currentBranchOr fails.
+	f.failErr["CurrentBranch"] = errors.New("probe exploded")
+	f.failAfter["CurrentBranch"] = f.calls["CurrentBranch"] + 2
+
+	_, err := Restack(env, s)
+	if !errors.Is(err, rebaseErr) {
+		t.Fatalf("Restack = %v, want the rebase sentinel matchable", err)
+	}
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Restack = %v, want the outer restore failure matchable", err)
+	}
+	if n := strings.Count(err.Error(), "additionally failed to restore"); n != 1 {
+		t.Fatalf("Restack = %q, want exactly ONE restore arm (the in-loop restore was skipped), got %d", err, n)
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b — the failed rebase parked it and no restore landed", f.head)
+	}
+}

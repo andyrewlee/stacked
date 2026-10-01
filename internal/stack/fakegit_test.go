@@ -595,6 +595,9 @@ func (f *fakeGit) headBranch(op string) string {
 }
 
 func (f *fakeGit) CreateBranch(name string) error {
+	if err := f.fail("CreateBranch"); err != nil {
+		return err
+	}
 	if f.head == "" {
 		return fmt.Errorf("cannot create branch %q with a detached HEAD", name)
 	}
@@ -698,6 +701,9 @@ func (f *fakeGit) UpdateRefs(updates map[string]string) error {
 }
 
 func (f *fakeGit) RenameBranch(oldName, newName string) error {
+	if err := f.fail("RenameBranch"); err != nil {
+		return err
+	}
 	tip, ok := f.branches[oldName]
 	if !ok {
 		return fmt.Errorf("no such branch %q", oldName)
@@ -928,6 +934,9 @@ func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) 
 
 // RebaseContinue resolves the modeled conflict and finishes the rebase.
 func (f *fakeGit) RebaseContinue() error {
+	if err := f.fail("RebaseContinue"); err != nil {
+		return err
+	}
 	if !f.rebaseActive {
 		return fmt.Errorf("no rebase in progress")
 	}
@@ -997,6 +1006,9 @@ func (f *fakeGit) CommitSubjects(base, branch string) ([]string, error) {
 }
 
 func (f *fakeGit) Add(_ ...string) error {
+	if err := f.fail("Add"); err != nil {
+		return err
+	}
 	f.staged = true
 	f.clean = false
 	return nil

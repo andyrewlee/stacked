@@ -229,11 +229,12 @@ func TestUndoPreviewParity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pf, ps, pe := tc.build(t)
+			callsBefore := pf.callsSnapshot()
 			preview, err := UndoPreview(Env{Git: pf}, ps, pe, tc.canTeleport)
 			if err != nil {
 				t.Fatalf("UndoPreview: %v", err)
 			}
-			assertNoMutation(t, pf)
+			assertNoMutation(t, pf, callsBefore)
 
 			if len(preview.Blockers) != len(tc.wantBlockers) {
 				t.Fatalf("preview blockers = %v, want exactly %v", preview.Blockers, tc.wantBlockers)
