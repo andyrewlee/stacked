@@ -75,6 +75,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **A `state.json` that tracks the trunk as a branch is now refused at
+  load.** The trunk is the root of the stack, not a tracked record — a file
+  whose `branches` map contains the trunk rooted a cycle in the topology
+  itself and could hang or duplicate `st log`'s recursive renderers. The
+  shared decoder rejects named, unnamed (legacy v0), and null trunk records,
+  so `Load`, undo snapshots (`ValidateUndoState`/`DecodeUndoState`), and
+  every command that reads state refuse the corruption before mutating —
+  while a valid undo snapshot can still repair a corrupt current state.
+  Both `st log` renderers also visit each name at most once as a defensive
+  bound, leaving healthy output byte-identical.
 - **`st undo` restores refs before saving snapshot metadata.** The ref
   transaction now runs ahead of the state save: a failed transaction leaves
   live refs and persisted metadata consistent with each other (previously a
