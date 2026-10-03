@@ -362,3 +362,56 @@ func TestSyncNoFetchPreservesRemoteMergedAncestor(t *testing.T) {
 		})
 	}
 }
+
+// TestSyncFlagArms pins the remaining sync flag surface through the real
+// binary: --no-delete keeps merged branches, and --no-fetch --dry-run emits
+// the preview shape without remote contact.
+func TestSyncFlagArms(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.git("remote", "add", "origin", bare)
+	r.git("push", "-q", "-u", "origin", "main")
+
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+	r.git("merge", "-q", "--no-ff", "feat-a", "-m", "merge feat-a")
+
+	// --no-delete: the merged branch is reported but never deleted.
+	res := r.st("sync", "--no-delete", "--json")
+	wantExit(t, res, 0)
+	var applied map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &applied); err != nil {
+		t.Fatalf("sync --json invalid: %v\n%s", err, res.stdout)
+	}
+	if names, _ := applied["deleted"].([]any); len(names) != 0 {
+		t.Fatalf("deleted = %v, want [] under --no-delete", applied["deleted"])
+	}
+	res = r.stOK("log", "--json")
+	var root logNode
+	if err := json.Unmarshal([]byte(res.stdout), &root); err != nil {
+		t.Fatalf("log --json invalid: %v", err)
+	}
+	if !r.branchExists("feat-a") || findNode(&root, "feat-a") == nil {
+		t.Fatal("--no-delete deleted or untracked the merged branch")
+	}
+
+	// --no-fetch --dry-run: the preview shape emits with no fetch evidence —
+	// repoint origin at an unreachable path so any transport would fail.
+	r.git("remote", "set-url", "origin", filepath.Join(t.TempDir(), "gone.git"))
+	res = r.st("sync", "--no-fetch", "--dry-run", "--json")
+	wantExit(t, res, 0)
+	var dry map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &dry); err != nil {
+		t.Fatalf("sync --dry-run --json invalid: %v\n%s", err, res.stdout)
+	}
+	if dry["dryRun"] != true {
+		t.Fatalf("dryRun = %v, want true", dry["dryRun"])
+	}
+	if summary, _ := dry["summary"].(string); summary == "" {
+		t.Fatalf("summary empty in %v", dry)
+	}
+}

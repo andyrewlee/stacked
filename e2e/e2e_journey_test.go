@@ -768,3 +768,35 @@ func TestAbsorbDryRunMapping(t *testing.T) {
 	}
 	r.stOK("validate")
 }
+
+// TestTrackAllDryRun previews the bulk adopt through the real binary: the
+// inferred parent map is emitted in the JSON `tracked` field while nothing is
+// recorded — the apply arm then lands the same map.
+func TestTrackAllDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	// Two untracked branches: plain-b hangs off feat-a, plain-c off main.
+	r.git("branch", "plain-b", "feat-a")
+	r.git("branch", "plain-c", "main")
+
+	res := r.st("track", "--all", "--dry-run", "--json")
+	wantExit(t, res, 0)
+	var dry map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &dry); err != nil {
+		t.Fatalf("track --all --dry-run --json invalid: %v\n%s", err, res.stdout)
+	}
+	if dry["dryRun"] != true {
+		t.Fatalf("dryRun = %v, want true", dry["dryRun"])
+	}
+	tracked, _ := dry["tracked"].(map[string]any)
+	if tracked["plain-b"] != "feat-a" || tracked["plain-c"] != "main" {
+		t.Fatalf("tracked = %v, want {plain-b: feat-a, plain-c: main}", tracked)
+	}
+	// The preview recorded nothing: a bare `st track` on the same repo still
+	// sees plain-c as untracked.
+	res = r.stOK("track", "plain-c")
+	wantStdoutContains(t, res, "Tracking plain-c")
+}
