@@ -157,6 +157,15 @@ type Remote interface {
 type Env struct {
 	Git  Git
 	Save func() error
+	// AbsorbCheckpoint, when set, durably records the absorb target→commit
+	// recovery map the engine passes it — the amended tips that now hold the
+	// caller's staged edits. Absorb invokes it after each successful amend and
+	// once more with the post-cascade tips, so a later failure (or abort→undo)
+	// can still name the commits that would otherwise be orphaned. The map is a
+	// fresh copy each call; the callback may retain it. Nil is a no-op (tests
+	// and the dry-run path); only the absorb adapter wires it, to the undo
+	// journal's SetLastUndoAbsorbed.
+	AbsorbCheckpoint func(map[string]string) error
 }
 
 // save persists the state if a Save hook is configured.
@@ -165,4 +174,12 @@ func (e Env) save() error {
 		return nil
 	}
 	return e.Save()
+}
+
+// absorbCheckpoint records the recovery map if a hook is configured.
+func (e Env) absorbCheckpoint(commits map[string]string) error {
+	if e.AbsorbCheckpoint == nil {
+		return nil
+	}
+	return e.AbsorbCheckpoint(commits)
 }

@@ -443,3 +443,149 @@ func TestWriteUndoLeavesNoTempFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestSetLastUndoAbsorbedRequiresActiveAbsorb pins the absorb checkpoint's
+// precondition: the durable map lands only on an active absorb entry — an
+// absent, malformed, empty, or wrong-label journal must error instead of
+// silently claiming (or corrupting) durability.
+func TestSetLastUndoAbsorbedRequiresActiveAbsorb(t *testing.T) {
+	t.Run("absent journal errors and creates nothing", func(t *testing.T) {
+		initGitRepo(t)
+		if err := SetLastUndoAbsorbed(map[string]string{"a": "sha-a"}); err == nil {
+			t.Fatal("SetLastUndoAbsorbed on an absent journal: want an error")
+		}
+		path, err := undoPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("undo.json appeared after a refused checkpoint (stat=%v)", statErr)
+		}
+	})
+
+	t.Run("malformed journal errors and preserves raw bytes", func(t *testing.T) {
+		initGitRepo(t)
+		path, err := undoPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		garbage := []byte("{ this is not valid json")
+		if err := os.WriteFile(path, garbage, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetLastUndoAbsorbed(map[string]string{"a": "sha-a"}); err == nil {
+			t.Fatal("SetLastUndoAbsorbed on a malformed journal: want an error")
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(garbage) {
+			t.Fatal("malformed journal rewritten — corruption recovery is loadUndo's job, not the setter's")
+		}
+	})
+
+	t.Run("empty journal errors", func(t *testing.T) {
+		initGitRepo(t)
+		if err := writeUndo([]UndoEntry{}); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(mustUndoPath(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := SetLastUndoAbsorbed(map[string]string{"a": "sha-a"}); err == nil {
+			t.Fatal("SetLastUndoAbsorbed on an empty journal: want an error")
+		}
+		after, err := os.ReadFile(mustUndoPath(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(before) != string(after) {
+			t.Fatal("empty journal rewritten by a refused checkpoint")
+		}
+	})
+
+	t.Run("wrong-label latest entry errors", func(t *testing.T) {
+		initGitRepo(t)
+		if err := writeUndo([]UndoEntry{{Label: "create"}, {Label: "modify"}}); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(mustUndoPath(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = SetLastUndoAbsorbed(map[string]string{"a": "sha-a"})
+		if err == nil || !strings.Contains(err.Error(), `"modify"`) {
+			t.Fatalf("SetLastUndoAbsorbed = %v, want an error naming the wrong label", err)
+		}
+		after, err := os.ReadFile(mustUndoPath(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(before) != string(after) {
+			t.Fatal("journal rewritten by a refused checkpoint")
+		}
+	})
+
+	t.Run("active absorb entry takes cumulative updates", func(t *testing.T) {
+		initGitRepo(t)
+		first := UndoEntry{Label: "create", Refs: map[string]string{"main": "m0"}, CurrentBranch: "a"}
+		absorb := UndoEntry{
+			Label:           "absorb",
+			State:           json.RawMessage(`{"version":1,"trunk":"main","branches":{}}`),
+			Refs:            map[string]string{"a": "a0"},
+			CreatedBranches: []string{"b"},
+		}
+		if err := writeUndo([]UndoEntry{first, absorb}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := SetLastUndoAbsorbed(map[string]string{"a": "a1"}); err != nil {
+			t.Fatalf("first checkpoint: %v", err)
+		}
+		if err := SetLastUndoAbsorbed(map[string]string{"a": "a1", "b": "b1"}); err != nil {
+			t.Fatalf("cumulative checkpoint: %v", err)
+		}
+
+		entries, err := loadUndo()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 2 {
+			t.Fatalf("journal = %d entries, want 2 (earlier entries preserved)", len(entries))
+		}
+		if entries[0].Label != first.Label || !reflect.DeepEqual(entries[0].Refs, first.Refs) ||
+			entries[0].CurrentBranch != first.CurrentBranch || len(entries[0].AbsorbedCommits) != 0 {
+			t.Fatalf("earlier entry = %+v, want its label/refs/checkout preserved and no absorbed map", entries[0])
+		}
+		got := entries[1]
+		if !reflect.DeepEqual(got.AbsorbedCommits, map[string]string{"a": "a1", "b": "b1"}) {
+			t.Fatalf("AbsorbedCommits = %v, want the cumulative map", got.AbsorbedCommits)
+		}
+		var gotState, wantState map[string]any
+		if err := json.Unmarshal(got.State, &gotState); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(absorb.State, &wantState); err != nil {
+			t.Fatal(err)
+		}
+		if got.Label != "absorb" || !reflect.DeepEqual(gotState, wantState) ||
+			!reflect.DeepEqual(got.Refs, absorb.Refs) ||
+			!reflect.DeepEqual(got.CreatedBranches, absorb.CreatedBranches) {
+			t.Fatalf("absorb entry = %+v, want snapshot/refs/created metadata preserved", got)
+		}
+	})
+}
+
+func mustUndoPath(t *testing.T) string {
+	t.Helper()
+	path, err := undoPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

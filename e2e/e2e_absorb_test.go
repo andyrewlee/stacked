@@ -237,11 +237,16 @@ func TestAbsorbConflictContinueJourney(t *testing.T) {
 }
 
 // TestAbsorbConflictAbortUndoJourney proves the other recovery: abort the
-// paused cascade, then one undo restores every pre-absorb tip.
+// paused cascade, then one undo restores every pre-absorb tip — and names
+// the amended commit that still carries the staged edit, so it can be
+// cherry-picked back.
 func TestAbsorbConflictAbortUndoJourney(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	tipsBefore := absorbConflictFixture(t, r)
+	// The amend landed before the cascade paused; its checkpoint is already
+	// in the retained undo entry even though absorb errored.
+	amended := r.rev("feat-a")
 
 	r.stOK("abort")
 	if _, err := os.Stat(filepath.Join(r.dir, ".git", "rebase-merge")); !os.IsNotExist(err) {
@@ -249,12 +254,33 @@ func TestAbsorbConflictAbortUndoJourney(t *testing.T) {
 	}
 	r.stOK("validate")
 
+	// The preview names the commit BEFORE it would be orphaned.
+	dry := r.stOK("undo", "--dry-run").stdout
+	if !strings.Contains(dry, amended) || !strings.Contains(dry, "cherry-pick") {
+		t.Fatalf("undo --dry-run = %q, want the amended SHA %s and a recovery hint", dry, amended)
+	}
+
 	undoOut := r.stOK("undo").stdout
+	if !strings.Contains(undoOut, amended) || !strings.Contains(undoOut, "git cherry-pick "+amended) {
+		t.Fatalf("undo = %q, want the amended SHA %s and a cherry-pick command", undoOut, amended)
+	}
 	for b, tip := range tipsBefore {
 		if got := r.rev(b); got != tip {
 			t.Fatalf("%s = %s after undo, want restored %s\nundo output:\n%s", b, got, tip, undoOut)
 		}
 	}
+
+	// The pointer is usable: the amended commit is still resolvable and
+	// cherry-picking it reproduces the absorbed edit in full.
+	if got := r.git("cat-file", "-t", amended); got != "commit" {
+		t.Fatalf("cat-file -t %s = %q, want a still-resolvable commit", amended, got)
+	}
+	r.git("checkout", "-qf", "-b", "recovery", tipsBefore["main"])
+	r.git("cherry-pick", amended)
+	if got := r.git("show", "HEAD:shared.txt"); got != "A2\nB0" {
+		t.Fatalf("recovery:shared.txt = %q, want the absorbed edit", got)
+	}
+
 	// Undo restores refs, never the working tree (documented); the edit
 	// stays reachable in the dangling amended commit. The repo must be usable.
 	r.stOK("status")

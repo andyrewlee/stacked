@@ -1065,3 +1065,340 @@ func TestAbsorbPostAmendProbeFailures(t *testing.T) {
 		}
 	})
 }
+
+// failNthAmendGit wraps a Git port so the nth AmendTipWithPatch call returns
+// err — a test-local seam for failing a mid-sequence absorb amend without
+// touching the shared fake's knobs.
+type failNthAmendGit struct {
+	Git
+	n     int
+	err   error
+	calls int
+}
+
+func (w *failNthAmendGit) AmendTipWithPatch(branch string, patch []byte) (string, error) {
+	w.calls++
+	if w.calls == w.n {
+		return "", w.err
+	}
+	return w.Git.AmendTipWithPatch(branch, patch)
+}
+
+// ckpt records every AbsorbCheckpoint argument in call order (the maps are
+// safe to retain — the engine clones before calling) and can fail the call
+// numbered failAt (1-based; 0 never fails).
+type ckpt struct {
+	err    error
+	failAt int
+	calls  int
+	maps   []map[string]string
+}
+
+func (c *ckpt) hook() func(map[string]string) error {
+	return func(m map[string]string) error {
+		c.calls++
+		if c.calls == c.failAt {
+			return c.err
+		}
+		c.maps = append(c.maps, m)
+		return nil
+	}
+}
+
+// TestAbsorbRecoveryCheckpoints pins the per-amend and post-cascade
+// persistence seams: every staged edit that lands in a commit must be named
+// in the durable recovery map before the next destructive step runs, and the
+// map handed over is a snapshot later amends cannot rewrite.
+func TestAbsorbRecoveryCheckpoints(t *testing.T) {
+	// stageTwo stages one hunk owned by a and one owned by b — the two-target
+	// fixture whose second target the cascade rewrites.
+	stageTwo := func(f *fakeGit, tips map[string]string) {
+		f.staged = true
+		f.stagedPatch = []byte("fake patch")
+		f.stagedHunks = []git.Hunk{
+			{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+			{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
+		}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+			2: blameID(tips["a"], 2, "f.txt"),
+			5: blameID(tips["b"], 5, "f.txt"),
+		}}
+	}
+	// stageOne stages a single hunk owned by a.
+	stageOne := func(f *fakeGit, tips map[string]string) {
+		f.staged = true
+		f.stagedPatch = []byte("fake patch")
+		f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+	}
+
+	t.Run("two-target success checkpoints cumulative then post-cascade tips", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwo(f, tips)
+		c := &ckpt{}
+		env.AbsorbCheckpoint = c.hook()
+
+		// The amend-time snapshots see pre-reset state; capture it inside the
+		// callback to pin the boundary (checkpoints precede every reset and
+		// the cascade).
+		var resetsAtCall []int
+		var parentSHAAtCall []string
+		inner := env.AbsorbCheckpoint
+		env.AbsorbCheckpoint = func(m map[string]string) error {
+			resetsAtCall = append(resetsAtCall, len(f.resetHardDirs))
+			b, _ := s.Get("b")
+			parentSHAAtCall = append(parentSHAAtCall, b.ParentSHA)
+			return inner(m)
+		}
+
+		if _, err := Absorb(env, s); err != nil {
+			t.Fatalf("Absorb: %v", err)
+		}
+		if len(c.maps) != 3 {
+			t.Fatalf("checkpoints = %d, want 3 ({a}, {a,b}, final tips)", len(c.maps))
+		}
+		amendA, amendB := c.maps[0]["a"], c.maps[1]["b"]
+		if len(c.maps[0]) != 1 || amendA == "" {
+			t.Fatalf("first checkpoint = %v, want {a: amended tip}", c.maps[0])
+		}
+		if len(c.maps[1]) != 2 || c.maps[1]["a"] != amendA || amendB == "" {
+			t.Fatalf("second checkpoint = %v, want cumulative {a, b}", c.maps[1])
+		}
+		// Retained maps are snapshots: the first call's map must NOT show b.
+		if _, ok := c.maps[0]["b"]; ok {
+			t.Fatalf("first checkpoint mutated retroactively: %v", c.maps[0])
+		}
+		// The cascade rewrote b's amend-time commit; the final checkpoint
+		// carries live tips, not the stale amend IDs.
+		final := c.maps[2]
+		if final["a"] != f.branches["a"] || final["b"] != f.branches["b"] {
+			t.Fatalf("final checkpoint = %v, want live tips a=%s b=%s", final, f.branches["a"], f.branches["b"])
+		}
+		if final["b"] == amendB {
+			t.Fatal("final checkpoint kept b's amend-time commit; the cascade rewrote it")
+		}
+		if final["a"] != amendA {
+			t.Fatal("a's commit must not change — the lowest target is not re-cascaded")
+		}
+		// Amend-time checkpoints ran before any reset/cascade bookkeeping.
+		for i := 0; i < 2; i++ {
+			if resetsAtCall[i] != 0 {
+				t.Fatalf("checkpoint %d observed %d resets, want 0 (pre-reset boundary)", i+1, resetsAtCall[i])
+			}
+			if parentSHAAtCall[i] != tips["a"] {
+				t.Fatalf("checkpoint %d observed b.ParentSHA %q, want pre-cascade %q", i+1, parentSHAAtCall[i], tips["a"])
+			}
+		}
+	})
+
+	t.Run("first checkpoint failure stops before further mutation", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwo(f, tips)
+		boom := errors.New("journal exploded")
+		c := &ckpt{err: boom, failAt: 1}
+		env.AbsorbCheckpoint = c.hook()
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want errors.Is(%v)", err, boom)
+		}
+		// The error names the amend that actually landed so the SHA is
+		// recoverable even though the journal write was not.
+		if !strings.Contains(err.Error(), f.branches["a"]) || !strings.Contains(err.Error(), "cherry-pick") {
+			t.Fatalf("error = %q, want the landed commit and recovery pointer", err)
+		}
+		if f.branches["b"] != tips["b"] {
+			t.Fatal("b's tip moved — the second amend must not run after a checkpoint failure")
+		}
+		if len(f.resetHardDirs) != 0 {
+			t.Fatalf("resetHardDirs = %v, want none (refused before resets)", f.resetHardDirs)
+		}
+		if len(f.rebaseLog) != 0 {
+			t.Fatalf("rebaseLog = %v, want empty (refused before the cascade)", f.rebaseLog)
+		}
+	})
+
+	t.Run("second checkpoint failure names both landed commits", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwo(f, tips)
+		boom := errors.New("journal exploded")
+		c := &ckpt{err: boom, failAt: 2}
+		env.AbsorbCheckpoint = c.hook()
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want errors.Is(%v)", err, boom)
+		}
+		for _, target := range []string{"a", "b"} {
+			if !strings.Contains(err.Error(), f.branches[target]) {
+				t.Fatalf("error = %q, want %s's landed commit %s", err, target, f.branches[target])
+			}
+		}
+		if len(c.maps) != 1 {
+			t.Fatalf("checkpoints = %d, want 1 (the first succeeded)", len(c.maps))
+		}
+		if len(f.resetHardDirs) != 0 || len(f.rebaseLog) != 0 {
+			t.Fatal("a checkpoint failure must stop before resets and the cascade")
+		}
+	})
+
+	t.Run("second amend failure retains the first target's checkpoint", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		stageTwo(f, tips)
+		boom := errors.New("patch exploded")
+		env.Git = &failNthAmendGit{Git: f, n: 2, err: boom}
+		c := &ckpt{}
+		env.AbsorbCheckpoint = c.hook()
+
+		_, err := Absorb(env, s)
+		if !errors.Is(err, boom) {
+			t.Fatalf("Absorb = %v, want errors.Is(%v)", err, boom)
+		}
+		if len(c.maps) != 1 {
+			t.Fatalf("checkpoints = %d, want 1 (only a's amend landed)", len(c.maps))
+		}
+		if c.maps[0]["a"] != f.branches["a"] || len(c.maps[0]) != 1 {
+			t.Fatalf("checkpoint = %v, want {a: %s}", c.maps[0], f.branches["a"])
+		}
+		if f.branches["b"] != tips["b"] {
+			t.Fatal("b's tip moved — its amend failed")
+		}
+	})
+
+	// Every post-amend failure arm must leave a nonempty last checkpoint
+	// naming the committed edits — the whole point of the seam.
+	postAmendArms := []struct {
+		name  string
+		arm   func(f *fakeGit, env *Env)
+		wantN int // checkpoints the arm reaches (2 = amend + final refresh)
+	}{
+		{"owner worktree reset fails", func(f *fakeGit, env *Env) {
+			f.addWorktree("/wt/a", "a")
+			f.failErr["ResetHardIn"] = errors.New("reset exploded")
+		}, 1},
+		{"caller reset fails", func(f *fakeGit, env *Env) {
+			f.failErr["ResetHardIn"] = errors.New("reset exploded")
+		}, 1},
+		{"cascade conflict", func(f *fakeGit, env *Env) {
+			f.conflictOn("b")
+		}, 1},
+		{"cascade hard error", func(f *fakeGit, env *Env) {
+			f.rebaseErr["b"] = errors.New("rebase exploded")
+		}, 1},
+		{"final TipsFor fails", func(f *fakeGit, env *Env) {
+			f.failErr["TipsFor"] = errors.New("tips exploded")
+			f.failAfter["TipsFor"] = 1
+		}, 1},
+		{"epilogue save fails", func(f *fakeGit, env *Env) {
+			saves := 0
+			env.Save = func() error {
+				saves++
+				if saves > 2 { // two cascade checkpoints + epilogue
+					return errors.New("save exploded")
+				}
+				return nil
+			}
+		}, 2},
+		{"HEAD restore fails", func(f *fakeGit, env *Env) {
+			if err := f.Checkout("b"); err != nil {
+				t.Fatal(err)
+			}
+			f.checkoutErr["b"] = errors.New("restore exploded")
+		}, 2},
+	}
+	for _, tc := range postAmendArms {
+		t.Run("post-amend arm: "+tc.name, func(t *testing.T) {
+			f, s, env, tips := absorbEnv(t)
+			stageOne(f, tips)
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			tc.arm(f, &env)
+
+			if _, err := Absorb(env, s); err == nil {
+				t.Fatal("Absorb succeeded; the armed failure did not fire")
+			}
+			if len(c.maps) != tc.wantN {
+				t.Fatalf("checkpoints = %d, want %d", len(c.maps), tc.wantN)
+			}
+			last := c.maps[len(c.maps)-1]
+			if last["a"] == "" || last["a"] != f.branches["a"] {
+				t.Fatalf("last checkpoint = %v, want a's live amended tip %s", last, f.branches["a"])
+			}
+			if f.branches["a"] == tips["a"] {
+				t.Fatal("a's tip unchanged — the arm must run after the amend lands")
+			}
+		})
+	}
+
+	// Nothing before the first landed amend may invoke the hook.
+	t.Run("pre-amend arms never checkpoint", func(t *testing.T) {
+		t.Run("planning", func(t *testing.T) {
+			f, s, env, tips := absorbEnv(t)
+			stageOne(f, tips)
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			if _, err := AbsorbPlan(env, s); err != nil {
+				t.Fatalf("AbsorbPlan: %v", err)
+			}
+			if c.calls != 0 {
+				t.Fatalf("checkpoint calls = %d during planning, want 0", c.calls)
+			}
+		})
+		t.Run("refused plan", func(t *testing.T) {
+			f, s, env, tips := absorbEnv(t)
+			stageOne(f, tips)
+			f.stagedHunks = append(f.stagedHunks, git.Hunk{File: "f.txt", OldStart: 9, OldN: 0, NewStart: 10, NewN: 1})
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			res, err := Absorb(env, s)
+			if err != nil {
+				t.Fatalf("Absorb: %v", err)
+			}
+			if !res.DryRun || len(res.Refused) == 0 {
+				t.Fatalf("result = %+v, want an unapplied refused plan", res)
+			}
+			if c.calls != 0 {
+				t.Fatalf("checkpoint calls = %d on a refused plan, want 0", c.calls)
+			}
+		})
+		t.Run("nothing staged", func(t *testing.T) {
+			_, s, env, _ := absorbEnv(t)
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			if _, err := Absorb(env, s); err != nil {
+				t.Fatalf("Absorb: %v", err)
+			}
+			if c.calls != 0 {
+				t.Fatalf("checkpoint calls = %d with nothing staged, want 0", c.calls)
+			}
+		})
+		t.Run("pre-amend probe failure", func(t *testing.T) {
+			f, s, env, tips := absorbEnv(t)
+			stageOne(f, tips)
+			f.failErr["Worktrees"] = errors.New("worktree list exploded")
+			f.addWorktree("/wt/a", "a") // force the foreign-owner Worktrees probe
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			if _, err := Absorb(env, s); err == nil {
+				t.Fatal("Absorb succeeded despite the armed probe failure")
+			}
+			if c.calls != 0 {
+				t.Fatalf("checkpoint calls = %d before any amend, want 0", c.calls)
+			}
+		})
+		t.Run("first amend failure", func(t *testing.T) {
+			f, s, env, tips := absorbEnv(t)
+			stageOne(f, tips)
+			boom := errors.New("patch exploded")
+			env.Git = &failNthAmendGit{Git: f, n: 1, err: boom}
+			c := &ckpt{}
+			env.AbsorbCheckpoint = c.hook()
+			if _, err := Absorb(env, s); !errors.Is(err, boom) {
+				t.Fatalf("Absorb = %v, want errors.Is(%v)", err, boom)
+			}
+			if c.calls != 0 {
+				t.Fatalf("checkpoint calls = %d after a failed amend, want 0", c.calls)
+			}
+		})
+	})
+}

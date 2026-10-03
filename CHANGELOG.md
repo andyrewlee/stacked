@@ -75,6 +75,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **A failed `st absorb` now keeps the recovery pointers to the commits it
+  already made.** Absorb records each amendment's commit into its undo
+  journal entry as it lands — and refreshes them to the post-cascade tips —
+  so an absorb that fails mid-operation (a cascade conflict, a failed
+  reset) still names the commits holding the staged edits. Previously the
+  map was written only on success, and an abort→undo after a partial absorb
+  orphaned those commits silently; `st undo --dry-run` and `st undo` now
+  point at them with cherry-pick instructions either way.
 - **A `state.json` that tracks the trunk as a branch is now refused at
   load.** The trunk is the root of the stack, not a tracked record — a file
   whose `branches` map contains the trunk rooted a cycle in the topology
