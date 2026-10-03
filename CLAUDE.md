@@ -133,6 +133,13 @@ engine and these hold, the topology bookkeeping is sound.
 - Mutators take an advisory lock: flock on unix-like platforms
   (`internal/stack/lock_unix.go`), an exclusive lock file with stale-owner
   reclamation elsewhere (`internal/stack/lock_other.go`, `lock_stale.go`).
+- **Decisions run on state probes, never on git's stderr** — the error text is
+  for humans; classify with port probes (`OwnerOf`/`LinkedOwnerOf`,
+  `RebaseInProgressIn`, `IsCleanIn`), matching `internal/git/remote.go`'s
+  no-output-parsing rule. Wording matches are last-resort fallbacks only, for
+  classes no probe can sign (e.g. "local changes would be overwritten" —
+  a dirty tree alone doesn't prove the refusal; see
+  `recoverableCheckoutFailure` in `internal/stack/undo_op.go`).
 
 ## Absorb refuses everything ambiguous
 

@@ -116,7 +116,7 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 				}
 			}
 			if err := g.Checkout(target); err != nil {
-				if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
+				if !recoverableCheckoutFailure(g, target, err) {
 					return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, d.name, err)
 				}
 				// Local changes or a target branch checked out in another
@@ -202,7 +202,7 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 			// already restored and HEAD simply stays where it is. A branch that is
 			// already checked out in another worktree is likewise restored; this
 			// process just cannot check it out in place.
-			if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
+			if !recoverableCheckoutFailure(g, entry.CurrentBranch, err) {
 				return nil, fmt.Errorf("checking out restored branch %q: %w", entry.CurrentBranch, err)
 			}
 		}
@@ -394,11 +394,46 @@ func sameWorktreePath(a, b string) bool {
 	return errA == nil && errB == nil && ra == rb
 }
 
+// recoverableCheckoutFailure decides whether a failed Checkout was refused
+// for a reason undo can work around — the target is checked out (or paused
+// mid-rebase) in another worktree, or local changes would be overwritten.
+// State probes decide first: git's stderr is for humans, never control flow —
+// the no-output-parsing rule internal/git applies to fast-forwards. A
+// worktree block is probed exactly via the worktree list plus paused-rebase
+// head-names: a LINKED worktree holding the target (LinkedOwnerOf — never the
+// caller's own tree) means git cannot check it out here, so the refusal is
+// certain. "Local changes would be overwritten" has no state
+// signature — a dirty tree alone does not imply the refusal (an unrelated
+// failure on a dirty tree must still propagate) — so that class, and any
+// worktree block the probes cannot see (e.g. the main worktree owning the
+// target while st runs in a linked one), keeps the wording match as a
+// documented last resort.
+func recoverableCheckoutFailure(g Git, target string, err error) bool {
+	if wts, werr := g.Worktrees(); werr == nil {
+		if _, ok := LinkedOwnerOf(wts, target); ok {
+			return true
+		}
+		if paused, perr := PausedRebaseOwners(g, wts); perr == nil {
+			if _, held := paused[target]; held {
+				return true
+			}
+		}
+	}
+	return checkoutBlockedByLocalChanges(err) || checkoutBlockedByOtherWorktree(err)
+}
+
+// checkoutBlockedByLocalChanges is the wording fallback for the one blocked
+// class no state probe can sign: local modifications the checkout would
+// overwrite. A dirty tree alone is not proof — see recoverableCheckoutFailure.
 func checkoutBlockedByLocalChanges(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "local changes") || strings.Contains(msg, "would be overwritten")
 }
 
+// checkoutBlockedByOtherWorktree is the wording fallback for a worktree block
+// the probes could not see (a worktree-list or rebase-head probe failure left
+// ownership unconfirmed). Decisions prefer recoverableCheckoutFailure's
+// probes; this is the last resort, not the authority.
 func checkoutBlockedByOtherWorktree(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "already checked out") ||

@@ -280,7 +280,12 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 		// main process's continue/abort operate on the cwd and could not finish it.
 		rebaseErr := fmt.Errorf("rebasing %q in its worktree %q: %w (resolve it there, then re-run)", name, owner.Path, err)
 		if abortErr := env.Git.RebaseAbortIn(owner.Path); abortErr != nil {
-			if noRebaseInProgress(abortErr) {
+			// Decide by probe, not the error's wording — git's stderr is for
+			// humans, never control flow. When no rebase is left paused the
+			// rollback's goal is met whatever the abort complained about; a
+			// still-paused (or unconfirmable) rebase stays an AlsoFailed.
+			inRebase, probeErr := env.Git.RebaseInProgressIn(owner.Path)
+			if probeErr == nil && !inRebase {
 				return false, rebaseErr
 			}
 			return false, AlsoFailed(rebaseErr, fmt.Sprintf("abort the paused rebase in %q (it is still in progress there)", owner.Path), abortErr)
@@ -292,10 +297,6 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 		return false, fmt.Errorf("save state after restacking %q in worktree: %w", name, err)
 	}
 	return true, nil
-}
-
-func noRebaseInProgress(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "no rebase in progress")
 }
 
 // releaseOwnedWorktree tears down the linked worktree that owns branch, if any,
