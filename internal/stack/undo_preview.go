@@ -116,6 +116,10 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalI
 		}
 		return res, nil
 	}
+	if err := validateUndoEntry(entry); err != nil {
+		res.Blockers = append(res.Blockers, "malformed_journal")
+		return res, nil
+	}
 
 	res.JournalDrop = true
 	tips := map[string]*string{}
@@ -133,21 +137,25 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalI
 		return res, nil
 	}
 
+	// The external-drift preflight, mirroring Undo's refusal in gate order.
+	// Only the newest entry's preview compares live tips meaningfully: deeper
+	// steps would run after a real undo restored the refs this preview still
+	// sees un-restored, so drift there would report ghosts, not blockers.
+	if journalIndex == 1 {
+		for _, name := range undoExternalDrift(liveSet, g, s, entry) {
+			res.Blockers = append(res.Blockers, "ref_moved_since:"+name)
+		}
+	}
+	if entry.PostRefs == nil {
+		res.Notes = append(res.Notes, "the journal entry has no post-operation tips on record; branch refs would restore unconditionally")
+	}
+
 	// Branches the undone command created — the same discovery Undo performs:
 	// current-state branches ∪ the recorded CreatedBranches, minus the
 	// captured local-branch list, that still exist.
 	var created []string
 	if entry.LocalBranches != nil {
-		candidates := map[string]bool{}
-		if s != nil {
-			candidates[s.Trunk] = true
-			for name := range s.Branches {
-				candidates[name] = true
-			}
-		}
-		for _, name := range entry.CreatedBranches {
-			candidates[name] = true
-		}
+		candidates := createdBranchCandidates(s, entry)
 		for name := range candidates {
 			if entry.CreatesBranch(name) && liveSet.exists(g, name) {
 				created = append(created, name)

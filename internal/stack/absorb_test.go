@@ -350,7 +350,7 @@ func TestAbsorbApply(t *testing.T) {
 		if _, err := Absorb(env, s); err != nil {
 			t.Fatalf("Absorb: %v", err)
 		}
-		if _, err := Undo(env, s, entry); err != nil {
+		if _, err := Undo(env, s, entry, false); err != nil {
 			t.Fatalf("Undo: %v", err)
 		}
 		assertUndoRestored(t, f, s, entry)
@@ -368,7 +368,7 @@ func TestAbsorbApply(t *testing.T) {
 		// What cmd/absorb.go writes via SetLastUndoAbsorbed: the amended tip
 		// carrying the staged edit.
 		entry.AbsorbedCommits = map[string]string{"a": res.Absorbed[0].Commit}
-		undo, err := Undo(env, s, entry)
+		undo, err := Undo(env, s, entry, false)
 		if err != nil {
 			t.Fatalf("Undo: %v", err)
 		}
@@ -519,7 +519,7 @@ func TestAbsorbApply(t *testing.T) {
 		if _, err := Absorb(env, s); err != nil {
 			t.Fatalf("Absorb: %v", err)
 		}
-		if _, err := Undo(env, s, entry); err != nil {
+		if _, err := Undo(env, s, entry, false); err != nil {
 			t.Fatalf("Undo: %v", err)
 		}
 		assertUndoRestored(t, f, s, entry)

@@ -529,6 +529,135 @@ func TestResetSoftAndUpdateRef(t *testing.T) {
 	}
 }
 
+// UpdateRefsCas is the undo restore's compare-and-swap batch: each update
+// carries the tip the ref is expected to sit at, and one mismatch fails the
+// whole transaction so no ref moves.
+func TestUpdateRefsCas(t *testing.T) {
+	newRepo(t)
+	first := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "c.txt", "c\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "c")
+	second := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "branch", "other", first)
+	mustGit(t, "branch", "side", second)
+
+	const zero = "0000000000000000000000000000000000000000"
+
+	t.Run("matching old applies the batch", func(t *testing.T) {
+		err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main":  {New: first, Old: second},
+			"refs/heads/other": {New: second, Old: first},
+		})
+		if err != nil {
+			t.Fatalf("UpdateRefsCas: %v", err)
+		}
+		if got, _ := RevParse("main"); got != first {
+			t.Fatalf("main = %s, want %s", got, first)
+		}
+		if got, _ := RevParse("other"); got != second {
+			t.Fatalf("other = %s, want %s", got, second)
+		}
+	})
+
+	t.Run("wrong old fails atomically", func(t *testing.T) {
+		err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: second, Old: second}, // main sits at first
+			"refs/heads/side": {New: first, Old: second},  // would match
+		})
+		if err == nil {
+			t.Fatal("UpdateRefsCas with a mismatched old succeeded")
+		}
+		if got, _ := RevParse("side"); got != second {
+			t.Fatalf("side = %s, want unchanged %s (batch must be atomic)", got, second)
+		}
+		if got, _ := RevParse("main"); got != first {
+			t.Fatalf("main = %s, want unchanged %s", got, first)
+		}
+	})
+
+	t.Run("zero old requires the ref absent", func(t *testing.T) {
+		err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: second, Old: zero},
+		})
+		if err == nil {
+			t.Fatal("zero-old resurrect on an existing ref succeeded")
+		}
+		err = UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/gone": {New: first, Old: zero},
+		})
+		if err != nil {
+			t.Fatalf("zero-old create on an absent ref: %v", err)
+		}
+		if got, _ := RevParse("gone"); got != first {
+			t.Fatalf("gone = %s, want %s", got, first)
+		}
+	})
+
+	t.Run("empty old is unverified", func(t *testing.T) {
+		err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: second, Old: ""},
+		})
+		if err != nil {
+			t.Fatalf("empty-old update: %v", err)
+		}
+		if got, _ := RevParse("main"); got != second {
+			t.Fatalf("main = %s, want %s", got, second)
+		}
+	})
+
+	t.Run("non-oid values never reach git", func(t *testing.T) {
+		if err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: "HEAD~1", Old: second},
+		}); err == nil {
+			t.Fatal("revision expression as new value accepted")
+		}
+		if err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: first, Old: "HEAD~1"},
+		}); err == nil {
+			t.Fatal("revision expression as old value accepted")
+		}
+		if err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: zero, Old: second},
+		}); err == nil {
+			t.Fatal("all-zeros delete value accepted")
+		}
+	})
+}
+
+// TestShellRefUpdateWrappers exercises the Shell passthroughs for the
+// ref-update helpers — the undo path moved to UpdateRefsCas, so the
+// unconditional single/batch wrappers need their own coverage anchor.
+func TestShellRefUpdateWrappers(t *testing.T) {
+	newRepo(t)
+	first := mustGit(t, "rev-parse", "HEAD")
+	writeFile(t, "c.txt", "c\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "c")
+	second := mustGit(t, "rev-parse", "HEAD")
+	mustGit(t, "branch", "other", first)
+
+	sh := Shell{}
+	if err := sh.UpdateRef("refs/heads/main", first); err != nil {
+		t.Fatalf("Shell.UpdateRef: %v", err)
+	}
+	if got, _ := RevParse("main"); got != first {
+		t.Fatalf("main = %s, want %s", got, first)
+	}
+	if err := sh.UpdateRefs(map[string]string{
+		"refs/heads/main":  second,
+		"refs/heads/other": second,
+	}); err != nil {
+		t.Fatalf("Shell.UpdateRefs: %v", err)
+	}
+	if got, _ := RevParse("main"); got != second {
+		t.Fatalf("main = %s, want %s", got, second)
+	}
+	if got, _ := RevParse("other"); got != second {
+		t.Fatalf("other = %s, want %s", got, second)
+	}
+}
+
 // A ref beginning with "-" (e.g. a corrupt or hostile state.json branch name)
 // must be rejected at the boundary so git never parses it as an option.
 func TestRevParseRejectsFlagLikeRef(t *testing.T) {

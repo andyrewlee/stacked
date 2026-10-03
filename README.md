@@ -162,7 +162,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
 | `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
 | `st open [--all] [--remote <name>] [--dry-run]` | | Open the PR compare URLs `st submit` prints in a browser (`--all` opens every tracked branch's; `--dry-run` prints without opening; `--json` emits the URLs as data). |
-| `st undo [<n>] [--list \| --dry-run]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews). |
+| `st undo [<n>] [--list \| --dry-run] [--force]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews, `--force` restores refs that moved outside st). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
 | `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
@@ -394,6 +394,15 @@ every blocker a real run would refuse on — changing nothing. `--list` previews
 the recorded journal alone: entries are
 listed newest-first as `1: create (created feat-a; on main)`, where index 1 is
 what a bare `st undo` would revert.
+
+Undo also guards against outside changes: if a recorded branch's tip moved
+since the operation (someone committed on it with plain `git`, or a deleted
+branch was recreated), `st undo` refuses rather than silently rewinding it —
+`--dry-run` reports the branch as `ref_moved_since:<name>`. `st undo --force`
+restores the recorded tips anyway and names the refs it overwrote. Entries
+written by older versions — and entries kept for failed operations whose refs
+`st abort`/`st continue` may legitimately have moved — restore unconditionally
+with a note saying so.
 
 #### `st repair`
 Fixes the drift `st validate` reports: untracks branches whose git branch was

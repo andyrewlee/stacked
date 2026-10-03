@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // Undo reverts the mutation recorded in entry: branches the undone command
@@ -17,12 +19,25 @@ import (
 // entry itself is not dropped — that is the caller's job after a successful
 // undo.
 //
+// External-drift policy: when the entry carries PostRefs (every entry a
+// successful op records now), undo first verifies the branches still sit
+// where the operation left them. A recorded branch whose live tip matches
+// neither its recorded pre-op tip (already restored — safe retry) nor its
+// post-op tip moved outside st; restoring it would rewind commits undo did
+// not record. The same check covers branches the op created (a post-op
+// commit on a to-be-deleted branch would otherwise be discarded silently).
+// Drift refuses BEFORE any worktree, HEAD, branch, or state mutation; force
+// downgrades the refusal to unconditional restore with a note naming the
+// diverged refs. Entries without PostRefs — older journals, and entries
+// retained for FAILED ops where abort/continue legitimately moves refs
+// afterwards — restore unconditionally as they always have.
+//
 // Failure boundary: the op is not transactional. Earlier cleanup may already
 // have deleted created worktrees/branches when a later phase fails; the
 // retained journal entry makes a retry safe — a failed ref transaction moved
 // nothing, and a failed save reports the already-restored refs so the error
 // is never mistaken for "nothing happened".
-func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
+func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 	g := env.Git
 	// Both schema barriers run before ANY git call, Save, or bookkeeping: a
 	// snapshot written by a newer st may record fields this build would
@@ -36,10 +51,25 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing undo state: %w", err)
 	}
+	// The journal is user-writable: every oid its ref maps carry is verified
+	// before any of them is handed to update-ref — a revision expression or
+	// the all-zeros delete value would otherwise be resolved by git.
+	if err := validateUndoEntry(entry); err != nil {
+		return nil, err
+	}
 
 	// One batch read answers every existence/tip question below; a failed
 	// read degrades to the per-branch probes this replaced.
 	liveSet := probeLiveBranches(g)
+
+	// External-drift preflight, ahead of EVERY mutation: refuse while nothing
+	// has moved yet rather than discovering a clobbered ref mid-cleanup.
+	diverged := undoExternalDrift(liveSet, g, s, entry)
+	cas := entry.PostRefs != nil && !force
+	if len(diverged) > 0 && !force {
+		return nil, fmt.Errorf("cannot undo %q: %s moved outside st since the command ran — refusing to overwrite %s; run `st undo --force` to restore anyway, or inspect first with `st undo --dry-run`",
+			entry.Label, joinBranchList(diverged), pluralRefs(diverged))
+	}
 
 	skipCheckoutRestore := false
 	if entry.LocalBranches != nil {
@@ -47,16 +77,7 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		// every branch the current state knows about plus the ones the entry
 		// recorded as created; a candidate counts as created when it was not in
 		// the entry's local-branch list.
-		candidates := map[string]bool{}
-		if s != nil {
-			candidates[s.Trunk] = true
-			for name := range s.Branches {
-				candidates[name] = true
-			}
-		}
-		for _, name := range entry.CreatedBranches {
-			candidates[name] = true
-		}
+		candidates := createdBranchCandidates(s, entry)
 		var extra []string
 		for name := range candidates {
 			if entry.CreatesBranch(name) && liveSet.exists(g, name) {
@@ -92,7 +113,17 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 					if !ok {
 						return nil, fmt.Errorf("cannot restore checkout target %q before deleting %q", target, name)
 					}
-					if err := g.UpdateRef(branchTipRef(target), sha); err != nil {
+					if cas {
+						// The drift preflight already proved target's recorded
+						// post-op tip was absent — only an op-deleted branch
+						// reaches here — so the resurrect is CAS'd on "still
+						// absent" like the batch restore below.
+						if err := g.UpdateRefsCas(map[string]git.RefUpdate{
+							branchTipRef(target): {New: sha, Old: zeroSHA},
+						}); err != nil {
+							return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
+						}
+					} else if err := g.UpdateRef(branchTipRef(target), sha); err != nil {
 						return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
 					}
 					if liveSet != nil {
@@ -132,14 +163,33 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	// persisted metadata stay consistent with each other and the retained
 	// journal entry can simply be retried. Saving first would instead leave
 	// snapshot-era parentSHAs beside the newer un-restored tips.
-	updates := make(map[string]string, len(entry.Refs))
+	//
+	// With PostRefs the transaction is a compare-and-swap keyed on the
+	// post-op tips the preflight already verified — the expected-old values
+	// also close the gap between the preflight read and the batch. A ref
+	// already back on its recorded tip is skipped (safe retry of a
+	// partially-failed earlier undo); a ref the op deleted may only be
+	// resurrected while still absent. Without PostRefs (old journals and
+	// failed-op entries) or under force, the batch is unconditional.
+	updates := make(map[string]git.RefUpdate, len(entry.Refs))
 	names := make([]string, 0, len(entry.Refs))
 	for name, sha := range entry.Refs {
-		updates[branchTipRef(name)] = sha
 		names = append(names, name)
+		if !cas {
+			updates[branchTipRef(name)] = git.RefUpdate{New: sha}
+			continue
+		}
+		if live, ok := liveSet.tip(g, name); ok && live == sha {
+			continue // already restored — nothing to CAS against
+		}
+		old := zeroSHA
+		if post, ok := entry.PostRefs[name]; ok {
+			old = post // must still sit at its post-op tip
+		}
+		updates[branchTipRef(name)] = git.RefUpdate{New: sha, Old: old}
 	}
 	sort.Strings(names)
-	if err := g.UpdateRefs(updates); err != nil {
+	if err := g.UpdateRefsCas(updates); err != nil {
 		return nil, fmt.Errorf("restoring branch refs: %w", err)
 	}
 	// The transaction may have recreated refs absent from the snapshot —
@@ -180,6 +230,11 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		Summary:   "undid: " + entry.Label,
 		Restacked: names,
 	}
+	if entry.PostRefs == nil {
+		res.Notes = append(res.Notes, "the journal entry has no post-operation tips on record; branch refs were restored unconditionally")
+	} else if force && len(diverged) > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("--force: %s had moved outside st since %q ran and %s overwritten anyway", joinBranchList(diverged), entry.Label, pluralRefs(diverged)))
+	}
 	// An undo of an absorb restores the pre-absorb refs — the amended tips
 	// that now carry the caller's staged edits become unreachable. Point at
 	// them explicitly or the edits vanish into reflog-only limbo.
@@ -187,6 +242,85 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		res.Notes = append(res.Notes, absorbedCommitsNote(entry.AbsorbedCommits))
 	}
 	return res, nil
+}
+
+// createdBranchCandidates is the candidate set Undo scans for branches the
+// undone command created: every branch the current state knows about (trunk
+// included — a tracked trunk is corrupt state, not a reason to skip the
+// check) plus the entry's recorded CreatedBranches.
+func createdBranchCandidates(s *State, entry *UndoEntry) map[string]bool {
+	candidates := map[string]bool{}
+	if s != nil {
+		candidates[s.Trunk] = true
+		for name := range s.Branches {
+			candidates[name] = true
+		}
+	}
+	for _, name := range entry.CreatedBranches {
+		candidates[name] = true
+	}
+	return candidates
+}
+
+// undoExternalDrift reports the sorted branch names that no longer sit where
+// the entry's post-operation snapshot left them — evidence they moved outside
+// st between the op and this undo. The rules, per recorded ref:
+//
+//	live == recorded pre-op tip   → already restored (safe retry): not drift
+//	live == recorded post-op tip  → untouched since the op: not drift
+//	absent, post-op absent        → op deleted it, still gone: not drift
+//	anything else                 → moved, recreated, or deleted outside st
+//
+// and per doomed (op-created) branch still live: it must still sit at its
+// recorded post-op tip — a post-op commit on a to-be-deleted branch would
+// otherwise be discarded silently. Returns nil for entries without PostRefs
+// (legacy journals, failed-op entries): they carry no expectation to check.
+func undoExternalDrift(l liveBranches, g Git, s *State, entry *UndoEntry) []string {
+	if entry.PostRefs == nil {
+		return nil
+	}
+	var bad []string
+	for name, pre := range entry.Refs {
+		live, exists := l.tip(g, name)
+		if exists && live == pre {
+			continue // already restored — retry/no-op case
+		}
+		post, recorded := entry.PostRefs[name]
+		if recorded && exists && live == post {
+			continue // still where the operation left it
+		}
+		if !recorded && !exists {
+			continue // the op deleted it and it stayed deleted
+		}
+		bad = append(bad, name)
+	}
+	for name := range createdBranchCandidates(s, entry) {
+		if !entry.CreatesBranch(name) || !l.exists(g, name) {
+			continue
+		}
+		live, _ := l.tip(g, name)
+		if post, ok := entry.PostRefs[name]; ok && live == post {
+			continue
+		}
+		bad = append(bad, name)
+	}
+	sort.Strings(bad)
+	return bad
+}
+
+func joinBranchList(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", n))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func pluralRefs(names []string) string {
+	if len(names) == 1 {
+		return "that ref"
+	}
+	return "those refs"
 }
 
 // liveBranches is one Tips() snapshot answering "does this local branch

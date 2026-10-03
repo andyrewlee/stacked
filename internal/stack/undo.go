@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // maxUndoEntries bounds the size of the undo journal.
@@ -17,9 +19,20 @@ const maxUndoEntries = 20
 // state-file contents and the tip SHAs of the trunk and every tracked branch at
 // that moment.
 type UndoEntry struct {
-	Label            string            `json:"label"`
-	State            json.RawMessage   `json:"state"`
-	Refs             map[string]string `json:"refs"`
+	Label string            `json:"label"`
+	State json.RawMessage   `json:"state"`
+	Refs  map[string]string `json:"refs"`
+	// PostRefs records where every recorded branch (plus every branch the
+	// operation created) actually stood AFTER the operation completed — the
+	// compare-and-swap expectation undo verifies before restoring Refs. A
+	// recorded branch whose live tip matches neither its Refs value nor its
+	// PostRefs value moved outside st; a branch absent from PostRefs was
+	// deleted by the op and may only be resurrected while still absent. nil
+	// marks an entry written before the field existed (or one retained for a
+	// FAILED operation, where abort/continue legitimately moves refs between
+	// the failure and the undo): those restore unconditionally, as they
+	// always did.
+	PostRefs         map[string]string `json:"postRefs,omitempty"`
 	LocalBranches    []string          `json:"localBranches,omitempty"`
 	CreatedBranches  []string          `json:"createdBranches,omitempty"`
 	CreatedWorktrees map[string]string `json:"createdWorktrees,omitempty"`
@@ -60,7 +73,70 @@ func loadUndo() ([]UndoEntry, error) {
 		// is written atomically and separately).
 		return nil, nil
 	}
-	return entries, nil
+	// Entries carrying ref values that are not full object ids are dropped
+	// like unparseable JSON: the journal is user-writable, and a revision
+	// expression (HEAD~2), the all-zeros delete value, or garbage handed to
+	// update-ref would resolve to a commit undo never recorded. Dropping the
+	// entry (and persisting the filtered list on the next write) is the same
+	// self-healing the corrupt-journal path already commits to.
+	valid := make([]UndoEntry, 0, len(entries))
+	for i := range entries {
+		if err := validateUndoEntry(&entries[i]); err == nil {
+			valid = append(valid, entries[i])
+		}
+	}
+	return valid, nil
+}
+
+// validateUndoEntry verifies every object-id-bearing journal value is a full
+// nonzero 40-hex oid and every ref-bearing key is a plausible branch name.
+// loadUndo drops failing entries; Undo re-checks the entry it is handed so a
+// caller that bypassed the journal cannot smuggle unvalidated values into
+// update-ref either.
+func validateUndoEntry(e *UndoEntry) error {
+	checkOID := func(kind, name, val string) error {
+		if !git.IsHex40(val) || val == zeroSHA {
+			return fmt.Errorf("undo entry %q has a malformed %s for %q: %q", e.Label, kind, name, val)
+		}
+		return nil
+	}
+	checkName := func(kind, name string) error {
+		if name == "" {
+			return fmt.Errorf("undo entry %q has a malformed %s: %q", e.Label, kind, name)
+		}
+		for i := 0; i < len(name); i++ {
+			if name[i] <= 0x20 || name[i] == 0x7f {
+				return fmt.Errorf("undo entry %q has a malformed %s: %q", e.Label, kind, name)
+			}
+		}
+		return nil
+	}
+	checkMap := func(kind string, m map[string]string) error {
+		names := make([]string, 0, len(m))
+		for name := range m {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if err := checkName(kind+" key", name); err != nil {
+				return err
+			}
+			if err := checkOID(kind, name, m[name]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := checkMap("ref", e.Refs); err != nil {
+		return err
+	}
+	if err := checkMap("postRef", e.PostRefs); err != nil {
+		return err
+	}
+	if err := checkMap("absorbed commit", e.AbsorbedCommits); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeUndo(entries []UndoEntry) error {
@@ -251,10 +327,26 @@ func absorbedCommitsNote(commits map[string]string) string {
 	return fmt.Sprintf("the staged edits live in commit(s) %s — undo restores the branch refs, not those commits; recover with `git cherry-pick %s`", strings.Join(pairs, ", "), strings.Join(shas, " "))
 }
 
+// SetLastUndoPostRefs records, on the latest undo entry, the post-operation
+// branch tips undo's compare-and-swap restore verifies live refs against.
+func SetLastUndoPostRefs(tips map[string]string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	entries[len(entries)-1].PostRefs = tips
+	return writeUndo(entries)
+}
+
 // FinalizeUndo completes the undo protocol after a successful mutation: the
-// tentative entry is annotated with the branches the operation created,
-// dropped when the operation turned out to be a no-op (state, refs, and
-// branch set all unchanged), and otherwise kept, trimming the journal.
+// tentative entry is annotated with the branches the operation created and
+// the post-operation tips those branches (and the ones the entry recorded)
+// now stand at, dropped when the operation turned out to be a no-op (state,
+// refs, and branch set all unchanged), and otherwise kept, trimming the
+// journal.
 func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if entry == nil {
 		return trimUndo()
@@ -270,13 +362,43 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if err != nil {
 		return err
 	}
-	if !unchanged {
-		return trimUndo()
-	}
-	if refsUnchangedAgainstTips(entry, tips, tipsOK) {
+	if unchanged && refsUnchangedAgainstTips(entry, tips, tipsOK) {
 		return DropUndo()
 	}
+	// The entry is being retained for a real change: pin the post-operation
+	// tips undo will compare-and-swap against. A Tips read failure leaves
+	// PostRefs nil — the entry degrades to the legacy unconditional restore
+	// rather than failing the mutation's cleanup.
+	post := postRefsFor(entry, tips, tipsOK, created)
+	if len(post) > 0 {
+		entry.PostRefs = post
+		if err := SetLastUndoPostRefs(post); err != nil {
+			return err
+		}
+	}
 	return trimUndo()
+}
+
+// postRefsFor captures where the entry's recorded branches — and the branches
+// the operation created — stand now that the operation has completed.
+// Branches the op deleted are simply absent: their absence IS the expectation
+// (undo may resurrect them only while they stay absent).
+func postRefsFor(entry *UndoEntry, tips map[string]string, ok bool, created []string) map[string]string {
+	if !ok {
+		return nil
+	}
+	post := make(map[string]string, len(entry.Refs)+len(created))
+	for name := range entry.Refs {
+		if tip, ok := tips[name]; ok {
+			post[name] = tip
+		}
+	}
+	for _, name := range created {
+		if tip, ok := tips[name]; ok {
+			post[name] = tip
+		}
+	}
+	return post
 }
 
 // CleanupUndoOnError completes the undo protocol after a failed mutation: the

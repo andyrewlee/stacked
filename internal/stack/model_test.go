@@ -265,7 +265,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 		if err := op(); err != nil {
 			t.Fatalf("step %d: %s: %v", step, label, err)
 		}
-		if _, err := Undo(env, s, entry); err != nil {
+		if _, err := Undo(env, s, entry, false); err != nil {
 			t.Fatalf("step %d: undo %s: %v", step, label, err)
 		}
 		assertUndoRestored(t, f, s, entry)
