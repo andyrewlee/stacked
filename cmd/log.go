@@ -274,7 +274,17 @@ type ancestorPair struct {
 // a `rev-list --parents` graph. Missing or equal tips need no probe at all, so
 // a trunk-only log asks git nothing.
 func tipAncestors(s *stack.State, tips map[string]string) (map[ancestorPair]bool, error) {
-	ancestors := make(map[ancestorPair]bool)
+	// Collect the distinct pairs first so the independent merge-base probes
+	// can fan out — each is a subprocess spawn, and on a wide stack they
+	// dominate `st log`'s wall time. Results fold back keyed by pair, and the
+	// probes run in a sorted order so the first error is deterministic.
+	type probe struct {
+		pair      ancestorPair
+		branchRef string
+		parentRef string
+	}
+	var probes []probe
+	seen := make(map[ancestorPair]bool)
 	for _, b := range s.Branches {
 		tip := tips[b.Name]
 		parentTip := tips[b.Parent]
@@ -282,17 +292,32 @@ func tipAncestors(s *stack.State, tips map[string]string) (map[ancestorPair]bool
 			continue
 		}
 		pair := ancestorPair{tip: tip, parentTip: parentTip}
-		if _, seen := ancestors[pair]; seen {
+		if seen[pair] {
 			continue
 		}
-		// Fully-qualified refs skip IsAncestor's branch-existence probes —
-		// one merge-base spawn per pair, not three — while the SHA-keyed
-		// cache keeps the answer pinned to the measured tips.
-		isAncestor, err := git.IsAncestor("refs/heads/"+b.Name, "refs/heads/"+b.Parent)
-		if err != nil {
-			return nil, err
+		seen[pair] = true
+		probes = append(probes, probe{pair: pair, branchRef: "refs/heads/" + b.Name, parentRef: "refs/heads/" + b.Parent})
+	}
+	sort.Slice(probes, func(i, j int) bool {
+		if probes[i].pair.tip != probes[j].pair.tip {
+			return probes[i].pair.tip < probes[j].pair.tip
 		}
-		ancestors[pair] = isAncestor
+		return probes[i].pair.parentTip < probes[j].pair.parentTip
+	})
+	// Fully-qualified refs skip IsAncestor's branch-existence probes — one
+	// merge-base spawn per pair, not three — while the SHA-keyed cache keeps
+	// the answer pinned to the measured tips.
+	results := make([]bool, len(probes))
+	if err := git.ParallelProbes(len(probes), func(i int) error {
+		ok, err := git.IsAncestor(probes[i].branchRef, probes[i].parentRef)
+		results[i] = ok
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	ancestors := make(map[ancestorPair]bool, len(probes))
+	for i, p := range probes {
+		ancestors[p.pair] = results[i]
 	}
 	return ancestors, nil
 }

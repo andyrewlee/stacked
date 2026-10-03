@@ -143,6 +143,14 @@ engine and these hold, the topology bookkeeping is sound.
   classes no probe can sign (e.g. "local changes would be overwritten" —
   a dirty tree alone doesn't prove the refusal; see
   `recoverableCheckoutFailure` in `internal/stack/undo_op.go`).
+- **Independent read-only probes fan out via `git.ParallelProbes`** (bounded
+  workers, results folded in index order so output and the first error stay
+  deterministic). Only loops whose results are consumed after the fan-out are
+  candidates — anything data-dependent mid-loop stays serial. Port
+  implementations must be safe under concurrent reads: `fakeGit` is mutexed,
+  and every port method that calls another port method uses an unlocked twin
+  (a Go `sync.Mutex` is not re-entrant). `-race` is load-bearing for this —
+  never weaken it.
 
 ## Absorb refuses everything ambiguous
 

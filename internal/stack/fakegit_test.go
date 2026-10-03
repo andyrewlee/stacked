@@ -3,6 +3,7 @@ package stack
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/andyrewlee/stacked/internal/git"
@@ -28,6 +29,12 @@ type fakeCommit struct {
 // real-git integration and e2e suites); this fake exists to prove the engine's
 // topology/parentSHA bookkeeping under thousands of random operations.
 type fakeGit struct {
+	// mu guards every map/counter below: engine probe loops fan out across
+	// goroutines (git.ParallelProbes), so port methods lock on entry. Methods
+	// that call other port methods (DeleteBranch→IsAncestor, DeleteBranches→
+	// DeleteBranch, ChangesContainedIn→MergeBase) use the lowercase twins —
+	// a Go Mutex is not re-entrant.
+	mu       sync.Mutex
 	commits  map[string]*fakeCommit
 	branches map[string]string // branch -> tip commit id
 	// remoteRefs models fetched remote-tracking refs ("refs/remotes/<r>/<b>")
@@ -199,6 +206,8 @@ func (f *fakeGit) fail(method string) error {
 }
 
 func (f *fakeGit) RevParse(ref string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RevParse"); err != nil {
 		return "", err
 	}
@@ -209,6 +218,8 @@ func (f *fakeGit) RevParse(ref string) (string, error) {
 }
 
 func (f *fakeGit) CurrentBranch() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CurrentBranch"); err != nil {
 		return "", err
 	}
@@ -219,12 +230,16 @@ func (f *fakeGit) CurrentBranch() (string, error) {
 }
 
 func (f *fakeGit) BranchExists(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls["BranchExists"]++
 	_, ok := f.branches[name]
 	return ok
 }
 
 func (f *fakeGit) Tips() (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("Tips"); err != nil {
 		return nil, err
 	}
@@ -236,6 +251,8 @@ func (f *fakeGit) Tips() (map[string]string, error) {
 }
 
 func (f *fakeGit) TipsFor(names []string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("TipsFor"); err != nil {
 		return nil, err
 	}
@@ -302,6 +319,8 @@ func (g *tipReadSpyGit) Worktrees() ([]git.Worktree, error) {
 }
 
 func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.mergedIntoCalls++
 	f.mergedIntoRefs = append(f.mergedIntoRefs, ref)
 	if err := f.fail("MergedInto"); err != nil {
@@ -330,10 +349,12 @@ func (f *fakeGit) MergedInto(ref string) (map[string]bool, error) {
 // test explicitly lands the tokens on upstream — squashInto (a host
 // squash-merge) or an ancestry merge that makes the commits reachable.
 func (f *fakeGit) ChangesContainedIn(upstream, branch string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("ChangesContainedIn"); err != nil {
 		return false, err
 	}
-	base, err := f.MergeBase(upstream, branch)
+	base, err := f.mergeBase(upstream, branch)
 	if err != nil {
 		return false, err
 	}
@@ -388,6 +409,8 @@ func (f *fakeGit) squashInto(t *testing.T, trunk, branch string) {
 
 // DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
 func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("DiffCachedHunks"); err != nil {
 		return nil, nil, err
 	}
@@ -397,6 +420,8 @@ func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error)
 // BlamePorcelain returns the canned per-file blame a test set on blame. The
 // rev is ignored: engine tests only ever blame HEAD.
 func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("BlamePorcelain"); err != nil {
 		return nil, err
 	}
@@ -407,6 +432,8 @@ func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) 
 // modeled; real reassembly is proven by the git-level and e2e tests). Each
 // target gets the same stagedPatch bytes.
 func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("DiffCachedPatchesFor"); err != nil {
 		return nil, err
 	}
@@ -421,6 +448,8 @@ func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][
 // by a new commit with the same parent and subject (patch content is not
 // modeled — real application is proven by the git-level and e2e tests).
 func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.applyErr != nil {
 		return "", f.applyErr
 	}
@@ -438,6 +467,8 @@ func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
 // ResetHardIn records the call; for the current worktree ("") it clears the
 // staged state, mirroring `git reset --hard` dropping the staged copy.
 func (f *fakeGit) ResetHardIn(dir, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("ResetHardIn"); err != nil {
 		return err
 	}
@@ -459,6 +490,8 @@ func (f *fakeGit) addWorktree(path, branch string) { f.linkedWorktrees[branch] =
 // branch) plus any registered linked worktrees. It is read-only and tolerates a
 // detached HEAD (it simply omits the main worktree's branch entry).
 func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("Worktrees"); err != nil {
 		return nil, err
 	}
@@ -503,6 +536,8 @@ func (f *fakeGit) markWorktreeDirty(branch string) {
 // another worktree, leaving the main worktree's HEAD untouched. A branch armed
 // via conflictOn stalls just like RebaseOnto.
 func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.rebaseErr[branch]; err != nil {
 		return err
 	}
@@ -526,6 +561,8 @@ func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) erro
 // one (rebase state is per-worktree). It also clears foreign rebases a test
 // armed directly in rebaseInWT.
 func (f *fakeGit) RebaseAbortIn(dir string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseAbortIn"); err != nil {
 		return err
 	}
@@ -543,6 +580,8 @@ func (f *fakeGit) RebaseAbortIn(dir string) error {
 }
 
 func (f *fakeGit) RebaseInProgressIn(dir string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseInProgressIn"); err != nil {
 		return false, err
 	}
@@ -550,6 +589,8 @@ func (f *fakeGit) RebaseInProgressIn(dir string) (bool, error) {
 }
 
 func (f *fakeGit) RebaseHeadNameIn(dir string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseHeadNameIn"); err != nil {
 		return "", err
 	}
@@ -557,6 +598,8 @@ func (f *fakeGit) RebaseHeadNameIn(dir string) (string, error) {
 }
 
 func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("IsCleanIn"); err != nil {
 		return false, err
 	}
@@ -575,6 +618,8 @@ func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 }
 
 func (f *fakeGit) RepoRoot() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RepoRoot"); err != nil {
 		return "", err
 	}
@@ -585,6 +630,8 @@ func (f *fakeGit) RepoRoot() (string, error) {
 // to remove a dirty worktree without --force. It deregisters the branch so a
 // follow-up DeleteBranch no longer hits "checked out in another worktree".
 func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("WorktreeRemove"); err != nil {
 		return err
 	}
@@ -603,6 +650,8 @@ func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
 }
 
 func (f *fakeGit) Checkout(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
 	}
@@ -615,6 +664,8 @@ func (f *fakeGit) Checkout(name string) error {
 }
 
 func (f *fakeGit) CheckoutDetach(ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CheckoutDetach"); err != nil {
 		return err
 	}
@@ -639,6 +690,8 @@ func (f *fakeGit) headBranch(op string) string {
 }
 
 func (f *fakeGit) CreateBranch(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CreateBranch"); err != nil {
 		return err
 	}
@@ -654,6 +707,8 @@ func (f *fakeGit) CreateBranch(name string) error {
 }
 
 func (f *fakeGit) CreateBranchAt(name, ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CreateBranchAt"); err != nil {
 		return err
 	}
@@ -669,6 +724,12 @@ func (f *fakeGit) CreateBranchAt(name, ref string) error {
 }
 
 func (f *fakeGit) DeleteBranch(name string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleteBranch(name, force)
+}
+
+func (f *fakeGit) deleteBranch(name string, force bool) error {
 	if name == f.head {
 		return fmt.Errorf("cannot delete the current branch %q", name)
 	}
@@ -684,7 +745,7 @@ func (f *fakeGit) DeleteBranch(name string, force bool) error {
 		return err
 	}
 	if !force {
-		merged, err := f.IsAncestor(name, f.head)
+		merged, err := f.isAncestor(name, f.head)
 		if err != nil {
 			return err
 		}
@@ -701,10 +762,12 @@ func (f *fakeGit) DeleteBranch(name string, force bool) error {
 // non-nil error may accompany a partial delete, which is what applyPrune's
 // per-survivor retry path exists to sort out.
 func (f *fakeGit) DeleteBranches(names []string, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls["DeleteBranches"]++
 	var firstErr error
 	for _, name := range names {
-		if err := f.DeleteBranch(name, force); err != nil && firstErr == nil {
+		if err := f.deleteBranch(name, force); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -712,6 +775,8 @@ func (f *fakeGit) DeleteBranches(names []string, force bool) error {
 }
 
 func (f *fakeGit) ForceBranch(name, ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("ForceBranch"); err != nil {
 		return err
 	}
@@ -727,6 +792,8 @@ func (f *fakeGit) ForceBranch(name, ref string) error {
 }
 
 func (f *fakeGit) UpdateRef(ref, sha string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("UpdateRef"); err != nil {
 		return err
 	}
@@ -742,6 +809,8 @@ func (f *fakeGit) UpdateRef(ref, sha string) error {
 // UpdateRefs mirrors the shell's transactional contract: every SHA must
 // resolve before any ref moves.
 func (f *fakeGit) UpdateRefs(updates map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("UpdateRefs"); err != nil {
 		return err
 	}
@@ -765,6 +834,8 @@ func (f *fakeGit) UpdateRefs(updates map[string]string) error {
 // any ref moves. One mismatch fails the whole batch naming the ref, like git
 // reporting a CAS failure on `update <ref> <new> <old>`.
 func (f *fakeGit) UpdateRefsCas(updates map[string]git.RefUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("UpdateRefsCas"); err != nil {
 		return err
 	}
@@ -800,6 +871,8 @@ func (f *fakeGit) UpdateRefsCas(updates map[string]git.RefUpdate) error {
 }
 
 func (f *fakeGit) RenameBranch(oldName, newName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RenameBranch"); err != nil {
 		return err
 	}
@@ -823,6 +896,8 @@ func (f *fakeGit) commit(subject string) {
 }
 
 func (f *fakeGit) Commit(message string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.staged {
 		return fmt.Errorf("no staged changes")
 	}
@@ -846,6 +921,8 @@ func (f *fakeGit) amend(subject string) {
 }
 
 func (f *fakeGit) AmendNoEdit(_ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("AmendNoEdit"); err != nil {
 		return err
 	}
@@ -857,6 +934,8 @@ func (f *fakeGit) AmendNoEdit(_ bool) error {
 }
 
 func (f *fakeGit) AmendMessage(message string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("AmendMessage"); err != nil {
 		return err
 	}
@@ -867,6 +946,8 @@ func (f *fakeGit) AmendMessage(message string, _ bool) error {
 }
 
 func (f *fakeGit) ResetSoft(ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("ResetSoft"); err != nil {
 		return err
 	}
@@ -925,6 +1006,8 @@ func assertDetachedPanic(t *testing.T, op string, fn func()) {
 // "git rebase --onto". If the branch is marked to conflict, it stops mid-rebase
 // (leaving a rebase in progress) until RebaseContinue is called.
 func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.rebaseLog = append(f.rebaseLog, rebaseCall{newBase, oldBase, branch})
 	if err := f.rebaseErr[branch]; err != nil {
 		f.head = branch
@@ -967,6 +1050,8 @@ func (f *fakeGit) replay(newBase, oldBase, branch string) error {
 }
 
 func (f *fakeGit) RebaseInProgress() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseInProgress"); err != nil {
 		return false, err
 	}
@@ -974,6 +1059,8 @@ func (f *fakeGit) RebaseInProgress() (bool, error) {
 }
 
 func (f *fakeGit) RebaseHeadName() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseHeadName"); err != nil {
 		return "", err
 	}
@@ -984,6 +1071,8 @@ func (f *fakeGit) RebaseHeadName() (string, error) {
 // equivalent of rebase-merge/onto. rebaseOntoErr models unreadable/corrupt
 // metadata: the accessor fails but the paused rebase is left intact.
 func (f *fakeGit) RebaseOntoSHA() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.rebaseActive {
 		return "", fmt.Errorf("no rebase in progress")
 	}
@@ -997,6 +1086,8 @@ func (f *fakeGit) RebaseOntoSHA() (string, error) {
 // the branch (it only paused), so clearing the rebase state restores the
 // pre-rebase tip, mirroring "git rebase --abort".
 func (f *fakeGit) RebaseAbort() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.rebaseAbortErr != nil {
 		return f.rebaseAbortErr
 	}
@@ -1012,6 +1103,8 @@ func (f *fakeGit) RebaseAbort() error {
 // parent chains: walk from include, stopping at anything reachable from
 // exclude.
 func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CommitRange"); err != nil {
 		return nil, err
 	}
@@ -1033,6 +1126,8 @@ func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) 
 
 // RebaseContinue resolves the modeled conflict and finishes the rebase.
 func (f *fakeGit) RebaseContinue() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("RebaseContinue"); err != nil {
 		return err
 	}
@@ -1050,6 +1145,12 @@ func (f *fakeGit) RebaseContinue() error {
 }
 
 func (f *fakeGit) IsAncestor(ancestor, descendant string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.isAncestor(ancestor, descendant)
+}
+
+func (f *fakeGit) isAncestor(ancestor, descendant string) (bool, error) {
 	f.isAncestorCalls++
 	if err := f.fail("IsAncestor"); err != nil {
 		return false, err
@@ -1077,6 +1178,12 @@ func mustFakeIsAncestor(t *testing.T, f *fakeGit, ancestor, descendant string) b
 }
 
 func (f *fakeGit) MergeBase(a, b string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mergeBase(a, b)
+}
+
+func (f *fakeGit) mergeBase(a, b string) (string, error) {
 	if err := f.fail("MergeBase"); err != nil {
 		return "", err
 	}
@@ -1093,6 +1200,8 @@ func (f *fakeGit) MergeBase(a, b string) (string, error) {
 }
 
 func (f *fakeGit) CommitSubjects(base, branch string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("CommitSubjects"); err != nil {
 		return nil, err
 	}
@@ -1105,6 +1214,8 @@ func (f *fakeGit) CommitSubjects(base, branch string) ([]string, error) {
 }
 
 func (f *fakeGit) Add(_ ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("Add"); err != nil {
 		return err
 	}
@@ -1114,6 +1225,8 @@ func (f *fakeGit) Add(_ ...string) error {
 }
 
 func (f *fakeGit) HasStagedChanges() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("HasStagedChanges"); err != nil {
 		return false, err
 	}
@@ -1121,6 +1234,8 @@ func (f *fakeGit) HasStagedChanges() (bool, error) {
 }
 
 func (f *fakeGit) HasUnstagedChanges() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("HasUnstagedChanges"); err != nil {
 		return false, err
 	}
@@ -1128,6 +1243,8 @@ func (f *fakeGit) HasUnstagedChanges() (bool, error) {
 }
 
 func (f *fakeGit) IsClean() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.fail("IsClean"); err != nil {
 		return false, err
 	}

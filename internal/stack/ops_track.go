@@ -6,7 +6,10 @@ package stack
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // TrackBranch starts tracking name — the current branch when name is empty.
@@ -98,12 +101,20 @@ func trackAllPlan(g Git, s *State) (parents map[string]string, notes []string, u
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("list branches merged into %q: %w", s.Trunk, err)
 	}
+	// Each name's inference is an independent set of read-only probes — fan it
+	// out and resolve the results in sorted-name order so the parent map, the
+	// orphan notes, and the first error match a serial pass exactly.
+	picks := make([]string, len(names))
+	if err := git.ParallelProbes(len(names), func(i int) error {
+		p, err := inferParentAmongMerged(g, s.Trunk, mergedIntoTrunk, names[i], candidates)
+		picks[i] = p
+		return err
+	}); err != nil {
+		return nil, nil, 0, err
+	}
 	parents = make(map[string]string, len(names))
-	for _, name := range names {
-		parent, err := inferParentAmongMerged(g, s.Trunk, mergedIntoTrunk, name, candidates)
-		if err != nil {
-			return nil, nil, 0, err
-		}
+	for i, name := range names {
+		parent := picks[i]
 		if parent == s.Trunk {
 			// The trunk fallback means nothing else is an ancestor — if the
 			// branch also shares no history with the trunk (an orphan like
@@ -300,9 +311,12 @@ func inferParentPick(g Git, trunk, name string, mergedIntoTrunk, mergedIntoName 
 	best := trunk
 	// Iterate in a fixed order so the choice between incomparable ancestors (two
 	// candidates where neither is an ancestor of the other, e.g. across a
-	// merge) is deterministic rather than dependent on map iteration order.
-	sort.Strings(candidates)
-	for _, c := range candidates {
+	// merge) is deterministic rather than dependent on map iteration order. The
+	// sort works on a copy — callers share the candidate slice across names,
+	// and trackAllPlan now runs those inferences concurrently.
+	sorted := slices.Clone(candidates)
+	sort.Strings(sorted)
+	for _, c := range sorted {
 		if c == name || c == best {
 			continue
 		}
