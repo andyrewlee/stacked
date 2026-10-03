@@ -91,11 +91,11 @@ e2e/                 black-box tests driving the real binary as a subprocess
    the same constructor, so the declared-flags contract in `docs/AGENT.md` can't drift.
 4. If it has interesting CLI output, add a golden test (`cmd/golden_test.go`,
    regenerate with `go test ./cmd -run Golden -update`).
-5. If the command takes a positional branch name, register a completion policy
-   in `cmd/complete.go`'s `branchCompletionCommands`/`completeCandidates` switch
-   so `st __complete` (and the generated shell hooks) offer branch names; the
-   positional classifier picks up new value-taking flags automatically from the
-   same flagset.
+5. If the command takes a positional branch name, set the `Completion` field
+   on the `Command` registration so `st __complete` (and the generated shell
+   hooks) offer branch names — `completeCandidates` exercises it in tests
+   without a repo; the positional classifier picks up new value-taking flags
+   automatically from the same flagset.
 6. `make ci`. Adding the command shifts the help golden — regenerate it deliberately.
 
 ## Invariants the tests enforce
@@ -114,7 +114,8 @@ engine and these hold, the topology bookkeeping is sound.
   golden output.
 - `e2e/*_test.go` — black-box: builds the real binary (harness in `e2e_test.go`)
   and drives it as a hermetic subprocess (isolated HOME/git config); journeys in
-  `e2e_journey_test.go`, CLI-contract in `e2e_contract_test.go`. Contributes to
+  `e2e_journey*_test.go`, CLI-contract in `e2e_contract_test.go`, domain suites
+  for absorb/completion/crash/parallel-meta. Contributes to
   coverage via `GOCOVERDIR` (built `-cover -covermode=atomic` so it merges with
   the race-instrumented run).
 

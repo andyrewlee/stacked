@@ -25,7 +25,7 @@ func rejectArgs(command string, args []string) error {
 // only the standard --json flag: it builds the flag set, parses it, and rejects
 // any stray positional, returning whether --json was requested. It is the shared
 // preamble of the read/no-arg commands (abort, bottom, continue, guide, log,
-// repair, status, top, undo, validate), so that contract lives in one place.
+// repair, status, top, validate), so that contract lives in one place.
 func parsePlain(command string, args []string) (bool, error) {
 	var asJSON bool
 	fs := newFlagSet(command, &asJSON)

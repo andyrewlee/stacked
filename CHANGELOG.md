@@ -7,15 +7,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st open` opens a branch's PR compare URL.** Bare `st open` spawns the
+  platform opener (`open`/`xdg-open`/`rundll32`) once per URL for the current
+  branch's compare URL; `--all` opens every tracked branch's. `--remote`
+  picks the remote (default `origin`), `--dry-run` prints `would open`
+  lines, and `--json` returns the URL data without spawning anything
+  (`{ "remote", "repoURL", "prHints": [...] }` — the same compare-URL list
+  `st submit` prints, minus the push). The command is read-only: no lock,
+  no undo entry, no fetch — it never contacts a host.
 - **`st undo --list` previews the journal without reverting.** It prints the
   undo entries newest-first (index 1 is what a bare `st undo` would revert);
   `--json` emits `{ "entries": [ { "index", "label", "currentBranch",
   "createdBranches": [], "createdWorktrees": {}, "refs": {} } ] }` where
   `refs` maps each recorded branch to the tip undo would restore.
 - **Branch-aware shell completion via a hidden `st __complete` endpoint.**
-  `st completion <bash|zsh|fish>` now emits dynamic hooks for the four
-  branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`, and
-  `worktree`/`wt` — that call `st __complete <cmd> <index> -- <words>` at
+  `st completion <bash|zsh|fish>` now emits dynamic hooks for the seven
+  branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`,
+  `worktree`/`wt`, `delete`, `untrack`, and `rename` — that call
+  `st __complete <cmd> <index> -- <words>` at
   completion time. Candidates are read-only and cheap (state file plus at
   most two flat git probes — `for-each-ref` or `worktree list`, never a
   fetch or history walk), silent-empty outside a repo or on unreadable
@@ -24,7 +33,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tracked branches; `onto` offers everything except the moving subtree;
   `track` offers untracked locals (`--parent`'s value completes tracked
   branches); `worktree` offers tracked branches lacking a worktree, and
-  `worktree rm` the branches owning one. `__complete` is hidden from help
+  `worktree rm` the branches owning one; `delete` and `untrack` offer the
+  tracked set, and `rename` tracked + trunk on its first positional.
+  `__complete` is hidden from help
   and word-1 candidates and is exempt from the git-version floor so the
   per-keystroke cost stays flat; `ST_COMPLETE_BIN` overrides the binary
   the hooks call.
@@ -37,7 +48,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names — in the real undo's gate order — everything a real run would
   refuse on (`rebase_in_progress`, `state_too_new`, `malformed_snapshot`,
   `malformed_journal`, `cwd_inside_created_worktree`, `worktree_dirty`,
-  `recorded_worktree_mismatch`, `ref_moved_since`). The preview holds the
+  `recorded_worktree_mismatch`, `missing_restore_target`, `ref_moved_since`,
+  `paused_rebase`). The preview holds the
   advisory lock but
   mutates nothing: state, journal, refs, worktrees, and cwd are byte-for-
   byte unchanged, and a later real undo revalidates everything. `--dry-run`

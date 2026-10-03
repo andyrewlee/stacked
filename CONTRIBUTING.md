@@ -58,7 +58,8 @@ interface (JSON, exit codes).
 
 ## Adding a command (recipe)
 
-1. **Engine** — add the operation to `internal/stack/engine.go`:
+1. **Engine** — add the operation to the matching `internal/stack/ops_*.go`
+   file (or a new one for a new domain):
    ```go
    func Frobnicate(env Env, s *State, arg string) (*OpResult, error) {
        // mutate s, call env.Git.* (and env.save() at safe checkpoints)

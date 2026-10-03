@@ -21,14 +21,13 @@ rebased on its parent as the parent changes — `stacked` automates exactly that
 
 ## How the local metadata works
 
-`stacked` stores all of its state in:
-
-```
-<your-repo>/.git/stacked/state.json
-```
+`stacked` stores all of its state under `.git/stacked/` in your repo — the
+stack topology in `state.json`, plus the undo journal (`undo.json`) and the
+lock files (`lock`, and on non-flock platforms `lock.excl`/`lock.reclaim`)
+alongside it.
 
 Because it lives inside `.git`, it is per-repo, never committed, and never pushed.
-The file records the trunk branch and, for each tracked branch, its parent branch
+`state.json` records the trunk branch and, for each tracked branch, its parent branch
 and the parent commit SHA it was last rebased onto:
 
 ```json
@@ -131,7 +130,9 @@ a coverage gate, and the engine you'll touch most tests in milliseconds. See
 ## Commands
 
 Run `st help` (or `st <command> -h`) at any time. Flags may be placed
-before or after the positional branch name.
+before or after a positional branch name — the exception is `st undo`'s
+count positional, which parses flags only before it (`st undo --json 2`,
+not `st undo 2 --json`).
 
 Every command below except `completion` and `shell` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
 
@@ -240,7 +241,9 @@ the branch checked out in the main worktree is skipped, and a rerun is a
 no-op. `st worktree rm --all` is the bulk teardown: it removes the linked worktree
 of every tracked branch that has one — worktrees belonging to untracked
 branches are left alone — skipping dirty ones (in-progress work is never
-discarded) and the branch checked out in the main worktree. A worktree paused
+discarded), the branch checked out in the main worktree, and the worktree the
+caller is standing in ("you are inside it" — removing it would delete the
+process's own cwd). A worktree paused
 mid-rebase is refused by `rm` and skipped by `rm --all` as "a rebase is in
 progress there" — it lists as `detached`, but `st` still knows which branch
 its rebase owns. The stack metadata is
@@ -417,23 +420,26 @@ it; `--force` bypasses the refusal.
 
 #### `st repair`
 Fixes the drift `st validate` reports: untracks branches whose git branch was
-deleted outside st, re-parents branches with an invalid parent onto the trunk, and
-breaks parent cycles. Re-parented branches may then need `st restack`.
+deleted outside st, re-parents branches with an invalid parent onto the trunk,
+clears stale pending reparents whose rebase is gone, and breaks parent cycles.
+Re-parented branches may then need `st restack`.
 
 #### `st completion <bash|zsh|fish>`
 Prints a shell completion script for st's subcommands, e.g.
 `st completion zsh > "${fpath[1]}/_st"`. The scripts complete branch names
-live for `checkout`, `onto`, `track`, and `worktree` (and `rm`'s owned
-branches), via a hidden read-only `st __complete` endpoint that answers in
+live for `checkout`, `onto`, `track`, `worktree` (and `rm`'s owned
+branches), `delete`, `untrack`, and `rename`, via a hidden read-only
+`st __complete` endpoint that answers in
 flat probes — no fetch, no history walk, silent-empty outside a repo. Set
 `ST_COMPLETE_BIN` to point the hooks at a different st binary.
 
 #### `st validate` (`doctor`)
 Checks the recorded stack against the actual repository and reports problems — a
 missing trunk, tracked branches whose git branch was deleted outside `stacked`,
-parents that are no longer the trunk or a tracked branch, and parent cycles — plus
-warnings for branches that have drifted and need a restack. Exits non-zero when any
-problem is found.
+parents that are no longer the trunk or a tracked branch, tracked parents whose
+own git ref is gone, stale pending reparents whose rebase no longer exists, and
+parent cycles — plus warnings for branches that have drifted and need a restack.
+Exits non-zero when any problem is found.
 
 ## A real stacked-diff workflow
 
