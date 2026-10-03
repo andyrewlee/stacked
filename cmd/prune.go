@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"flag"
 	"fmt"
 
-	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -39,18 +37,13 @@ func runPrune(args []string) error {
 	}
 
 	trunkRef := "refs/heads/" + s.Trunk
-	remoteExplicit := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "remote" {
-			remoteExplicit = true
+	p := newGitPort()
+	if explicitRemote(fs) {
+		if err := requireRemote(p, remote); err != nil {
+			return err
 		}
-	})
-	if remoteExplicit {
-		if !newGitPort().remoteExists(remote) {
-			return fmt.Errorf("remote %q does not exist", remote)
-		}
-		remoteRef := "refs/remotes/" + remote + "/" + s.Trunk
-		if _, err := git.RevParse(remoteRef); err != nil {
+		remoteRef, ok := resolveTrunkRef(p, remote, s.Trunk)
+		if !ok {
 			return fmt.Errorf("remote %q has no tracking ref for trunk %q — fetch it first (or omit --remote)", remote, s.Trunk)
 		}
 		trunkRef = remoteRef

@@ -78,8 +78,8 @@ func runSubmit(args []string) error {
 	}
 
 	p := newGitPort()
-	if !p.remoteExists(remote) {
-		return fmt.Errorf("remote %q does not exist", remote)
+	if err := requireRemote(p, remote); err != nil {
+		return err
 	}
 
 	plan, err := stack.SubmitPlan(stackEnv(state, asJSON), state, o.all)

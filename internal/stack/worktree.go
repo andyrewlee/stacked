@@ -259,20 +259,12 @@ func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, b
 // cross-worktree rebase is rolled back in that worktree and surfaced as an
 // error, rather than left paused where the main process cannot drive it.
 func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree) (bool, error) {
-	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
+	skipped, rebase, err := worktreeRestackDisposition(env, owner, name)
 	if err != nil {
-		return false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, name, err)
+		return false, err
 	}
-	if inRebase {
-		s.recordSkippedWorktree(name, true)
-		return false, nil
-	}
-	clean, err := env.Git.IsCleanIn(owner.Path)
-	if err != nil {
-		return false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, name, err)
-	}
-	if !clean {
-		s.recordSkippedWorktree(name, false)
+	if skipped {
+		s.recordSkippedWorktree(name, rebase)
 		return false, nil
 	}
 	if err := env.Git.RebaseOntoIn(owner.Path, parentTip, b.ParentSHA, name); err != nil {
@@ -297,6 +289,29 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 		return false, fmt.Errorf("save state after restacking %q in worktree: %w", name, err)
 	}
 	return true, nil
+}
+
+// worktreeRestackDisposition answers whether a foreign-owned worktree's
+// branch proceeds to a restack or is skipped — and for a skip, whether the
+// reason is a paused rebase (rebase=true) or a dirty tree (rebase=false). The
+// probe order is the contract: the rebase check runs first because a
+// paused-but-clean rebase would pass the clean gate, and aborting a rebase
+// this process did not start must never happen. Both the apply path
+// (restackInWorktree) and the dry-run preview (wouldSkipWorktreeRestack)
+// consume it — the shared piece is the gate ORDER, so a new gate lands once.
+func worktreeRestackDisposition(env Env, owner git.Worktree, branch string) (skipped, rebase bool, err error) {
+	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
+	if err != nil {
+		return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	if inRebase {
+		return true, true, nil
+	}
+	clean, err := env.Git.IsCleanIn(owner.Path)
+	if err != nil {
+		return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+	}
+	return !clean, false, nil
 }
 
 // releaseOwnedWorktree tears down the linked worktree that owns branch, if any,

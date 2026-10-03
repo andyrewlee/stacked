@@ -73,8 +73,8 @@ func runOpen(args []string) error {
 		return err
 	}
 	p := newGitPort()
-	if !p.remoteExists(o.remote) {
-		return fmt.Errorf("remote %q does not exist", o.remote)
+	if err := requireRemote(p, o.remote); err != nil {
+		return err
 	}
 	repoURL, host := "", ""
 	if raw, err := p.remoteURL(o.remote); err == nil {
