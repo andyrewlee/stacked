@@ -277,8 +277,13 @@ message.
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not
   touch the working tree. `undo <n>` rewinds the newest `n` journal entries
-  newest-first with per-step atomicity: a refusal mid-sequence leaves the
-  already-undone prefix in place (rerunning after fixing the cause is safe).
+  newest-first; each step drops its journal entry only after its restore
+  completes — within a step the snapshot-ref restore is one atomic
+  transaction, but earlier cleanup (deleting branches/worktrees the undone
+  command created) may already have run when a later phase fails. A failed
+  step keeps its entry, so rerunning `st undo` after fixing the cause is
+  safe; a state-save failure specifically reports that the refs were already
+  restored. The already-undone prefix is reported in place.
 - Mutating commands, HEAD-moving navigation (`checkout <branch>`,
   `up`, `down`, `top`, `bottom`), and `init` are serialized across `st`
   processes by an advisory lock (a second one fails fast rather than

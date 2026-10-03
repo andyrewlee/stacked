@@ -78,6 +78,41 @@ func (c cachedPort) RenameBranch(oldName, newName string) error {
 	return err
 }
 
+// The rebase family moves HEAD inside a worktree — start, continue, and abort
+// all can leave a different branch (or a detached/paused HEAD) checked out
+// than the cached list recorded. A rebase that fails mid-run can also have
+// already switched HEAD, so every wrapper invalidates on error as well as
+// success, exactly like Checkout.
+func (c cachedPort) RebaseOnto(newBase, oldBase, branch string) error {
+	err := c.Git.RebaseOnto(newBase, oldBase, branch)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedPort) RebaseOntoIn(dir, newBase, oldBase, branch string) error {
+	err := c.Git.RebaseOntoIn(dir, newBase, oldBase, branch)
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedPort) RebaseContinue() error {
+	err := c.Git.RebaseContinue()
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedPort) RebaseAbort() error {
+	err := c.Git.RebaseAbort()
+	resetWorktreeCache()
+	return err
+}
+
+func (c cachedPort) RebaseAbortIn(dir string) error {
+	err := c.Git.RebaseAbortIn(dir)
+	resetWorktreeCache()
+	return err
+}
+
 // stackEnv builds the engine environment for s, persisting via s.Save. In JSON
 // mode the port is rebuilt over git.QuietShell — quiet rebase output cannot
 // corrupt the payload — so the swap never depends on the plain-mode port's

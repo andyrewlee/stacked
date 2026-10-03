@@ -10,7 +10,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 |------|-------|----------|--------|------------|--------|
 | [021](021-offline-sync-local-basis.md) | Use local trunk consistently for offline sync | P1 | M | — | DONE |
 | [022](022-navigation-init-locking.md) | Serialize navigation and initialization with mutations | P1 | S–M | — | DONE |
-| [003](003-undo-order-cache.md) | Restore undo refs before saving state; refresh ownership after rebases | P1 | M | — | TODO — revised failure/retry semantics |
+| [003](003-undo-order-cache.md) | Restore undo refs before saving state; refresh ownership after rebases | P1 | M | — | DONE |
 | [023](023-trunk-state-validation.md) | Reject tracked trunk records; bound log traversal | P1 | S–M | — | TODO |
 | [024](024-absorb-recovery-checkpoints.md) | Checkpoint absorb recovery commits before resets/cascades | P1 | M | — | TODO |
 | 001 | Guard `st undo` ref restoration — expected-old OIDs, OID validation, sanitized preview | P1 | M | — | BLOCKED — correct NUL CAS and zero-OID semantics; decide external-drift policy |

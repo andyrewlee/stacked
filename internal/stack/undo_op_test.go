@@ -641,7 +641,9 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 
 // A failure of the batched ref restore inside Undo must surface as the wrapped
 // "restoring branch refs" error, and — because UpdateRefs is transactional —
-// leave every ref where it was (no partial restore).
+// leave every ref where it was (no partial restore). The state swap/save runs
+// only after a successful batch, so post-modify metadata is untouched and no
+// Save call happens.
 func TestUndoRefRestoreFailure(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -657,12 +659,18 @@ func TestUndoRefRestoreFailure(t *testing.T) {
 	}
 	postA, _ := f.RevParse("a")
 	postB, _ := f.RevParse("b")
+	postState, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Corrupt one recorded ref to a SHA the fake cannot resolve, so Undo's
 	// batched UpdateRefs fails on it.
 	entry.Refs["a"] = "0123456789012345678901234567890123456789"
 
-	_, err := Undo(env, s, entry)
+	saves := 0
+	env.Save = func() error { saves++; return nil }
+	_, err = Undo(env, s, entry)
 	if err == nil {
 		t.Fatal("Undo succeeded despite an unresolvable recorded ref")
 	}
@@ -677,6 +685,105 @@ func TestUndoRefRestoreFailure(t *testing.T) {
 	if got, _ := f.RevParse("b"); got != postB {
 		t.Fatalf("b = %q after failed restore, want unchanged %q", got, postB)
 	}
+	// The state assignment and Save are gated on a successful batch: in-memory
+	// metadata is still the post-modify value, byte for byte.
+	if saves != 0 {
+		t.Fatalf("Save ran %d times despite the failed ref restore", saves)
+	}
+	gotState, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotState) != string(postState) {
+		t.Fatalf("state mutated despite the failed ref restore:\npost-op:  %s\nafter:    %s", postState, gotState)
+	}
+}
+
+// TestUndoRefRestoreFailureNilState covers the same failed-batch ordering when
+// the caller could not load current state (s == nil): the raw Save hook —
+// cmd's RestoreState fallback — must not run either.
+func TestUndoRefRestoreFailureNilState(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	postA, _ := f.RevParse("a")
+	entry.Refs["a"] = "0123456789012345678901234567890123456789"
+
+	saves := 0
+	env.Save = func() error { saves++; return nil }
+	if _, err := Undo(env, nil, entry); err == nil {
+		t.Fatal("Undo(nil state) succeeded despite an unresolvable recorded ref")
+	}
+	if saves != 0 {
+		t.Fatalf("Save ran %d times despite the failed ref restore", saves)
+	}
+	if got, _ := f.RevParse("a"); got != postA {
+		t.Fatalf("a = %q after failed restore, want unchanged %q", got, postA)
+	}
+}
+
+// TestUndoCleanupThenBatchFailure: the created-branch cleanup legitimately
+// runs BEFORE the ref transaction — a batch failure after it can leave a
+// created branch already deleted while Save stays uncalled, and retrying the
+// retained entry must skip the now-absent branch and complete.
+func TestUndoCleanupThenBatchFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Snapshot BEFORE creating doomed, then create it through the real op so
+	// the entry records it as created (LocalBranches lacks it). Amend a (the
+	// recorded branch) so the batch restore has real work on retry.
+	entry := mustSnapshot(t, s, f, "create")
+	mkBranch(t, env, s, f, "a", "doomed")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	// The recorded a-tip already differs from live (Modify amended it); keep
+	// the real value for the retry, then corrupt it so the first attempt
+	// fails after the cleanup deleted doomed.
+	postA, _ := f.RevParse("a")
+	recordedA := entry.Refs["a"]
+	entry.Refs["a"] = "0123456789012345678901234567890123456789"
+
+	saves := 0
+	env.Save = func() error { saves++; return nil }
+	if _, err := Undo(env, s, entry); err == nil {
+		t.Fatal("Undo succeeded despite an unresolvable recorded ref")
+	}
+	if saves != 0 {
+		t.Fatalf("Save ran %d times despite the failed ref restore", saves)
+	}
+	// Partial completion is the documented boundary: doomed is already gone —
+	// cleanup precedes the transaction — but no ref moved and no Save ran.
+	if f.BranchExists("doomed") {
+		t.Fatal("created branch survived the failed undo")
+	}
+	if got, _ := f.RevParse("a"); got != postA {
+		t.Fatalf("a = %q after failed restore, want unchanged %q", got, postA)
+	}
+
+	// Retry the retained entry with the corruption fixed: the cleanup loop
+	// skips the already-deleted branch, the batch restores a to the recorded
+	// snapshot tip, and the op completes.
+	entry.Refs["a"] = recordedA
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("retry after batch failure: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
 }
 
 // TestUndoEntryAbsorbedCommitsJSON pins the journal encoding of the absorb
