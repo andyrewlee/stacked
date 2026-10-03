@@ -1493,7 +1493,7 @@ func TestUndoPreviewCommitsLostProbeDegrade(t *testing.T) {
 	entry := mustSnapshot(t, s, f, "modify")
 	f.failErr["CommitRange"] = errors.New("commit-range probe exploded")
 
-	res, err := UndoPreview(env, s, entry, false, 0)
+	res, err := UndoPreview(env, s, entry, false, 0, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview = %v, want the degrade swallowed", err)
 	}

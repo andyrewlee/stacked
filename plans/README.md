@@ -21,7 +21,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 | 007 | Pin the failure arms of Sync, Delete, Continue, cross-worktree restack | P2 | M | — | DONE |
 | 008 | e2e coverage for `st prune`, `st open`, `track --all`, `sync` flag arms | P2 | S | — | DONE |
 | 009 | Clean the coverage allowlist + duplicated `assertNoMutation` calls | P3 | S | — | DONE |
-| 010 | Unify `Undo` and `UndoPreview` onto one planning path | P2 | M–L | 001, 003 | TODO |
+| 010 | Unify `Undo` and `UndoPreview` onto one planning path | P2 | M–L | 001, 003 | DONE |
 | 011 | Dedupe git spawn probes on mutation paths | P3 | M | 003 | TODO |
 | 012 | Parallelize `make ci` / `cover.sh` legs | P3 | S–M | — | TODO |
 | 013 | Docs/comment drift sweep | P2 | S | — | TODO |

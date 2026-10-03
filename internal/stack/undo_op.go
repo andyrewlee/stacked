@@ -19,6 +19,10 @@ import (
 // entry itself is not dropped — that is the caller's job after a successful
 // undo.
 //
+// Undo plans through planUndo (undo_plan.go) — the same read-only computation
+// UndoPreview renders — then executes: created-branch deletion → the one-shot
+// ref transaction → *s = *prev + env.save() → the recorded-branch checkout.
+//
 // External-drift policy: when the entry carries PostRefs (every entry a
 // successful op records now), undo first verifies the branches still sit
 // where the operation left them. A recorded branch whose live tip matches
@@ -39,140 +43,103 @@ import (
 // is never mistaken for "nothing happened".
 func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 	g := env.Git
-	// Both schema barriers run before ANY git call, Save, or bookkeeping: a
-	// snapshot written by a newer st may record fields this build would
-	// misapply, and a supplied nonnil current State is held to the same rule
-	// as a defensive engine boundary (cmd already refuses the same file at
-	// Load, but the engine must not rely on the caller having done so).
-	if s != nil && s.Version > stateSchemaVersion {
-		return nil, fmt.Errorf("current state: %w (schema v%d; this st understands v%d) — upgrade st or check for a downgrade", ErrStateTooNew, s.Version, stateSchemaVersion)
-	}
-	prev, err := decodeState(entry.State)
+	p, err := planUndo(env, s, entry, force, true, 1, nil)
 	if err != nil {
-		return nil, fmt.Errorf("parsing undo state: %w", err)
-	}
-	// The journal is user-writable: every oid its ref maps carry is verified
-	// before any of them is handed to update-ref — a revision expression or
-	// the all-zeros delete value would otherwise be resolved by git.
-	if err := validateUndoEntry(entry); err != nil {
 		return nil, err
 	}
-
-	// One batch read answers every existence/tip question below; a failed
-	// read degrades to the per-branch probes this replaced.
-	liveSet := probeLiveBranches(g)
-
-	// External-drift preflight, ahead of EVERY mutation: refuse while nothing
-	// has moved yet rather than discovering a clobbered ref mid-cleanup.
-	diverged := undoExternalDrift(liveSet, g, s, entry)
-	cas := entry.PostRefs != nil && !force
-	if len(diverged) > 0 && !force {
-		return nil, fmt.Errorf("cannot undo %q: %s moved outside st since the command ran — refusing to overwrite %s; run `st undo --force` to restore anyway, or inspect first with `st undo --dry-run`",
-			entry.Label, joinBranchList(diverged), pluralRefs(diverged))
+	if p.fatal != nil {
+		return nil, p.fatal
+	}
+	if len(p.refusals) > 0 {
+		return nil, p.refusals[0].err
 	}
 
-	// A rebase paused in a linked worktree still owns its target branch —
-	// owner lookups cannot see it (the worktree lists as detached), git
-	// refuses `branch -D` on it mid-cleanup, and its --continue/--abort will
-	// update-ref the branch anyway, so a restore cannot stick. Refuse up
-	// front, scoped to the refs this entry would touch: pauses on unrelated
-	// branches never block undo. --force restores anyway.
-	if !force {
-		paused, err := undoPausedRebases(g, s, liveSet, entry)
-		if err != nil {
-			return nil, err
-		}
-		if len(paused) > 0 {
-			return nil, fmt.Errorf("cannot undo %q: %s %s a rebase in progress in a linked worktree; resolve it there (`st continue` or `st abort`) first — or run `st undo --force`",
-				entry.Label, joinBranchList(paused), pluralHave(paused))
-		}
-	}
-
+	liveSet := p.liveSet
 	skipCheckoutRestore := false
-	if entry.LocalBranches != nil {
-		// Branches created by the undone command must be deleted. Candidates are
-		// every branch the current state knows about plus the ones the entry
-		// recorded as created; a candidate counts as created when it was not in
-		// the entry's local-branch list.
-		candidates := createdBranchCandidates(s, entry)
-		var extra []string
-		for name := range candidates {
-			if entry.CreatesBranch(name) && liveSet.exists(g, name) {
-				extra = append(extra, name)
+	for _, d := range p.doomed {
+		// The plan already discovered the branch's live linked-worktree
+		// owner and its verdicts; execute them in gate order: the
+		// recorded-vs-live mismatch, then the cwd belt, then the dirty
+		// refusal, then the removal.
+		if d.mismatch {
+			return nil, fmt.Errorf("branch %q is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", d.name, d.owner, entry.CreatedWorktrees[d.name])
+		}
+		if d.owner != "" {
+			// Belt under cmd's teleport pre-flight: never remove the worktree
+			// the caller is standing in — doing so deletes the process's own
+			// cwd.
+			if within, err := CwdWithinWorktree(g, d.owner); err != nil {
+				return nil, err
+			} else if within {
+				return nil, fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", d.owner)
+			}
+			if d.dirty {
+				return nil, fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", d.name, d.owner, d.name)
+			}
+			if err := g.WorktreeRemove(d.owner, false); err != nil {
+				return nil, fmt.Errorf("removing worktree %q for %q: %w", d.owner, d.name, err)
 			}
 		}
-		sort.Strings(extra)
-		for _, name := range extra {
-			// Always look for a live linked worktree owning the branch, even when
-			// the journal never recorded one (e.g. the branch was created plainly
-			// and its worktree materialized later with `st worktree`): the branch
-			// is being deleted either way, and git refuses to delete a branch
-			// checked out in a linked worktree.
-			recorded := entry.CreatedWorktrees[name] // may be ""
-			if err := removeCreatedWorktree(env, name, recorded); err != nil {
-				return nil, fmt.Errorf("removing worktree for branch %q created by undone command: %w", name, err)
-			}
-			target := prev.Trunk
+		if cur, err := g.CurrentBranch(); err == nil && cur == d.name {
+			// HEAD is on a branch we are about to delete; move it to target (the
+			// parent, or trunk) so the branch can be removed. The final landing
+			// branch is restored below from entry.CurrentBranch (the branch that
+			// was checked out when the command ran) — for a current-branch rename
+			// that is the restored old name, so no command-label coupling is
+			// needed here.
+			target := p.prev.Trunk
 			if s != nil {
-				if b, ok := s.Get(name); ok && liveSet.exists(g, b.Parent) {
+				if b, ok := s.Get(d.name); ok && liveSet.exists(g, b.Parent) {
 					target = b.Parent
 				}
 			}
-			if cur, err := g.CurrentBranch(); err == nil && cur == name {
-				// HEAD is on a branch we are about to delete; move it to target (the
-				// parent, or trunk) so the branch can be removed. The final landing
-				// branch is restored below from entry.CurrentBranch (the branch that
-				// was checked out when the command ran) — for a current-branch rename
-				// that is the restored old name, so no command-label coupling is
-				// needed here.
-				if !liveSet.exists(g, target) {
-					sha, ok := entry.Refs[target]
-					if !ok {
-						return nil, fmt.Errorf("cannot restore checkout target %q before deleting %q", target, name)
-					}
-					if cas {
-						// The drift preflight already proved target's recorded
-						// post-op tip was absent — only an op-deleted branch
-						// reaches here — so the resurrect is CAS'd on "still
-						// absent" like the batch restore below.
-						if err := g.UpdateRefsCas(map[string]git.RefUpdate{
-							branchTipRef(target): {New: sha, Old: zeroSHA},
-						}); err != nil {
-							return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
-						}
-					} else if err := g.UpdateRef(branchTipRef(target), sha); err != nil {
-						return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, name, err)
-					}
-					if liveSet != nil {
-						liveSet[target] = sha
-					}
+			if !liveSet.exists(g, target) {
+				sha, ok := entry.Refs[target]
+				if !ok {
+					return nil, fmt.Errorf("cannot restore checkout target %q before deleting %q", target, d.name)
 				}
-				if err := g.Checkout(target); err != nil {
-					if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
-						return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, name, err)
+				if p.cas {
+					// The drift preflight already proved target's recorded
+					// post-op tip was absent — only an op-deleted branch
+					// reaches here — so the resurrect is CAS'd on "still
+					// absent" like the batch restore below.
+					if err := g.UpdateRefsCas(map[string]git.RefUpdate{
+						branchTipRef(target): {New: sha, Old: zeroSHA},
+					}); err != nil {
+						return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, d.name, err)
 					}
-					// Local changes or a target branch checked out in another
-					// worktree block the checkout: park HEAD on a detached commit so
-					// the branch can still be deleted without touching the working
-					// tree.
-					head, revErr := g.RevParse("HEAD")
-					if revErr != nil {
-						return nil, fmt.Errorf("resolving HEAD before deleting %q: %w", name, revErr)
-					}
-					if detachErr := g.CheckoutDetach(head); detachErr != nil {
-						return nil, fmt.Errorf("detaching HEAD before deleting %q: %w", name, detachErr)
-					}
-					skipCheckoutRestore = true
+				} else if err := g.UpdateRef(branchTipRef(target), sha); err != nil {
+					return nil, fmt.Errorf("restoring branch %q before deleting %q: %w", target, d.name, err)
+				}
+				if liveSet != nil {
+					liveSet[target] = sha
 				}
 			}
-			if err := g.DeleteBranch(name, true); err != nil {
-				return nil, fmt.Errorf("deleting branch %q created by undone command: %w", name, err)
+			if err := g.Checkout(target); err != nil {
+				if !checkoutBlockedByLocalChanges(err) && !checkoutBlockedByOtherWorktree(err) {
+					return nil, fmt.Errorf("checking out %q before deleting %q: %w", target, d.name, err)
+				}
+				// Local changes or a target branch checked out in another
+				// worktree block the checkout: park HEAD on a detached commit so
+				// the branch can still be deleted without touching the working
+				// tree.
+				head, revErr := g.RevParse("HEAD")
+				if revErr != nil {
+					return nil, fmt.Errorf("resolving HEAD before deleting %q: %w", d.name, revErr)
+				}
+				if detachErr := g.CheckoutDetach(head); detachErr != nil {
+					return nil, fmt.Errorf("detaching HEAD before deleting %q: %w", d.name, detachErr)
+				}
+				skipCheckoutRestore = true
 			}
-			// Keep the snapshot truthful for the next doomed branch's
-			// parent/target existence questions — a doomed branch's recorded
-			// parent may be a sibling this loop just deleted.
-			delete(liveSet, name)
 		}
+		if err := g.DeleteBranch(d.name, true); err != nil {
+			return nil, fmt.Errorf("deleting branch %q created by undone command: %w", d.name, err)
+		}
+		// Keep the snapshot truthful for the next doomed branch's
+		// parent/target existence questions — a doomed branch's recorded
+		// parent may be a sibling this loop just deleted.
+		delete(liveSet, d.name)
 	}
 
 	// Restore every recorded ref in ONE update-ref transaction BEFORE saving
@@ -189,10 +156,9 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 	// resurrected while still absent. Without PostRefs (old journals and
 	// failed-op entries) or under force, the batch is unconditional.
 	updates := make(map[string]git.RefUpdate, len(entry.Refs))
-	names := make([]string, 0, len(entry.Refs))
-	for name, sha := range entry.Refs {
-		names = append(names, name)
-		if !cas {
+	for _, name := range p.restores {
+		sha := entry.Refs[name]
+		if !p.cas {
 			updates[branchTipRef(name)] = git.RefUpdate{New: sha}
 			continue
 		}
@@ -205,7 +171,6 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 		}
 		updates[branchTipRef(name)] = git.RefUpdate{New: sha, Old: old}
 	}
-	sort.Strings(names)
 	if err := g.UpdateRefsCas(updates); err != nil {
 		return nil, fmt.Errorf("restoring branch refs: %w", err)
 	}
@@ -222,7 +187,7 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 	// metadata is not — do NOT roll the transaction back: the journal entry
 	// was not dropped, so a retry restores the same refs and saves then.
 	if s != nil {
-		*s = *prev
+		*s = *p.prev
 		if s.Branches == nil {
 			s.Branches = make(map[string]*Branch)
 		}
@@ -245,12 +210,12 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 
 	res := &OpResult{
 		Summary:   "undid: " + entry.Label,
-		Restacked: names,
+		Restacked: p.restores,
 	}
-	if entry.PostRefs == nil {
+	if p.noPostRef {
 		res.Notes = append(res.Notes, "the journal entry has no post-operation tips on record; branch refs were restored unconditionally")
-	} else if force && len(diverged) > 0 {
-		res.Notes = append(res.Notes, fmt.Sprintf("--force: %s had moved outside st since %q ran and %s overwritten anyway", joinBranchList(diverged), entry.Label, pluralRefs(diverged)))
+	} else if force && len(p.diverged) > 0 {
+		res.Notes = append(res.Notes, fmt.Sprintf("--force: %s had moved outside st since %q ran and %s overwritten anyway", joinBranchList(p.diverged), entry.Label, pluralRefs(p.diverged)))
 	}
 	// An undo of an absorb restores the pre-absorb refs — the amended tips
 	// that now carry the caller's staged edits become unreachable. Point at
@@ -261,10 +226,10 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 	return res, nil
 }
 
-// createdBranchCandidates is the candidate set Undo scans for branches the
-// undone command created: every branch the current state knows about (trunk
-// included — a tracked trunk is corrupt state, not a reason to skip the
-// check) plus the entry's recorded CreatedBranches.
+// createdBranchCandidates is the candidate set the undo plan scans for
+// branches the undone command created: every branch the current state knows
+// about (trunk included — a tracked trunk is corrupt state, not a reason to
+// skip the check) plus the entry's recorded CreatedBranches.
 func createdBranchCandidates(s *State, entry *UndoEntry) map[string]bool {
 	candidates := map[string]bool{}
 	if s != nil {
@@ -420,42 +385,6 @@ func (l liveBranches) tip(g Git, name string) (string, bool) {
 	return t, ok
 }
 
-func removeCreatedWorktree(env Env, branch, path string) error {
-	wts, err := env.Git.Worktrees()
-	if err != nil {
-		return err
-	}
-	owner, ok := LinkedOwnerOf(wts, branch)
-	if !ok {
-		return nil
-	}
-	// An empty path means the journal recorded no worktree for the branch —
-	// there is nothing to cross-check, and a clean worktree for a branch being
-	// deleted has no independent value. A MISMATCHED recorded path, by
-	// contrast, signals journal/topology disagreement and must refuse.
-	if path != "" && !sameWorktreePath(owner.Path, path) {
-		return fmt.Errorf("branch is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", owner.Path, path)
-	}
-	// Belt under cmd's teleport pre-flight: never remove the worktree the
-	// caller is standing in — doing so deletes the process's own cwd.
-	if within, err := CwdWithinWorktree(env.Git, owner.Path); err != nil {
-		return err
-	} else if within {
-		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", owner.Path)
-	}
-	clean, err := env.Git.IsCleanIn(owner.Path)
-	if err != nil {
-		return fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	if !clean {
-		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
-	}
-	if err := env.Git.WorktreeRemove(owner.Path, false); err != nil {
-		return fmt.Errorf("removing worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	return nil
-}
-
 func sameWorktreePath(a, b string) bool {
 	if a == b {
 		return true
@@ -497,11 +426,11 @@ func (e *UndoEntry) CreatesBranch(name string) bool {
 	return true
 }
 
-// DoomedBranch reports whether Undo will try to delete name: the deletion loop
-// only ever considers the candidate set (current-state branches ∪ the entry's
-// CreatedBranches) and only members the entry created are doomed. Branch
-// liveness is a git probe the caller adds; the LocalBranches==nil degrade
-// (deletion skipped entirely) is honored here.
+// DoomedBranch reports whether the undo plan will try to delete name: the
+// deletion set only ever considers the candidate set (current-state branches
+// ∪ the entry's CreatedBranches) and only members the entry created are
+// doomed. Branch liveness is a git probe the caller adds; the
+// LocalBranches==nil degrade (deletion skipped entirely) is honored here.
 func (e *UndoEntry) DoomedBranch(s *State, name string) bool {
 	if e.LocalBranches == nil {
 		return false

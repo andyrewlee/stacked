@@ -8,8 +8,9 @@ import (
 
 // undo_parity_test.go pins UndoPreview against the real Undo: every refusal a
 // real run can hit must be predicted by a preview blocker (and the preview
-// must not claim a checkout a real run cannot perform). The preview and the
-// op are twin code paths by design; this file is the drift alarm.
+// must not claim a checkout a real run cannot perform). Both consume the same
+// planUndo computation; this file is the regression net for its execution
+// semantics.
 //
 // Each fixture is built TWICE — once for the read-only preview, once for the
 // mutating op — because fakeGit state is consumed by Undo. The fake's ids
@@ -36,9 +37,6 @@ type undoParityCase struct {
 	wantUndoErr string
 	// wantDetached asserts the real run ended with HEAD detached.
 	wantDetached bool
-	// skipRealUndo marks gates that live in cmd (a real engine Undo would
-	// proceed — the refusal is asserted as a preview blocker only).
-	skipRealUndo bool
 	// afterUndo, when set, runs extra assertions on the post-undo fake.
 	afterUndo func(t *testing.T, f *fakeGit)
 }
@@ -211,7 +209,7 @@ func TestUndoPreviewParity(t *testing.T) {
 			wantUndoErr:  "schema v999",
 		},
 		{
-			name: "paused rebase blocks the cmd gate",
+			name: "paused rebase refuses in both",
 			build: func(t *testing.T) (*fakeGit, *State, *UndoEntry) {
 				f, s, _ := newEnvState()
 				entry := mustSnapshot(t, s, f, "modify")
@@ -219,10 +217,10 @@ func TestUndoPreviewParity(t *testing.T) {
 				f.rebaseWT = ""
 				return f, s, entry
 			},
-			// The refusal lives in cmd/runUndo's gate, not the engine — a
-			// real Undo call would proceed, so only the preview leg runs.
-			skipRealUndo: true,
+			// The plan gates on a paused rebase ahead of every mutation —
+			// cmd/runUndo refuses even earlier; this is the engine belt.
 			wantBlockers: []string{"rebase_in_progress"},
+			wantUndoErr:  "cannot undo while a rebase is in progress",
 		},
 	}
 
@@ -230,7 +228,7 @@ func TestUndoPreviewParity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pf, ps, pe := tc.build(t)
 			callsBefore := pf.callsSnapshot()
-			preview, err := UndoPreview(Env{Git: pf}, ps, pe, tc.canTeleport, 1)
+			preview, err := UndoPreview(Env{Git: pf}, ps, pe, tc.canTeleport, 1, nil)
 			if err != nil {
 				t.Fatalf("UndoPreview: %v", err)
 			}
@@ -255,9 +253,6 @@ func TestUndoPreviewParity(t *testing.T) {
 				t.Fatalf("wouldCheckout = %q, want %q", gotCheckout, tc.wantCheckout)
 			}
 
-			if tc.skipRealUndo {
-				return
-			}
 			// The real run on an identical fresh fixture.
 			rf, rs, re := tc.build(t)
 			_, uerr := Undo(Env{Git: rf}, rs, re, false)
@@ -278,7 +273,7 @@ func TestUndoPreviewParity(t *testing.T) {
 			}
 			// Cross-direction: a predicted blocker list and a predicted
 			// refusal must agree (the table author pins the mapping).
-			if !tc.skipRealUndo && (tc.wantUndoErr != "") != (len(tc.wantBlockers) > 0) {
+			if (tc.wantUndoErr != "") != (len(tc.wantBlockers) > 0) {
 				t.Fatalf("bad case: wantUndoErr=%q but wantBlockers=%v — every real refusal needs a predicted blocker", tc.wantUndoErr, tc.wantBlockers)
 			}
 			if tc.afterUndo != nil && uerr == nil {
