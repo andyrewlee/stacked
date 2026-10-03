@@ -51,6 +51,10 @@ type Command struct {
 	// takes no completable positional or flag value, so the endpoint answers
 	// nothing and no script wires a `st __complete` call for it.
 	Completion func(*completionCtx) []string
+	// SubVerbs, when set, lists the literal sub-verbs the generated completion
+	// scripts offer after the command name (not derivable from the declared
+	// flags — e.g. worktree's list/ls/remove/rm).
+	SubVerbs []string
 	// Hidden marks machinery commands (st __complete) that dispatch normally but
 	// never appear in help, help --json, word-1 completion candidates, generated
 	// case arms, or did-you-mean suggestions.
@@ -191,12 +195,10 @@ func registeredInfo(c *Command) commandInfo {
 }
 
 // commandFlags lists a command's declared flags by introspecting the very flag
-// set it parses with, so help reports exactly what Run accepts. completion
-// declares no flags; every other command accepts at least --json.
+// set it parses with, so help reports exactly what Run accepts. Commands that
+// take no flags declare an empty NewFlagSet; every other command accepts at
+// least --json.
 func commandFlags(c *Command) []flagInfo {
-	if c.Name == "completion" || c.Name == "shell" {
-		return nil
-	}
 	if c.NewFlagSet != nil {
 		return flagList(c.NewFlagSet())
 	}

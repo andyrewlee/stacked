@@ -12,10 +12,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "shell",
-		Summary: "Print the shell integration that teleports into a branch's worktree",
-		Usage:   "st shell install [bash|zsh|fish]",
-		Run:     runShell,
+		Name:       "shell",
+		Summary:    "Print the shell integration that teleports into a branch's worktree",
+		Usage:      "st shell install [bash|zsh|fish]",
+		Run:        runShell,
+		NewFlagSet: emptyFlagSet("shell"),
+		SubVerbs:   []string{"install"},
 	})
 }
 

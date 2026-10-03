@@ -10,9 +10,16 @@ import (
 // the same declaration to help introspection (Command.NewFlagSet). So `help
 // --json` reports exactly what Run parses, by construction — no second
 // declaration to drift. Aliases (-m/--message, -a/--all, -f/--force) bind to one
-// field so command-line last-wins is preserved. (completion has no flags;
-// commands whose only flag is --json need no entry — help derives that from
-// newFlagSet.)
+// field so command-line last-wins is preserved. (completion/shell take no
+// flags at all — they declare emptyFlagSet; commands whose only flag is --json
+// need no entry — help derives that from newFlagSet.)
+
+// emptyFlagSet declares the flag set for commands that take no flags at all
+// (completion, shell), so help introspection reports zero flags through the
+// same mechanism as every other command instead of a name special-case.
+func emptyFlagSet(name string) func() *flag.FlagSet {
+	return func() *flag.FlagSet { return flag.NewFlagSet(name, flag.ContinueOnError) }
+}
 
 // withDefaults gives a command's flag set a usage line plus its flag defaults,
 // the help body the flag-rich commands print on -h.

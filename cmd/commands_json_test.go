@@ -1477,20 +1477,16 @@ func TestCommandCompletions(t *testing.T) {
 	}
 }
 
-// TestSubVerbsMatchUsage pins the hand-maintained subVerbs map against each
+// TestSubVerbsMatchUsage pins each registration's SubVerbs field against the
 // command's Usage line — the same source the dispatcher documents. A new
-// sub-verb added to Usage without a subVerbs entry (or vice versa) fails
+// sub-verb added to Usage without a SubVerbs entry (or vice versa) fails
 // here. One-way limitation, stated honestly: a verb missing from BOTH the
-// map and the Usage cannot be caught by any test.
+// field and the Usage cannot be caught by any test.
 func TestSubVerbsMatchUsage(t *testing.T) {
-	for name, verbs := range subVerbs {
-		c := byName[name]
-		if c == nil {
-			t.Fatalf("subVerbs names %q, which is not a registered command", name)
-		}
-		for _, v := range verbs {
+	for _, c := range registry {
+		for _, v := range c.SubVerbs {
 			if !strings.Contains(c.Usage, v) {
-				t.Errorf("subVerbs[%q] lists %q but the Usage (%q) does not mention it", name, v, c.Usage)
+				t.Errorf("command %q lists sub-verb %q but the Usage (%q) does not mention it", c.Name, v, c.Usage)
 			}
 		}
 	}

@@ -25,7 +25,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 | 011 | Dedupe git spawn probes on mutation paths | P3 | M | 003 | DONE |
 | 012 | Parallelize `make ci` / `cover.sh` legs | P3 | S–M | — | DONE |
 | 013 | Docs/comment drift sweep | P2 | S | — | DONE |
-| 014 | Registry-derived metadata + payload/journal-helper dedup | P3 | S | — | TODO |
+| 014 | Registry-derived metadata + payload/journal-helper dedup | P3 | S | — | DONE |
 | 015 | Replace git-error-substring classification with state probes | P3 | S–M | 001, 003 | TODO |
 | 016 | fake↔shell conformance harness for the `stack.Git` port | P3 | M | — | TODO |
 | 017 | Share restack-skip gates plan↔apply; centralize remote resolution | P3 | S–M | — | TODO |

@@ -9,10 +9,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "completion",
-		Summary: "Print a shell completion script (bash|zsh|fish)",
-		Usage:   "st completion <bash|zsh|fish>",
-		Run:     runCompletion,
+		Name:       "completion",
+		Summary:    "Print a shell completion script (bash|zsh|fish)",
+		Usage:      "st completion <bash|zsh|fish>",
+		Run:        runCompletion,
+		NewFlagSet: emptyFlagSet("completion"),
+		SubVerbs:   []string{"bash", "zsh", "fish"},
 	})
 }
 
@@ -60,17 +62,9 @@ func commandNames() []string {
 	return names
 }
 
-// subVerbs maps a command to its literal sub-verbs (not derivable from the
-// declared flags). Keep in sync with each command's Usage string.
-var subVerbs = map[string][]string{
-	"worktree":   {"list", "ls", "remove", "rm"},
-	"shell":      {"install"},
-	"completion": {"bash", "zsh", "fish"},
-}
-
 // commandCompletions returns the tokens completable AFTER a command name: its
-// declared flags (rendered as -x / --xxx) plus its sub-verbs, deduped and
-// sorted so the generated scripts are deterministic.
+// declared flags (rendered as -x / --xxx) plus its registered sub-verbs,
+// deduped and sorted so the generated scripts are deterministic.
 func commandCompletions(c *Command) []string {
 	seen := map[string]bool{}
 	var toks []string
@@ -83,7 +77,7 @@ func commandCompletions(c *Command) []string {
 	for _, f := range commandFlags(c) { // nil for completion/shell: sub-verbs only
 		add(flagToken(f.Name))
 	}
-	for _, v := range subVerbs[c.Name] {
+	for _, v := range c.SubVerbs {
 		add(v)
 	}
 	sort.Strings(toks)

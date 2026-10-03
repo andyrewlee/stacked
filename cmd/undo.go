@@ -67,6 +67,26 @@ func runUndo(args []string) error {
 	return runUndoApply(o.asJSON, n, o.force)
 }
 
+// undoRunResult is the single-entry undo report
+// ({undone,label,restored,notes}).
+type undoRunResult struct {
+	Undone   bool     `json:"undone"`
+	Label    string   `json:"label"`
+	Restored []string `json:"restored"`
+	Notes    []string `json:"notes,omitempty"`
+}
+
+// undoStepRunResult is the multi-step undo report — emitted in full on
+// success and partially by failUndoSteps mid-sequence, so the wire shape is
+// declared once ({undone,count,restored,steps,notes}).
+type undoStepRunResult struct {
+	Undone   bool             `json:"undone"`
+	Count    int              `json:"count"`
+	Restored []string         `json:"restored"`
+	Steps    []undoStepResult `json:"steps"`
+	Notes    []string         `json:"notes,omitempty"`
+}
+
 // undoStepResult is one completed step of a multi-step undo: Index is the
 // entry's position in `st undo --list` numbering as of when the command ran
 // (1 = newest), Label the reverted op, and Restored the branches whose tips it
@@ -182,24 +202,13 @@ func runUndoApply(asJSON bool, n int, force bool) error {
 	}
 	sort.Strings(restored)
 	if n == 1 {
-		payload := struct {
-			Undone   bool     `json:"undone"`
-			Label    string   `json:"label"`
-			Restored []string `json:"restored"`
-			Notes    []string `json:"notes,omitempty"`
-		}{true, steps[0].Label, restored, steps[0].Notes}
+		payload := undoRunResult{true, steps[0].Label, restored, steps[0].Notes}
 		return emit(asJSON, payload, func() {
 			out("undid: %s\n", sanitizeForTerminal(steps[0].Label))
 			renderUndoTail(restored, notes)
 		})
 	}
-	payload := struct {
-		Undone   bool             `json:"undone"`
-		Count    int              `json:"count"`
-		Restored []string         `json:"restored"`
-		Steps    []undoStepResult `json:"steps"`
-		Notes    []string         `json:"notes,omitempty"`
-	}{true, n, restored, steps, notes}
+	payload := undoStepRunResult{true, n, restored, steps, notes}
 	return emit(asJSON, payload, func() {
 		for _, st := range steps {
 			out("undid: %s (step %d of %d)\n", sanitizeForTerminal(st.Label), st.Index, n)
@@ -230,13 +239,7 @@ func failUndoSteps(asJSON bool, n int, steps []undoStepResult, restoredSet map[s
 		restored = append(restored, name)
 	}
 	sort.Strings(restored)
-	payload := struct {
-		Undone   bool             `json:"undone"`
-		Count    int              `json:"count"`
-		Restored []string         `json:"restored"`
-		Steps    []undoStepResult `json:"steps"`
-		Notes    []string         `json:"notes,omitempty"`
-	}{len(steps) > 0, n, restored, steps, notes}
+	payload := undoStepRunResult{len(steps) > 0, n, restored, steps, notes}
 	if steps == nil {
 		payload.Steps = []undoStepResult{}
 	}
