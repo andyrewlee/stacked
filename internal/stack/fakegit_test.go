@@ -560,6 +560,11 @@ func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 	if err := f.fail("IsCleanIn"); err != nil {
 		return false, err
 	}
+	// The caller's own worktree ("." or the reported root) answers like
+	// IsClean — not-linked must not silently read clean.
+	if dir == "" || dir == "." || (f.repoRoot != "" && dir == f.repoRoot) {
+		return f.clean && !f.staged, nil
+	}
 	// Map the worktree dir back to its branch to honor markWorktreeDirty.
 	for branch, path := range f.linkedWorktrees {
 		if path == dir {
