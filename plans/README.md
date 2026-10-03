@@ -19,7 +19,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 | 005 | Harden `install.sh` — tarball member validation, env-var scoping | P2 | S–M | — | DONE |
 | 006 | Provision the release signing key + first signed release | P1 | S (ops) | 004 | BLOCKED — correct key-comment assumption; operator-selected release work only |
 | 007 | Pin the failure arms of Sync, Delete, Continue, cross-worktree restack | P2 | M | — | DONE |
-| 008 | e2e coverage for `st prune`, `st open`, `track --all`, `sync` flag arms | P2 | S | — | TODO |
+| 008 | e2e coverage for `st prune`, `st open`, `track --all`, `sync` flag arms | P2 | S | — | DONE |
 | 009 | Clean the coverage allowlist + duplicated `assertNoMutation` calls | P3 | S | — | TODO |
 | 010 | Unify `Undo` and `UndoPreview` onto one planning path | P2 | M–L | 001, 003 | TODO |
 | 011 | Dedupe git spawn probes on mutation paths | P3 | M | 003 | TODO |
