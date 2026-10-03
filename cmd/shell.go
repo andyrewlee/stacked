@@ -222,7 +222,7 @@ func teleportCheckout(branch string) (string, error) {
 	// A checkout attempt can move HEAD even when it ultimately fails; drop the
 	// memoized worktree list (which records each worktree's checked-out
 	// branch) just as the cached port's Checkout override does.
-	resetWorktreeCache()
+	resetProcCaches()
 	if err != nil {
 		return "", fmt.Errorf("checking out %q: %w", branch, err)
 	}

@@ -25,7 +25,7 @@ func seedWorktreeCache(t *testing.T, wts []git.Worktree) {
 	worktreeCacheState.wts = wts
 	worktreeCacheState.probed = true
 	worktreeCacheState.Unlock()
-	t.Cleanup(resetWorktreeCache)
+	t.Cleanup(resetProcCaches)
 }
 
 func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
@@ -54,7 +54,7 @@ func TestWorktreeListDoesNotMutateCachedOrder(t *testing.T) {
 
 // TestWorktreeMutationsInvalidateCache pins the cache invariant: worktrees()
 // may be warmed at any point before a topology mutation and a later call must
-// still reflect reality. Without the resetWorktreeCache() calls at the
+// still reflect reality. Without the resetProcCaches() calls at the
 // mutation sites, both post-mutation reads below see the stale warmed list.
 func TestWorktreeMutationsInvalidateCache(t *testing.T) {
 	newRepo(t)
@@ -65,7 +65,7 @@ func TestWorktreeMutationsInvalidateCache(t *testing.T) {
 	// The checkout above warmed the cache mid-command (owner lookup) while
 	// HEAD was still feat-a; drop it so this test starts from an accurate
 	// warmed list, as a fresh production process would.
-	resetWorktreeCache()
+	resetProcCaches()
 
 	// findReported returns the list entry matching path, comparing resolved
 	// paths: on macOS the temp HOME sits behind the /var -> /private/var
@@ -127,14 +127,14 @@ func TestWorktreeRemoveRefusesFromInsideTarget(t *testing.T) {
 	mustCheckout(t, "main")
 	// mustCheckout warmed the worktree list mid-command while HEAD was still
 	// feat-a; reset so materializeWorktree sees the post-checkout owners.
-	resetWorktreeCache()
+	resetProcCaches()
 
 	created, err := materializeWorktree("feat-a")
 	if err != nil {
 		t.Fatalf("materializeWorktree: %v", err)
 	}
 	t.Chdir(created.Path)
-	resetWorktreeCache()
+	resetProcCaches()
 
 	err = worktreeRemove("feat-a", false)
 	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
@@ -155,7 +155,7 @@ func TestWorktreeRemoveAllSkipsCwdWorktree(t *testing.T) {
 	mustCheckout(t, "main")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCheckout(t, "main")
-	resetWorktreeCache() // see above: checkout warmed the list pre-move
+	resetProcCaches() // see above: checkout warmed the list pre-move
 
 	stay, err := materializeWorktree("feat-a")
 	if err != nil {
@@ -166,7 +166,7 @@ func TestWorktreeRemoveAllSkipsCwdWorktree(t *testing.T) {
 		t.Fatalf("materializeWorktree feat-b: %v", err)
 	}
 	t.Chdir(stay.Path)
-	resetWorktreeCache()
+	resetProcCaches()
 
 	out := captureStdout(t, func() {
 		if err := worktreeRemoveAll(false); err != nil {
@@ -1212,7 +1212,7 @@ func TestCopyWorktreeIncludesDropsGlobNestedDescendant(t *testing.T) {
 // LinkedOwnerOf check consults the list the previous add appended to).
 func TestNoteWorktreeAddedKeepsCacheCoherent(t *testing.T) {
 	newRepo(t)
-	resetWorktreeCache()
+	resetProcCaches()
 
 	wts, err := worktrees()
 	if err != nil {
@@ -1236,7 +1236,7 @@ func TestNoteWorktreeAddedKeepsCacheCoherent(t *testing.T) {
 
 	// And a still-unprobed cache defers to git instead of lying about the
 	// appended path: reset → the phantom entry is gone.
-	resetWorktreeCache()
+	resetProcCaches()
 	fresh, err := worktrees()
 	if err != nil {
 		t.Fatalf("worktrees after reset: %v", err)
@@ -1273,7 +1273,7 @@ func TestWorktreePausedRebaseGates(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	wt, err := materializeWorktree("feat-a")
 	if err != nil {
@@ -1284,7 +1284,7 @@ func TestWorktreePausedRebaseGates(t *testing.T) {
 	}
 	// Real Git reports the paused worktree as detached; drop the warmed list
 	// so lookups see the same porcelain truth a fresh process would.
-	resetWorktreeCache()
+	resetProcCaches()
 
 	// Mutation gate: a tracked-branch mutation refuses upfront, naming the
 	// branch and its worktree, before git could fail mid-operation.

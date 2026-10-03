@@ -755,7 +755,7 @@ func TestUndoFromUnrelatedLinkedWorktreeDoesNotTreatItAsCreated(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "loose")
 	mustRun(t, "git", "worktree", "add", "-q", linked, "loose")
 	t.Chdir(linked)
-	resetWorktreeCache()
+	resetProcCaches()
 
 	if err := runUndo(nil); err != nil {
 		t.Fatalf("undo from unrelated linked worktree: %v", err)
@@ -921,7 +921,7 @@ func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	s := stateT(t)
-	if _, err := s.RecordUndo(gitShell, "rename"); err != nil {
+	if _, err := s.RecordUndo(newGitPort(), "rename"); err != nil {
 		t.Fatalf("record undo: %v", err)
 	}
 	if err := git.RenameBranch("feat-a", "renamed"); err != nil {
@@ -1299,7 +1299,7 @@ func TestUndoRejectsFutureSnapshotBeforeWorktreePreparation(t *testing.T) {
 	// Run the undo from INSIDE the created worktree — pre-check ordering is
 	// what the test exists to prove.
 	t.Chdir(wtDir)
-	resetWorktreeCache()
+	resetProcCaches()
 
 	err = runUndo(nil)
 	if !errors.Is(err, stack.ErrStateTooNew) {
@@ -1440,10 +1440,10 @@ func TestFailedConflictNoopDoesNotReplacePreviousUndo(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	s := stateT(t)
-	if _, err := s.RecordUndo(gitShell, "continue"); err != nil {
+	if _, err := s.RecordUndo(newGitPort(), "continue"); err != nil {
 		t.Fatalf("record undo: %v", err)
 	}
-	if err := stack.CleanupUndoOnError(gitShell, s, stack.ErrConflict); err != nil {
+	if err := stack.CleanupUndoOnError(newGitPort(), s, stack.ErrConflict); err != nil {
 		t.Fatalf("cleanup failed conflict: %v", err)
 	}
 

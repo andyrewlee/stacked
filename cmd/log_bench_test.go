@@ -38,7 +38,7 @@ func benchLogRepo(b *testing.B, commits, branches int) {
 	b.Helper()
 	dir := b.TempDir()
 	b.Chdir(dir)
-	resetWorktreeCache()
+	resetProcCaches()
 	benchRun(b, "git", "init", "-q", "-b", "main")
 	benchRun(b, "git", "config", "user.email", "test@example.com")
 	benchRun(b, "git", "config", "user.name", "test")

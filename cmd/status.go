@@ -81,7 +81,7 @@ func runStatus(args []string) error {
 
 	var needs *bool
 	if s.IsTracked(cur) {
-		n, err := s.NeedsRestack(gitShell, cur)
+		n, err := s.NeedsRestack(newGitPort(), cur)
 		if err != nil {
 			return err
 		}

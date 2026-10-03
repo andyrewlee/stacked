@@ -76,6 +76,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Changed
+- **Mutating commands spawn fewer git probes.** The command-layer git port
+  (`cmd/gitenv.go`) memoizes `CurrentBranch` and `RepoRoot` per port
+  instance — `st modify` asks `rev-parse --abbrev-ref HEAD` once instead of
+  four times — and each command builds its own port, so a memoized answer
+  can never leak across commands or an off-port HEAD move; the
+  checkout/rename/rebase/worktree-removal wrappers clear the memos on every
+  mutation, error included. `git remote get-url` is memoized per remote for
+  the process, folding each command's "does the remote exist" and "what is
+  its URL" reads into one probe (sync/submit/open/prune), and the
+  `worktree rm --all` loop shares one port so its per-candidate cwd checks
+  cost a single `rev-parse --show-toplevel`. No output or behavior changes.
 - **Undo apply and `undo --dry-run` now share one computation.** `planUndo`
   (internal/stack/undo_plan.go) is the single source for gate ordering,
   created-branch/worktree discovery, dirty and path-mismatch verdicts, and
