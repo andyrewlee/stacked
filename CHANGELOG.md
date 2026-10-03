@@ -76,6 +76,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **The installer validates the tarball before trusting it.** `install.sh`
+  now lists the archive and refuses any member that would write outside the
+  extract directory (absolute or `..` paths), then verifies `st` itself is a
+  regular file — a link member previously landed as a link at the install
+  path (with `chmod` following it to the target) and archive-recorded mode
+  bits such as setuid survived `mv`. The member is normalized to mode 0755
+  before install. These checks run after checksum/signature verification but
+  also hold under the explicit `ST_ALLOW_UNVERIFIED` waiver — the waiver
+  skips provenance, not archive sanity. `get_latest_version` also anchors to
+  the first `tag_name` line so a stray match cannot emit a multi-line
+  version.
 - **The release gate now proves the signing key actually works.** `make
   release` and `make snapshot` require the pinned goreleaser (an unpinned
   tool could publish a release `install.sh` rejects), and `make release`

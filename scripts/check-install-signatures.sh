@@ -64,13 +64,43 @@ sha256_of() {
 #   nosig    — tarball + checksums.txt, signature file absent
 #   badsig   — tarball + checksums.txt + signature made by a DIFFERENT key
 #   noentry  — tarball + signed checksums.txt that omits the FILENAME line
+# build_dist <sig-mode> [payload]: (re)populate $FIXT/dist with the tarball, a
+# signed checksums.txt, and optionally a detached signature. Payload selects
+# the archive's shape: "normal" (the real st member), "link" (st is a
+# symlink), "nomember" (no st at all), "dotdot" (st plus a ../ member — the
+# member name survives creation verbatim on bsdtar; on a tar that normalizes
+# it away the traversal case below self-skips).
 build_dist() {
-	local mode="$1"
+	local mode="$1" payload="${2:-normal}"
 	rm -rf "$FIXT/dist"
 	mkdir -p "$FIXT/dist/pkg"
-	printf '#!/bin/sh\necho st 0.0.0-test fixture\n' >"$FIXT/dist/pkg/st"
-	chmod +x "$FIXT/dist/pkg/st"
-	tar -czf "$FIXT/dist/$FILENAME" -C "$FIXT/dist/pkg" st
+	case "$payload" in
+	link)
+		printf '#!/bin/sh\necho target\n' >"$FIXT/dist/pkg/target"
+		chmod +x "$FIXT/dist/pkg/target"
+		ln -s target "$FIXT/dist/pkg/st"
+		tar -czf "$FIXT/dist/$FILENAME" -C "$FIXT/dist/pkg" st target
+		;;
+	nomember)
+		printf 'read me\n' >"$FIXT/dist/pkg/README"
+		tar -czf "$FIXT/dist/$FILENAME" -C "$FIXT/dist/pkg" README
+		;;
+	dotdot)
+		printf '#!/bin/sh\necho st 0.0.0-test fixture\n' >"$FIXT/dist/pkg/st"
+		chmod +x "$FIXT/dist/pkg/st"
+		# tar stats the RESOLVED path but records the member name verbatim:
+		# sub must exist so sub/../evil can resolve to pkg/evil, while the
+		# recorded member sub/../evil trips the extract bound.
+		mkdir -p "$FIXT/dist/pkg/sub"
+		printf 'evil\n' >"$FIXT/dist/pkg/evil"
+		(cd "$FIXT/dist/pkg" && tar -czf "$FIXT/dist/$FILENAME" st sub/../evil)
+		;;
+	*)
+		printf '#!/bin/sh\necho st 0.0.0-test fixture\n' >"$FIXT/dist/pkg/st"
+		chmod +x "$FIXT/dist/pkg/st"
+		tar -czf "$FIXT/dist/$FILENAME" -C "$FIXT/dist/pkg" st
+		;;
+	esac
 	rm -rf "$FIXT/dist/pkg"
 
 	if [ "$mode" = "noentry" ]; then
@@ -238,6 +268,28 @@ expect_refuse "changed archive fails checksum" "checksum mismatch"
 build_dist noentry
 build_installer with-key
 expect_refuse "missing checksum entry refuses" "no checksum entry"
+
+# Valid signature over a malformed ARCHIVE — the outer gate passes, so the
+# member checks alone must refuse. The same cases also hold under the
+# ST_ALLOW_UNVERIFIED waiver (the outer gate is waived, not the member one).
+build_dist signed link
+build_installer with-key
+expect_refuse "symlink member refuses" "missing or not a regular file"
+expect_refuse "symlink member refuses under waiver" "missing or not a regular file" ST_ALLOW_UNVERIFIED=1
+
+build_dist signed nomember
+build_installer with-key
+expect_refuse "missing member refuses" "missing or not a regular file"
+
+build_dist signed dotdot
+build_installer with-key
+if tar -tzf "$FIXT/dist/$FILENAME" | grep -qE '^/|(^|/)\.\.(/|$)'; then
+	expect_refuse "traversal member refuses" "outside the extract directory"
+else
+	# A tar that normalized the member away at creation cannot express the
+	# attack — report a skip rather than assert against a benign archive.
+	echo "SKIP: traversal member case (this tar normalizes ../ at create)"
+fi
 
 if [ "$fails" -ne 0 ]; then
 	echo "check-install-signatures: $fails case(s) failed" >&2

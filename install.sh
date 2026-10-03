@@ -74,8 +74,9 @@ sha256_of() {
 
 # Get latest version from GitHub API
 get_latest_version() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | 
-    grep '"tag_name":' | 
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" |
+    grep '"tag_name":' |
+    head -1 |
     sed -E 's/.*"([^"]+)".*/\1/'
 }
 
@@ -153,7 +154,25 @@ fi
 echo "Checksum verified."
 
 echo "Extracting..."
+# Bounded extraction: refuse archives whose members would write outside
+# TMP_DIR, then validate the binary member itself. The checksum/signature
+# checks above are the outer gate, but this extraction also runs under the
+# explicit ST_ALLOW_UNVERIFIED waiver, so the archive's shape is verified
+# here regardless of who vouched for it.
+if tar -tzf "${TMP_DIR}/${FILENAME}" | grep -qE '^/|(^|/)\.\.(/|$)'; then
+  echo "Error: ${FILENAME} contains a member outside the extract directory" >&2
+  exit 1
+fi
 tar -xzf "${TMP_DIR}/${FILENAME}" -C "$TMP_DIR"
+
+# Only a regular file may be installed: a link member would land as a link
+# at ${INSTALL_DIR}/${BINARY} (and chmod would follow it to the target),
+# while archive-recorded mode bits (e.g. setuid) would survive mv unchecked.
+if [ ! -f "${TMP_DIR}/${BINARY}" ] || [ -L "${TMP_DIR}/${BINARY}" ]; then
+  echo "Error: archive member ${BINARY} is missing or not a regular file" >&2
+  exit 1
+fi
+chmod 0755 "${TMP_DIR}/${BINARY}"
 
 # Install binary
 echo "Installing to ${INSTALL_DIR}/${BINARY}..."
