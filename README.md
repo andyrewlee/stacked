@@ -158,7 +158,7 @@ Every command below except `completion` and `shell` (plus `help`/`version`) acce
 | `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
 | `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
-| `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` uses already-fetched refs; `--dry-run` previews). |
+| `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` runs offline against the local trunk; `--dry-run` previews). |
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
 | `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
 | `st open [--all] [--remote <name>] [--dry-run]` | | Open the PR compare URLs `st submit` prints in a browser (`--all` opens every tracked branch's; `--dry-run` prints without opening; `--json` emits the URLs as data). |
@@ -307,9 +307,12 @@ pruned. Sync also works from inside a branch's linked worktree: the trunk
 fast-forward runs in the trunk's own worktree (a dirty trunk worktree blocks
 sync with an error naming its path). `--no-delete` keeps merged branches;
 `--no-fetch` skips the fetch and fast-forward entirely — prune and restack run
-against the local trunk (or the already-cached `refs/remotes/<remote>/<trunk>`
-with `--remote`), so sync can run fully offline; `--dry-run` previews the
-prune/restack plan without fetching or changing anything.
+against the local trunk, so sync can run fully offline; a branch landed only on
+the remote survives until the local trunk advances. `--remote` still selects
+and validates the remote configuration without changing the offline basis.
+`--dry-run` previews the prune/restack plan without fetching or changing
+anything (against the same local-trunk basis under `--no-fetch`, else the
+already-cached `refs/remotes/<remote>/<trunk>`).
 
 #### `st prune [--remote <name>] [--dry-run]`
 Deletes every tracked branch already merged into the trunk — the prune step of

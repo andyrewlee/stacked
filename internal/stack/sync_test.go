@@ -795,14 +795,17 @@ func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
 }
 
 // --no-fetch: the remote port is never touched, the trunk is not moved, and the
-// prune basis is the already-fetched remote-tracking ref when it exists.
+// LOCAL trunk is the single basis for both pruning and restacking — a branch
+// merged only into the cached remote ref survives until local trunk advances.
 
 func TestSyncNoFetchNeverTouchesRemote(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 	aTip, _ := f.RevParse("feat-a")
-	// The remote-tracking ref contains feat-a; the local trunk does not — the
-	// remote ref is the fresher prune basis and must still be honored offline.
+	localMain, _ := f.RevParse("main")
+	// The remote-tracking ref contains feat-a; the local trunk does not.
+	// Offline sync must NOT prune on the remote basis: feat-a stays tracked
+	// until local main advances to contain it.
 	f.remoteRefs["refs/remotes/origin/main"] = aTip
 
 	remote := &fakeRemote{exists: true, ff: "must not be used"}
@@ -813,8 +816,11 @@ func TestSyncNoFetchNeverTouchesRemote(t *testing.T) {
 	if remote.fetches != 0 || remote.called {
 		t.Fatalf("--no-fetch touched the remote: fetches=%d fastForward=%v", remote.fetches, remote.called)
 	}
-	if f.BranchExists("feat-a") || s.IsTracked("feat-a") {
-		t.Fatal("feat-a merged into the remote-tracking ref should have been pruned")
+	if !f.BranchExists("feat-a") || !s.IsTracked("feat-a") {
+		t.Fatal("feat-a merged only into the remote-tracking ref must survive offline sync")
+	}
+	if tip, _ := f.RevParse("main"); tip != localMain {
+		t.Fatalf("local main moved under --no-fetch: %s → %s", localMain, tip)
 	}
 	found := false
 	for _, note := range res.Notes {

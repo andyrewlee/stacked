@@ -46,7 +46,15 @@ func runSync(args []string) error {
 
 	if dryRun {
 		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
-			return stack.SyncPlanAgainst(env, s, noDelete, resolveTrunkRef(remote, s.Trunk))
+			// --no-fetch previews against the local trunk — the same basis the
+			// apply path uses — so the preview cannot predict a remote-only
+			// prune the real run will not do. An ordinary dry run still uses
+			// the already-fetched remote tip when one exists.
+			basis := "refs/heads/" + s.Trunk
+			if !noFetch {
+				basis = resolveTrunkRef(remote, s.Trunk)
+			}
+			return stack.SyncPlanAgainst(env, s, noDelete, basis)
 		})
 	}
 

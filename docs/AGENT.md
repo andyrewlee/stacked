@@ -18,9 +18,10 @@ the corresponding `git fetch`/`git push` commands in your environment.
 side effect is spawning the platform's URL opener (`open`/`xdg-open`/`rundll32`),
 and only in text mode (`--json`/`--dry-run` never spawn).
 `st sync --no-fetch` performs no remote calls at all (the prune/restack basis is
-the already-fetched `refs/remotes/<remote>/<trunk>` or the local trunk), and
-`st prune` never fetches either — it measures "merged" against the local trunk,
-or `refs/remotes/<remote>/<trunk>` when given `--remote`.
+the local trunk, so a branch landed only on the remote survives until the local
+trunk advances), and `st prune` never fetches either — it measures "merged"
+against the local trunk, or `refs/remotes/<remote>/<trunk>` when given
+`--remote`.
 
 ## Exit codes
 
@@ -267,10 +268,11 @@ message.
   the branches that *would* be rebased, moved, folded, squashed, or deleted.
   They return a `{"dryRun": true, ...}` result without changing stack metadata or
   branch refs. `sync --dry-run` does not fetch; it uses the current local trunk or
-  already-cached `refs/remotes/<remote>/<trunk>`. `st sync --no-fetch` is the
-  same offline basis for a real run: it skips `git fetch` and the trunk
-  fast-forward (the note reports `trunk: skipped (--no-fetch)`), then prunes and
-  restacks against whatever the tracking ref or local trunk already says.
+  already-cached `refs/remotes/<remote>/<trunk>` — under `--no-fetch` it
+  previews against the same local-trunk basis the apply uses. `st sync
+  --no-fetch` skips `git fetch` and the trunk fast-forward (the note reports
+  `trunk: skipped (--no-fetch)`), then prunes and restacks against the local
+  trunk.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not

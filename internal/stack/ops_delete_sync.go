@@ -90,8 +90,9 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 // already merged into the trunk, restacks every remaining stack onto the updated
 // trunk, and restores the caller's branch. With noDelete, merged branches are
 // kept. With noFetch the remote is untouched — no fetch, no fast-forward — and
-// the prune basis is the existing remote-tracking ref when one exists, else the
-// local trunk. Requires a clean working tree.
+// the local trunk is the single basis for both pruning and restacking: a branch
+// merged only into the cached remote ref survives until the local trunk
+// advances. Requires a clean working tree.
 func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*OpResult, error) {
 	g := env.Git
 	if err := requireClean(g); err != nil {
@@ -117,8 +118,10 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 	}
 
 	// The prune basis is the local trunk — after a fast-forward it is the
-	// remote tip. Under --no-fetch nothing moves the local trunk, so the
-	// already-fetched remote-tracking ref is the fresher basis when it exists.
+	// remote tip. Under --no-fetch nothing moves the local trunk, and it stays
+	// the basis for BOTH pruning and restacking: using a cached remote ref for
+	// pruning while restacking onto the local tip could drop a landed
+	// ancestor's content from a surviving child.
 	// Always qualified: a bare "main" resolves through gitrevisions order where
 	// a tag named main would shadow the branch.
 	ffResult := "skipped (no remote)"
@@ -126,12 +129,6 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 	switch {
 	case noFetch:
 		ffResult = "skipped (--no-fetch)"
-		if r.Exists(remote) {
-			remoteRef := "refs/remotes/" + remote + "/" + s.Trunk
-			if _, err := g.RevParse(remoteRef); err == nil {
-				trunkRef = remoteRef
-			}
-		}
 	case r.Exists(remote):
 		if err := r.Fetch(remote); err != nil {
 			return nil, fmt.Errorf("fetch %q: %w", remote, err)
@@ -271,7 +268,7 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 }
 
 // PruneMergedAgainst is PruneMerged against an arbitrary basis ref — the local
-// trunk, or a fetched remote-tracking ref (sync --no-fetch).
+// trunk, or a fetched remote-tracking ref (st prune --remote, sync --dry-run).
 func PruneMergedAgainst(env Env, s *State, trunkRef string) ([]string, error) {
 	candidates, err := pruneTargets(env, s, trunkRef)
 	if err != nil {
