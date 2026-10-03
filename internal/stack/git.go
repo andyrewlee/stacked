@@ -96,6 +96,11 @@ type Git interface {
 	// per-worktree (it lives under that worktree's own git dir), so a paused
 	// rebase elsewhere is invisible to RebaseInProgress and vice versa.
 	RebaseInProgressIn(dir string) (bool, error)
+	// RebaseHeadNameIn returns the branch a paused rebase in the worktree at
+	// dir targets (rebase-merge|rebase-apply/head-name). A worktree mid-rebase
+	// lists as detached, so this is the only probe that names the branch its
+	// --continue/--abort will rewrite; empty means none could be determined.
+	RebaseHeadNameIn(dir string) (string, error)
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)

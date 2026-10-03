@@ -1204,3 +1204,122 @@ func TestUndoLegacyEntryRestoresUnconditionally(t *testing.T) {
 		t.Fatalf("notes = %v, want the unconditional-restore note", res.Notes)
 	}
 }
+
+// TestUndoRefusesPausedRebaseRef pins the linked-worktree pause preflight: a
+// branch whose ref the entry would restore has a rebase paused in another
+// worktree — the worktree lists as detached so owner lookups miss it, git
+// refuses branch -D on it mid-cleanup, and the pending --continue/--abort
+// will overwrite any restore. Undo refuses up front.
+func TestUndoRefusesPausedRebaseRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+
+	// A rebase pauses on a inside its linked worktree — the worktree now
+	// reports detached, so nothing but the head-name probe can see the owner.
+	f.addPausedWorktree("/wt-a", "a")
+
+	before := f.callsSnapshot()
+	_, err := Undo(env, s, entry, false)
+	if err == nil {
+		t.Fatal("Undo restored a ref owned by a paused rebase")
+	}
+	if !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "rebase in progress") {
+		t.Fatalf("error = %q, want it to name the paused branch", err)
+	}
+	for method, want := range map[string]int{"DeleteBranch": 0, "UpdateRefsCas": 0, "Checkout": 0, "WorktreeRemove": 0} {
+		if got := f.calls[method] - before[method]; got != want {
+			t.Fatalf("%s calls during refused Undo = %d, want %d", method, got, want)
+		}
+	}
+}
+
+// TestUndoPausedRebaseForceRestores pins --force over the pause gate: the
+// recorded restore proceeds even though the pending rebase may overwrite it.
+func TestUndoPausedRebaseForceRestores(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+	f.addPausedWorktree("/wt-a", "a")
+
+	if _, err := Undo(env, s, entry, true); err != nil {
+		t.Fatalf("Undo(force) over a paused ref: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// TestUndoPausedRebaseUnrelated: a pause on a branch the entry never
+// rewrites blocks nothing — undo only refuses pauses on refs it would
+// restore or delete (a tracked descendant restacked by the op does move and
+// IS refused; an untracked pause can never be reached).
+func TestUndoPausedRebaseUnrelated(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "main", "b") // tracked, but not under a — untouched by the op
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	// An untracked branch is never in the journal — a pause there can never
+	// block. CreateBranchAt does not move HEAD (CreateBranch is checkout -b).
+	if err := f.CreateBranchAt("side", "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+	f.addPausedWorktree("/wt-side", "side")
+	f.addPausedWorktree("/wt-b", "b")
+
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("Undo blocked by an unrelated pause: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// TestUndoRefusesPausedDoomedBranch: a branch the op created — and whose
+// worktree a user then paused mid-rebase — must refuse up front: git would
+// refuse the branch delete mid-cleanup anyway, after earlier worktree/branch
+// deletions already ran.
+func TestUndoRefusesPausedDoomedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	mkBranch(t, env, s, f, "a", "doomed")
+	pinPostRefs(t, f, entry, "doomed")
+	f.addPausedWorktree("/wt-doomed", "doomed")
+	mustCheckout(t, f, "a")
+
+	_, err := Undo(env, s, entry, false)
+	if err == nil {
+		t.Fatal("Undo deleted into a paused doomed branch")
+	}
+	if !strings.Contains(err.Error(), `"doomed"`) {
+		t.Fatalf("error = %q, want it to name the paused branch", err)
+	}
+	if !f.BranchExists("doomed") {
+		t.Fatal("doomed branch deleted despite the pause refusal")
+	}
+}

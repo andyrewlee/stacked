@@ -221,7 +221,19 @@ func worktreeRemove(branch string, asJSON bool) error {
 	}
 	wt, ok := stack.LinkedOwnerOf(wts, branch)
 	if !ok {
-		// The branch has no separate worktree. Distinguish the case where it is the
+		// The branch has no separate worktree that git attributes — but a
+		// worktree paused mid-rebase on it reports `detached`, so the owner
+		// lookup misses it. Resolve via the head-name probe before answering
+		// "no worktree": rm must refuse a mid-rebase worktree, not deny it
+		// exists.
+		paused, perr := stack.PausedRebaseOwners(gitShell, wts)
+		if perr != nil {
+			return perr
+		}
+		if pausedWT, isPaused := paused[branch]; isPaused {
+			return fmt.Errorf("cannot remove worktree %q: a rebase is in progress there; finish or abort it first", pausedWT.Path)
+		}
+		// Distinguish the case where it is the
 		// branch checked out in the main worktree (which is NOT a removable linked
 		// worktree — git refuses with a raw "is a main working tree" fatal) from the
 		// case where it has no worktree at all, so the user gets a clear message
@@ -325,6 +337,14 @@ func worktreeRemoveAll(asJSON bool) error {
 	}
 	defer release()
 
+	// Worktrees paused mid-rebase list as detached — LinkedOwnerOf cannot see
+	// their target branch, so resolve the pause set once up front and skip
+	// each paused branch by name rather than reporting "no worktree".
+	paused, perr := stack.PausedRebaseOwners(gitShell, wts)
+	if perr != nil {
+		return perr
+	}
+
 	result := worktreeRemoveAllResult{Removed: []worktreeRemovedEntry{}}
 	for _, name := range names {
 		if name == mainBranch {
@@ -333,6 +353,9 @@ func worktreeRemoveAll(asJSON bool) error {
 		}
 		wt, ok := stack.LinkedOwnerOf(wts, name)
 		if !ok {
+			if _, isPaused := paused[name]; isPaused {
+				result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "a rebase is in progress there"})
+			}
 			continue // no worktree to remove
 		}
 		// Never remove the worktree the caller is standing in (it would delete

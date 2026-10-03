@@ -1352,3 +1352,67 @@ func TestRestackCacheInvalidationKeepsConflictPaused(t *testing.T) {
 		assertPaused(t, r, res)
 	})
 }
+
+// TestPausedRebaseInLinkedWorktreeBlocksMutations pins the plan-002 contract
+// end to end: a tracked branch paused mid-rebase in a linked worktree (where
+// `git worktree list` reports it detached — the owner only survives in the
+// rebase head-name) makes the mutation gate refuse `st` mutations in the main
+// worktree and makes `st worktree rm` answer correctly, while `st abort`
+// stays reachable inside the paused worktree itself.
+func TestPausedRebaseInLinkedWorktreeBlocksMutations(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+
+	// Diverge main so a rebase inside the worktree conflicts and pauses.
+	r.stOK("checkout", "main")
+	r.writeFile("a.txt", "diverged\n")
+	r.git("add", "a.txt")
+	r.git("commit", "-q", "-m", "diverge main")
+
+	wt := filepath.Join(t.TempDir(), "wt-a")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+	rebase := exec.Command("git", "-C", wt, "rebase", "main")
+	rebase.Env = cleanEnv(r.home)
+	if out, err := rebase.CombinedOutput(); err == nil {
+		t.Fatalf("git -C wt rebase main succeeded, want a paused conflict:\n%s", out)
+	}
+
+	// Sanity: porcelain reports the paused worktree as detached, so the
+	// plain branch-owner lookup cannot see it.
+	if out := r.git("worktree", "list", "--porcelain"); !strings.Contains(out, "detached") {
+		t.Fatalf("worktree list missing the detached paused entry:\n%s", out)
+	}
+
+	// `st delete` from the main worktree refuses upfront, naming the branch
+	// and its paused worktree — and removes nothing.
+	res := r.st("delete", "feat-a")
+	wantExit(t, res, 1)
+	if !strings.Contains(res.stderr, "rebase in progress") || !strings.Contains(res.stderr, wt) {
+		t.Fatalf("st delete stderr = %q, want the paused-worktree refusal naming %q", res.stderr, wt)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("st delete removed the paused branch anyway")
+	}
+
+	// `st worktree rm feat-a` finds the detached owner via the head-name.
+	res = r.st("worktree", "rm", "feat-a")
+	wantExit(t, res, 1)
+	if !strings.Contains(res.stderr, "rebase is in progress there") {
+		t.Fatalf("st worktree rm stderr = %q, want the pause refusal", res.stderr)
+	}
+
+	// `st worktree rm --all` skips the paused worktree with a reason.
+	res = r.stOK("worktree", "rm", "--all")
+	if !strings.Contains(res.stdout, "skipped feat-a") {
+		t.Fatalf("st worktree rm --all stdout = %q, want a skip for feat-a", res.stdout)
+	}
+
+	// st abort stays reachable inside the paused worktree and leaves it back
+	// on feat-a.
+	r.stInOK(wt, "abort")
+	if got := r.gitIn(wt, "rev-parse", "--abbrev-ref", "HEAD"); got != "feat-a" {
+		t.Fatalf("worktree branch after abort = %q, want feat-a", got)
+	}
+}

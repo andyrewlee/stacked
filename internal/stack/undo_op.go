@@ -71,6 +71,23 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 			entry.Label, joinBranchList(diverged), pluralRefs(diverged))
 	}
 
+	// A rebase paused in a linked worktree still owns its target branch —
+	// owner lookups cannot see it (the worktree lists as detached), git
+	// refuses `branch -D` on it mid-cleanup, and its --continue/--abort will
+	// update-ref the branch anyway, so a restore cannot stick. Refuse up
+	// front, scoped to the refs this entry would touch: pauses on unrelated
+	// branches never block undo. --force restores anyway.
+	if !force {
+		paused, err := undoPausedRebases(g, s, liveSet, entry)
+		if err != nil {
+			return nil, err
+		}
+		if len(paused) > 0 {
+			return nil, fmt.Errorf("cannot undo %q: %s %s a rebase in progress in a linked worktree; resolve it there (`st continue` or `st abort`) first — or run `st undo --force`",
+				entry.Label, joinBranchList(paused), pluralHave(paused))
+		}
+	}
+
 	skipCheckoutRestore := false
 	if entry.LocalBranches != nil {
 		// Branches created by the undone command must be deleted. Candidates are
@@ -321,6 +338,52 @@ func pluralRefs(names []string) string {
 		return "that ref"
 	}
 	return "those refs"
+}
+
+func pluralHave(names []string) string {
+	if len(names) == 1 {
+		return "has"
+	}
+	return "have"
+}
+
+// undoPausedRebases returns the sorted names of branches this undo entry would
+// actually rewrite — every recorded ref whose live tip differs from its
+// recorded value (an already-restored or never-moved ref is a no-op write,
+// so a pause there blocks nothing), plus every live doomed branch — that have
+// a rebase paused in a linked worktree. Probe failures are surfaced: guessing
+// "not paused" is how a delete lands mid-cleanup.
+func undoPausedRebases(g Git, s *State, liveSet liveBranches, entry *UndoEntry) ([]string, error) {
+	wts, err := g.Worktrees()
+	if err != nil {
+		return nil, fmt.Errorf("listing worktrees for paused-rebase check: %w", err)
+	}
+	if !IsMultiWorktree(wts) {
+		return nil, nil
+	}
+	relevant := make(map[string]bool, len(entry.Refs))
+	for name, recorded := range entry.Refs {
+		if live, exists := liveSet.tip(g, name); !exists || live != recorded {
+			relevant[name] = true
+		}
+	}
+	for name := range createdBranchCandidates(s, entry) {
+		if entry.CreatesBranch(name) && liveSet.exists(g, name) {
+			relevant[name] = true
+		}
+	}
+	paused, err := PausedRebaseOwners(g, wts)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for head := range paused {
+		if relevant[head] {
+			names = append(names, head)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // liveBranches is one Tips() snapshot answering "does this local branch

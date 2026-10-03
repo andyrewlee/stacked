@@ -76,6 +76,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **Mutations now refuse upfront when a tracked branch (or the trunk) has a
+  rebase paused in a linked worktree.** A worktree mid-rebase reports
+  `detached` in `git worktree list`, so the owner lookup could not see the
+  branch its `--continue`/`--abort` will rewrite — and while git does refuse
+  `branch -D` or `rebase --onto` on it, that refusal landed mid-operation,
+  after earlier steps had already applied. Every mutating command now sweeps
+  linked worktrees for paused rebases (resolving the branch through the
+  rebase head-name) and refuses before touching anything, naming the branch
+  and the worktree to resolve with `st continue`/`st abort`; pauses on
+  branches `st` does not track never block. `st undo` applies the same
+  protection scoped to the refs its entry would rewrite — a paused branch
+  it does not touch never blocks it, and `--force` bypasses — with
+  `paused_rebase:<branch>` reported by `st undo --dry-run`. `st worktree rm`
+  and `rm --all` also find paused worktrees through the head-name instead of
+  answering "no worktree": `rm` refuses and `rm --all` skips them as
+  "a rebase is in progress there".
 - **`st undo` no longer rewinds refs that moved outside `st`.** Journal
   entries written by current `st` record where every branch stood *after*
   the operation (`postRefs`), and undo now verifies live tips against them

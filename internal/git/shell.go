@@ -76,6 +76,10 @@ func (Shell) RebaseAbortIn(dir string) error { return RebaseAbortIn(dir) }
 func (Shell) RebaseInProgressIn(dir string) (bool, error) {
 	return RebaseInProgressIn(dir)
 }
+
+func (Shell) RebaseHeadNameIn(dir string) (string, error) {
+	return RebaseHeadNameIn(dir)
+}
 func (Shell) IsCleanIn(dir string) (bool, error)                    { return IsCleanIn(dir) }
 func (Shell) RepoRoot() (string, error)                             { return RepoRoot() }
 func (Shell) WorktreeRemove(dir string, force bool) error           { return WorktreeRemove(dir, force) }

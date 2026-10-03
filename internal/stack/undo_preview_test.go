@@ -464,3 +464,36 @@ func TestUndoPreviewRefMovedSince(t *testing.T) {
 		t.Fatalf("notes = %v, want the unconditional-restore note", res.Notes)
 	}
 }
+
+// TestUndoPreviewPausedRebase pins the dry-run side of the pause gate: a
+// branch with a rebase paused in a linked worktree surfaces as a
+// paused_rebase blocker — the real undo refuses it upfront, and the preview
+// must name the same refusal.
+func TestUndoPreviewPausedRebase(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+	f.addPausedWorktree("/wt-a", "a")
+
+	res, err := UndoPreview(env, s, entry, false, 1)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	found := false
+	for _, b := range res.Blockers {
+		if b == "paused_rebase:a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("blockers = %v, want paused_rebase:a", res.Blockers)
+	}
+}
