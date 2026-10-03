@@ -502,6 +502,51 @@ func TestDecodeStateBranchNameIntegrity(t *testing.T) {
 			t.Fatalf("parent = %q, want main", s.Branches["feat-a"].Parent)
 		}
 	})
+	t.Run("empty tracked map loads", func(t *testing.T) {
+		s, err := decodeState([]byte(`{"version":1,"trunk":"main","branches":{}}`))
+		if err != nil {
+			t.Fatalf("decodeState empty branches: %v", err)
+		}
+		if len(s.Branches) != 0 {
+			t.Fatalf("branches = %v, want empty", s.Branches)
+		}
+	})
+
+	// The trunk is the root of the stack, not a tracked branch: any record
+	// keyed by the trunk name roots a cycle in the topology itself and must
+	// be refused at the shared decoder — including the legacy-v0 forms that
+	// would otherwise slip through the Name backfill.
+	trunkRecords := map[string]string{
+		"named trunk record, parent trunk":     `{"name":"main","parent":"main"}`,
+		"unnamed trunk record (legacy v0)":     `{"parent":"main"}`,
+		"named trunk record, different parent": `{"name":"main","parent":"feat-a"}`,
+		"null trunk record":                    `null`,
+	}
+	for name, record := range trunkRecords {
+		for _, versioned := range []bool{true, false} {
+			label := name
+			if !versioned {
+				label += " (no version)"
+			}
+			t.Run(label, func(t *testing.T) {
+				doc := `{"trunk":"main","branches":{"feat-a":{"parent":"main"},"main":` + record + `}}`
+				if versioned {
+					doc = `{"version":1,"trunk":"main","branches":{"feat-a":{"parent":"main"},"main":` + record + `}}`
+				}
+				if _, err := decodeState([]byte(doc)); err == nil || !strings.Contains(err.Error(), "corrupted") {
+					t.Fatalf("decodeState trunk record = %v, want a corruption error", err)
+				}
+				// The same bytes flow through the undo-journal entry points;
+				// both must reject them identically.
+				if err := ValidateUndoState([]byte(doc)); err == nil || !strings.Contains(err.Error(), "corrupted") {
+					t.Fatalf("ValidateUndoState trunk record = %v, want a corruption error", err)
+				}
+				if _, err := DecodeUndoState([]byte(doc)); err == nil || !strings.Contains(err.Error(), "corrupted") {
+					t.Fatalf("DecodeUndoState trunk record = %v, want a corruption error", err)
+				}
+			})
+		}
+	}
 }
 
 // CommonDir resolves through the same cwd-keyed cache as stackedDir — same

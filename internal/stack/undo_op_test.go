@@ -639,6 +639,86 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 	})
 }
 
+// TestUndoTrunkSnapshotRejected pins the structural barrier on the undo path:
+// a snapshot whose serialized State tracks the trunk as a branch record must
+// be refused at the shared decoder BEFORE any cleanup — deleting the created
+// branch, moving refs, or replacing the caller's metadata would turn a corrupt
+// journal entry into corrupt live state.
+func TestUndoTrunkSnapshotRejected(t *testing.T) {
+	// setupCreateUndo snapshots main->a, then creates b — undoing the entry
+	// would delete b; the trunk-record State must stop it before that.
+	setupCreateUndo := func(t *testing.T) (*fakeGit, *State, Env, *UndoEntry) {
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		entry := mustSnapshot(t, s, f, "create")
+		if _, err := Create(env, s, "b", "c-b", true); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		entry.State = json.RawMessage(
+			`{"version":1,"trunk":"main","branches":{"main":{"parent":"main"},"a":{"name":"a","parent":"main"}}}`)
+		return f, s, env, entry
+	}
+	// assertNothingMoved proves the refusal ran ahead of every mutation:
+	// created branch b survives on its tip, a/main tips are unmoved, HEAD
+	// stayed on b, Save never ran, and s still describes the live topology.
+	assertNothingMoved := func(t *testing.T, f *fakeGit, s *State, saves int) {
+		t.Helper()
+		tipOf := func(name string) string {
+			tip, err := f.RevParse(branchTipRef(name))
+			if err != nil {
+				t.Fatalf("RevParse(%q): %v", name, err)
+			}
+			return tip
+		}
+		for _, name := range []string{"main", "a", "b"} {
+			if !f.BranchExists(name) {
+				t.Fatalf("refused undo deleted branch %q", name)
+			}
+			if tipOf(name) == "" {
+				t.Fatalf("branch %q lost its tip during a refused undo", name)
+			}
+		}
+		if f.head != "b" {
+			t.Fatalf("HEAD = %q, want b — a refused undo must not shuffle checkout", f.head)
+		}
+		if saves != 0 {
+			t.Fatalf("Save called %d times during a refused undo", saves)
+		}
+		if s != nil {
+			if _, ok := s.Get("b"); !ok || s.IsTracked("main") {
+				t.Fatalf("current metadata = %+v, want unchanged (b tracked, trunk not)", s.Branches)
+			}
+		}
+	}
+
+	t.Run("nonnil current state", func(t *testing.T) {
+		f, s, env, entry := setupCreateUndo(t)
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, s, entry)
+		if err == nil || !strings.Contains(err.Error(), "corrupted") {
+			t.Fatalf("undo error = %v, want a corruption error", err)
+		}
+		assertNothingMoved(t, f, s, saves)
+	})
+
+	t.Run("nil current state", func(t *testing.T) {
+		f, _, env, entry := setupCreateUndo(t)
+		saves := 0
+		env.Save = func() error { saves++; return nil }
+
+		_, err := Undo(env, nil, entry)
+		if err == nil || !strings.Contains(err.Error(), "corrupted") {
+			t.Fatalf("undo error = %v, want a corruption error", err)
+		}
+		assertNothingMoved(t, f, nil, saves)
+	})
+}
+
 // A failure of the batched ref restore inside Undo must surface as the wrapped
 // "restoring branch refs" error, and — because UpdateRefs is transactional —
 // leave every ref where it was (no partial restore). The state swap/save runs

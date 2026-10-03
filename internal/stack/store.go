@@ -157,7 +157,13 @@ func decodeState(data []byte) (*State, error) {
 	// what messages display. A divergence reads as phantom "different name"
 	// claims downstream — refuse it at the single entry point all state
 	// bytes pass through. A missing Name is a legacy-v0 file: backfill it.
+	// The trunk is the root of the stack, not a tracked branch: a record
+	// keyed by the trunk name would root a cycle in the topology itself,
+	// so it is refused ahead of every other per-branch check.
 	for key, b := range s.Branches {
+		if key == s.Trunk {
+			return nil, fmt.Errorf("state file is corrupted: trunk branch %q must not appear in tracked branches (run `st validate` / `st repair`, or fix and reload)", key)
+		}
 		if b == nil {
 			return nil, fmt.Errorf("state file is corrupted: branch %q has no record", key)
 		}

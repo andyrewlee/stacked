@@ -167,8 +167,16 @@ type logData struct {
 }
 
 func printLogJSON(s *stack.State, d *logData) error {
+	// Corrupt topology (a parent cycle) could otherwise recurse forever: each
+	// name renders at most once. Persisted corruption is refused at decode —
+	// this bound is defensive, not a repair.
+	visited := make(map[string]bool, len(d.index)+1)
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
+		if visited[name] {
+			return nil
+		}
+		visited[name] = true
 		node := &logNode{Name: name, Parent: parent, Current: name == d.cur, Children: []*logNode{}}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
@@ -182,7 +190,9 @@ func printLogJSON(s *stack.State, d *logData) error {
 			node.Dirty = wt.dirty
 		}
 		for _, child := range d.index[name] {
-			node.Children = append(node.Children, build(child, name))
+			if childNode := build(child, name); childNode != nil {
+				node.Children = append(node.Children, childNode)
+			}
 		}
 		return node
 	}
@@ -199,8 +209,15 @@ func printLogJSON(s *stack.State, d *logData) error {
 // printLogTree prints the forest with the deepest branches first so the trunk
 // ends up at the bottom of the output.
 func printLogTree(s *stack.State, d *logData) {
+	// Same defensive bound as printLogJSON: a name prints at most once even if
+	// corrupt topology points the child index back at an ancestor.
+	visited := make(map[string]bool, len(d.index)+1)
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
+		if visited[name] {
+			return
+		}
+		visited[name] = true
 		for _, child := range d.index[name] {
 			printBranch(child, depth+1)
 		}
