@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -101,5 +103,73 @@ func TestRedactURLArg(t *testing.T) {
 		if got := redactURLArg(tc.in); got != tc.want {
 			t.Errorf("redactURLArg(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestRedactCredentials(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		// The git transport diagnostic this exists for.
+		{
+			"fatal: unable to access 'https://oauth2:SECRET@h/r/': Could not resolve host",
+			"fatal: unable to access 'https://<redacted>@h/r/': Could not resolve host",
+		},
+		// URL arm: any userinfo — even a bare username — inside a scheme URL.
+		{"https://user@host/repo", "https://<redacted>@host/repo"},
+		{"ssh://git@host:2222/o/r", "ssh://<redacted>@host:2222/o/r"},
+		// No userinfo, or the "@" sits inside the path — untouched.
+		{"https://host/repo", "https://host/repo"},
+		{"https://@host/repo", "https://@host/repo"},
+		{"https://host/path@x", "https://host/path@x"},
+		// scp arm: a password-bearing prefix before "host:path" is masked; a
+		// bare user@host ssh reference is not credential-shaped and stays.
+		{"user:pass@host:org/repo", "<redacted>@host:org/repo"},
+		{"git@host:org/repo", "git@host:org/repo"},
+		// "user:pass@host" without the host:path separator is not the scp
+		// shape — masking there would catch non-credential tokens.
+		{"user:pass@host/path", "user:pass@host/path"},
+		// Plain text and ordinary mail-style "user@host" pass through.
+		{"plain error text", "plain error text"},
+		{"email me at user@host", "email me at user@host"},
+		{"", ""},
+		// Multiline payloads mask every occurrence.
+		{
+			"remote: see https://a:b@h/x and user:pw@h:y\nremote: done",
+			"remote: see https://<redacted>@h/x and <redacted>@h:y\nremote: done",
+		},
+	}
+	for _, tc := range cases {
+		if got := redactCredentials(tc.in); got != tc.want {
+			t.Errorf("redactCredentials(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestRunErrorRedactsCredentials drives the real wrap path: a PATH-shim `git`
+// fails with credential-bearing stderr, and the wrapped error must already be
+// scrubbed — the token can never reach a --json envelope or transcript.
+func TestRunErrorRedactsCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim uses a shell script")
+	}
+	dir := t.TempDir()
+	shim := filepath.Join(dir, "git")
+	script := "#!/bin/sh\n" +
+		"echo \"fatal: unable to access 'https://oauth2:TOPSECRET@h/r/': could not resolve\" >&2\n" +
+		"exit 128\n"
+	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := run("status")
+	if err == nil {
+		t.Fatal("expected shim failure")
+	}
+	if strings.Contains(err.Error(), "TOPSECRET") {
+		t.Fatalf("wrapped error leaked credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://<redacted>@h/r/") {
+		t.Fatalf("wrapped error = %v; want scheme+host retained after masking userinfo", err)
 	}
 }

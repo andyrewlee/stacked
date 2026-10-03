@@ -49,7 +49,7 @@ func runWith(extraEnv []string, stdin []byte, args ...string) (string, error) {
 			msg = strings.TrimSpace(stdout.String())
 		}
 		if msg != "" {
-			return stdout.String(), fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), msg, err)
+			return stdout.String(), fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), redactCredentials(msg), err)
 		}
 		return stdout.String(), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}

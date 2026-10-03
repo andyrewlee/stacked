@@ -84,3 +84,62 @@ func redactURLArg(arg string) string {
 	}
 	return arg
 }
+
+// redactCredentials scrubs credential userinfo out of arbitrary text captured
+// from a child process — the output-side sibling of redactURLArg's argv mask,
+// applied where captured git stderr/stdout is folded into a wrapped error. It
+// rewrites "scheme://userinfo@host" to "scheme://<redacted>@host" and the
+// scp-like "user:pass@host:" prefix to "<redacted>@host:", the two shapes a
+// credential-bearing remote can embed in git stderr (a transport diagnostic
+// or a relayed remote-side hook line). Scheme and host survive so the message
+// stays actionable; bare "user@host" ssh references and "@"s inside a URL path
+// pass through untouched — masking those would erase legitimate context.
+func redactCredentials(text string) string {
+	// URL arm: after "://", an "@" before the first "/" (or a delimiter) marks
+	// userinfo. A "://" without such an "@" has no credentials — skip it and
+	// keep scanning; later URLs in the same text may still carry one.
+	for off := 0; ; {
+		i := strings.Index(text[off:], "://")
+		if i < 0 {
+			break
+		}
+		i += off
+		rest := text[i+3:]
+		at := strings.IndexByte(rest, '@')
+		stop := strings.IndexAny(rest, "/ \t\n'\"")
+		if at > 0 && (stop < 0 || at < stop) {
+			text = text[:i+3] + "<redacted>" + rest[at:]
+			off = i + 3 + len("<redacted>") + 1
+		} else {
+			off = i + 3
+		}
+	}
+	// scp arm: "user:pass@host:" — the token before "@" must contain a ":" (a
+	// password is present; bare "user@host:" is a legitimate ssh reference and
+	// stays) and no "/" (rules out the already-masked "scheme://x@" shape), and
+	// the host after "@" must be followed by ":" before any "/" — the scp
+	// host:path separator that proves this is a remote reference.
+	for off := 0; ; {
+		at := strings.IndexByte(text[off:], '@')
+		if at < 0 {
+			break
+		}
+		at += off
+		start := at
+		for start > 0 && !strings.ContainsRune(" \t\n'\"()=<>\r", rune(text[start-1])) {
+			start--
+		}
+		token := text[start:at]
+		rest := text[at+1:]
+		colon := strings.IndexByte(rest, ':')
+		stop := strings.IndexAny(rest, "/ \t\n'\"\r")
+		if strings.ContainsRune(token, ':') && !strings.ContainsRune(token, '/') &&
+			colon > 0 && (stop < 0 || colon < stop) {
+			text = text[:start] + "<redacted>" + text[at:]
+			off = start + len("<redacted>") + 1
+		} else {
+			off = at + 1
+		}
+	}
+	return text
+}

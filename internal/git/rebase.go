@@ -209,7 +209,7 @@ func RebaseContinueQuiet() error {
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg != "" {
-			return fmt.Errorf("git rebase --continue: %s: %w", msg, err)
+			return fmt.Errorf("git rebase --continue: %s: %w", redactCredentials(msg), err)
 		}
 		return fmt.Errorf("git rebase --continue: %w", err)
 	}

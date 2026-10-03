@@ -65,7 +65,7 @@ func Worktrees() ([]Worktree, error) {
 		return parseWorktreesZ(stdout)
 	}
 	if !unsupportedWorktreeListZ(stderr, err) {
-		return nil, fmt.Errorf("git worktree list --porcelain -z: %s: %w", strings.TrimSpace(stderr), err)
+		return nil, fmt.Errorf("git worktree list --porcelain -z: %s: %w", redactCredentials(strings.TrimSpace(stderr)), err)
 	}
 	return worktreesLegacy()
 }

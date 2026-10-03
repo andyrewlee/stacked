@@ -30,7 +30,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 | 016 | fake↔shell conformance harness for the `stack.Git` port | P3 | M | — | DONE |
 | 017 | Share restack-skip gates plan↔apply; centralize remote resolution | P3 | S–M | — | DONE |
 | 018 | `.worktreeinclude` symlink-entry containment | P2 | M | — | REJECTED — preserves links verbatim by tested design; no copy-time target read |
-| 019 | Redact credential-shaped strings from git stderr in errors | P3 | S | — | TODO |
+| 019 | Redact credential-shaped strings from git stderr in errors | P3 | S | — | DONE |
 | 020 | `st log` ancestry batching, parallel probes, restack tip refresh | P3 | M | — | BLOCKED — narrow to measured independent probes; inference is sequential and rebase returns no OID |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
