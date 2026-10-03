@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"flag"
-	"fmt"
-
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
@@ -34,15 +31,11 @@ func runSync(args []string) error {
 	// `st submit` does instead of silently treating it as "no remote" and
 	// reporting success. A missing DEFAULT origin is still allowed: a repo with no
 	// remotes syncs locally (the fast-forward is skipped, prune+restack still run).
-	remoteExplicit := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "remote" {
-			remoteExplicit = true
-		}
-	})
 	p := newGitPort()
-	if remoteExplicit && !p.remoteExists(remote) {
-		return fmt.Errorf("remote %q does not exist", remote)
+	if explicitRemote(fs) {
+		if err := requireRemote(p, remote); err != nil {
+			return err
+		}
 	}
 
 	if dryRun {
@@ -53,7 +46,7 @@ func runSync(args []string) error {
 			// the already-fetched remote tip when one exists.
 			basis := "refs/heads/" + s.Trunk
 			if !noFetch {
-				basis = resolveTrunkRef(p, remote, s.Trunk)
+				basis, _ = resolveTrunkRef(p, remote, s.Trunk)
 			}
 			return stack.SyncPlanAgainst(env, s, noDelete, basis)
 		})
@@ -62,19 +55,4 @@ func runSync(args []string) error {
 	return mutate("sync", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Sync(env, git.RemoteShell{}, s, remote, noDelete, noFetch)
 	})
-}
-
-// resolveTrunkRef picks the ref a dry-run sync or an explicit-remote prune
-// measures "merged" against: the named remote's tracking ref for the trunk
-// when it exists (already fetched), else the local trunk branch. It shares
-// the caller's port so an earlier remoteExists check is not re-probed.
-func resolveTrunkRef(p *cachedPort, remote, trunk string) string {
-	trunkRef := "refs/heads/" + trunk
-	if p.remoteExists(remote) {
-		remoteRef := "refs/remotes/" + remote + "/" + trunk
-		if _, err := git.RevParse(remoteRef); err == nil {
-			trunkRef = remoteRef
-		}
-	}
-	return trunkRef
 }

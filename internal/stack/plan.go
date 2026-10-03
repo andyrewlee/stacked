@@ -283,10 +283,11 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	return nil
 }
 
-// wouldSkipWorktreeRestack mirrors restackInWorktree's gates for the dry-run
-// preview: a branch owned by another worktree is skipped when that worktree has
-// a rebase in progress (the second return) or a dirty tree — same order and
-// same conditions as the apply path so the preview predicts the real run.
+// wouldSkipWorktreeRestack answers restackInWorktree's skip question for the
+// dry-run preview: a branch owned by another worktree is skipped when that
+// worktree has a rebase in progress (the second return) or a dirty tree. The
+// gate itself is shared with the apply path (worktreeRestackDisposition), so
+// the preview predicts the real run by construction.
 func wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase bool, err error) {
 	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
 	if err != nil {
@@ -295,18 +296,7 @@ func wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase
 	if !elsewhere {
 		return false, false, nil
 	}
-	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
-	if err != nil {
-		return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	if inRebase {
-		return true, true, nil
-	}
-	clean, err := env.Git.IsCleanIn(owner.Path)
-	if err != nil {
-		return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	return !clean, false, nil
+	return worktreeRestackDisposition(env, owner, branch)
 }
 
 func restackPlanAgainstWithWorktrees(env Env, s *State, start string, tips map[string]string) (restackPreview, error) {
