@@ -279,10 +279,15 @@ message.
   touch the working tree. `undo <n>` rewinds the newest `n` journal entries
   newest-first with per-step atomicity: a refusal mid-sequence leaves the
   already-undone prefix in place (rerunning after fixing the cause is safe).
-- Concurrent `st` processes in one repo are serialized by an advisory lock (a
-  second one fails fast rather than corrupting state): flock on unix-like
-  platforms, an exclusive lock file elsewhere. A contender exits 5
-  (`"code": "locked"`). To have `st` itself wait instead of looping in your
+- Mutating commands, HEAD-moving navigation (`checkout <branch>`,
+  `up`, `down`, `top`, `bottom`), and `init` are serialized across `st`
+  processes by an advisory lock (a second one fails fast rather than
+  corrupting state): flock on unix-like platforms, an exclusive lock file
+  elsewhere. A contender exits 5 (`"code": "locked"`). Pure readers stay
+  available while the lock is held: bare `st checkout` (branch listing),
+  `status`, `log`, `validate`, and every `--dry-run` preview. Navigation
+  locks only through its own checkout — the lock releases when the process
+  exits, so it never pins your interactive shell. To have `st` itself wait instead of looping in your
   shell, set `ST_LOCK_WAIT` to a Go duration or bare seconds
   (`ST_LOCK_WAIT=10s` or `ST_LOCK_WAIT=10`) — acquisition is retried for up to
   that budget and exit 5 still means the lock never cleared. On non-flock

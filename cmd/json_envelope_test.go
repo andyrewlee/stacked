@@ -226,8 +226,10 @@ func TestJSONEnvelopeDirty(t *testing.T) {
 }
 
 // TestJSONEnvelopeLocked pins the lock-asymmetry contract: under a held repo
-// lock every mutating command exits 5 / "locked", while read-only commands —
-// status, log, validate, and the --dry-run previews — still succeed.
+// lock every mutating command — plus HEAD-moving navigation and init, which
+// join the lock protocol — exits 5 / "locked", while read-only commands —
+// status, log, validate, bare `st checkout`, and the --dry-run previews —
+// still succeed.
 func TestJSONEnvelopeLocked(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -254,6 +256,17 @@ func TestJSONEnvelopeLocked(t *testing.T) {
 		{"repair"},
 		{"worktree", "x"},
 		{"worktree", "rm", "x"},
+		{"init", "--trunk", "main"},
+		{"checkout", "feat-a"},
+		{"co", "feat-a"},
+		{"up"},
+		{"u"},
+		{"down"},
+		{"d"},
+		{"top"},
+		{"t"},
+		{"bottom"},
+		{"b"},
 	} {
 		requireErrorEnvelope(t, append(args, "--json"), "locked")
 	}
@@ -263,6 +276,7 @@ func TestJSONEnvelopeLocked(t *testing.T) {
 		{"status"},
 		{"log"},
 		{"validate"},
+		{"checkout"}, // bare checkout only lists; it never moves HEAD
 		{"restack", "--dry-run"},
 		{"fold", "--dry-run"},
 		{"sync", "--dry-run"},

@@ -23,10 +23,14 @@ func runTop(args []string) error {
 		return err
 	}
 
-	s, cur, err := loadStateAndCurrent()
+	// Navigation moves HEAD, so it takes the same repository lock mutations
+	// take: a concurrent cascade or a second navigator must not interleave
+	// with this move.
+	s, cur, release, err := lockAndLoadCurrent()
 	if err != nil {
 		return err
 	}
+	defer release()
 	if cur != s.Trunk && !s.IsTracked(cur) {
 		return fmt.Errorf("branch %q is not tracked by stacked", cur)
 	}

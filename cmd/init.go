@@ -38,6 +38,18 @@ func runInit(args []string) error {
 		return fmt.Errorf("not inside a git repository: %w", err)
 	}
 
+	// Init is a check-then-create: without the lock two concurrent `st init`s
+	// (or an init racing a mutator) could both pass the not-initialized check
+	// and one would overwrite metadata the other already began using. Lock
+	// before Load so the existing-state observation and the Init write are one
+	// critical section — not lockAndLoad, since an uninitialized repo is the
+	// successful input here.
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	// If already initialized, report the existing trunk rather than erroring out
 	// with a low-level message.
 	if existing, err := stack.Load(); err == nil {
