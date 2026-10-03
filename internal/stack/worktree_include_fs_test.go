@@ -200,6 +200,45 @@ func TestPrepareIncludeDestinationRejectsSymlinkedParent(t *testing.T) {
 	}
 }
 
+// A dangling symlinked parent fails the EvalSymlinks probe — the error
+// surfaces rather than being treated as a safe destination.
+func TestPrepareIncludeDestinationDanglingSymlinkParent(t *testing.T) {
+	t.Parallel()
+	dst := t.TempDir()
+	if err := os.Symlink(filepath.Join(dst, "gone"), filepath.Join(dst, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := PrepareIncludeDestination(dst, "link/f.txt"); err == nil {
+		t.Fatal("PrepareIncludeDestination accepted a dangling-symlink parent")
+	}
+}
+
+// A symlinked parent that resolves INSIDE the worktree but to a regular file
+// is not a usable destination directory — os.Stat follows the link, so the
+// not-a-directory refusal must fire on the resolved target.
+func TestPrepareIncludeDestinationSymlinkToRegularFile(t *testing.T) {
+	t.Parallel()
+	dst := t.TempDir()
+	writeFile(t, dst, "real.txt")
+	if err := os.Symlink(filepath.Join(dst, "real.txt"), filepath.Join(dst, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := PrepareIncludeDestination(dst, "link/f.txt"); err == nil {
+		t.Fatal("PrepareIncludeDestination accepted a symlink resolving to a regular file")
+	}
+}
+
+// A regular file sitting where a parent directory is needed is refused by the
+// plain not-a-directory arm (no symlink involved).
+func TestPrepareIncludeDestinationRegularFileParent(t *testing.T) {
+	t.Parallel()
+	dst := t.TempDir()
+	writeFile(t, dst, "plain.txt")
+	if _, err := PrepareIncludeDestination(dst, "plain.txt/f.txt"); err == nil {
+		t.Fatal("PrepareIncludeDestination accepted a regular file as a parent directory")
+	}
+}
+
 func TestRejectDestinationSymlink(t *testing.T) {
 	t.Parallel()
 	dst := t.TempDir()
