@@ -7,6 +7,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -26,28 +27,125 @@ func loadState() (*stack.State, error) {
 	return s, nil
 }
 
-// gitShell is the production git port used by the stack engine: the real
-// git.Shell wrapped in cachedPort, which routes Worktrees() through the
+// newGitPort builds the production git port used by the stack engine: the
+// real git.Shell wrapped in cachedPort, which routes Worktrees() through the
 // per-process cache (worktrees()) so the cross-worktree restack cascade,
 // resolving branch ownership once per branch, spawns `git worktree list` at
 // most once — the same memoization the read/navigation commands get.
-var gitShell stack.Git = cachedPort{Git: git.Shell{}}
+//
+// Each call returns a fresh port: the per-instance CurrentBranch memo dies
+// with it, so a memoized answer can never outlive the command (Env, probe
+// bundle, or one-off read) it was built for. Sharing one port across commands
+// would let a stale branch name survive an out-of-port HEAD move.
+func newGitPort() *cachedPort { return &cachedPort{Git: git.Shell{}} }
 
-// cachedPort decorates any stack.Git with a cached Worktrees(); every other
-// method is inherited unchanged, except the worktree/HEAD MUTATIONS, which must
-// invalidate that cache so any later worktrees() read reflects the new
-// topology.
-type cachedPort struct{ stack.Git }
+// cachedPort decorates any stack.Git with a cached Worktrees() plus per-
+// instance CurrentBranch and RepoRoot memos; every other method is inherited
+// unchanged, except the worktree/HEAD MUTATIONS, which must invalidate the
+// memos so a later read reflects the new topology. The memos are per
+// instance (see newGitPort): the engine's snapshot/restore and worktree-
+// removal paths ask both questions several times per command, and the memo
+// keeps that to one spawn per port.
+type cachedPort struct {
+	stack.Git
+	mu      sync.Mutex
+	curSet  bool
+	cur     string
+	curErr  error
+	rootSet bool
+	root    string
+	rootErr error
+	remotes map[string]remoteURLEntry
+}
 
-func (cachedPort) Worktrees() ([]git.Worktree, error) { return worktrees() }
+type remoteURLEntry struct {
+	url string
+	err error
+}
+
+func (*cachedPort) Worktrees() ([]git.Worktree, error) { return worktrees() }
+
+// CurrentBranch memoizes the first answer for this port's lifetime. The
+// error is memoized too (a detached HEAD keeps reporting
+// git.ErrDetachedHEAD) — both are cleared by resetMemos, which every
+// HEAD-moving wrapper below runs after its git call.
+func (c *cachedPort) CurrentBranch() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.curSet {
+		c.cur, c.curErr = c.Git.CurrentBranch()
+		c.curSet = true
+	}
+	return c.cur, c.curErr
+}
+
+// RepoRoot memoizes the current worktree's root for this port's lifetime:
+// the answer cannot change while a port lives (cwd only moves off-port, in
+// prepareUndoCreatedWorktrees' chdir — and the undo loop builds its ports
+// after that move). Worktree-removal loops call it once per candidate via
+// CwdWithinWorktree; the memo turns that into a single probe.
+func (c *cachedPort) RepoRoot() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.rootSet {
+		c.root, c.rootErr = c.Git.RepoRoot()
+		c.rootSet = true
+	}
+	return c.root, c.rootErr
+}
+
+// resetMemos drops this port's memoized answers. The mutating wrappers call
+// it alongside resetProcCaches: those ops can leave a different branch (or
+// a detached/paused HEAD) checked out — or a different worktree set — than
+// the memos recorded.
+func (c *cachedPort) resetMemos() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.curSet = false
+	c.cur = ""
+	c.curErr = nil
+	c.rootSet = false
+	c.root = ""
+	c.rootErr = nil
+}
+
+// remoteURL returns the named remote's fetch URL, probing `git remote
+// get-url` at most once per remote per port. The two questions commands ask
+// of a remote — does it exist, and what is its URL — run the same
+// subprocess (git.RemoteExists is get-url's exit code, git.RemoteURL its
+// output), so one port asking both folds them into a single spawn. The memo
+// lives on the port: it cannot leak a stale "does not exist" into the next
+// command the way a process-scoped map could when remote configuration
+// changes outside the port.
+func (c *cachedPort) remoteURL(name string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.remotes[name]; ok {
+		return e.url, e.err
+	}
+	url, err := git.RemoteURL(name)
+	if c.remotes == nil {
+		c.remotes = map[string]remoteURLEntry{}
+	}
+	c.remotes[name] = remoteURLEntry{url: url, err: err}
+	return url, err
+}
+
+// remoteExists reports whether the named remote exists — the success of the
+// same get-url probe remoteURL memoizes, so an exists+URL pair spawns once.
+func (c *cachedPort) remoteExists(name string) bool {
+	_, err := c.remoteURL(name)
+	return err == nil
+}
 
 // WorktreeRemove routes the engine-driven worktree removal through the cache
 // invalidation. The cache is reset even when the removal fails: a failed git
 // worktree command can still have changed registration state, and a spare
 // re-list is cheap.
-func (c cachedPort) WorktreeRemove(dir string, force bool) error {
+func (c *cachedPort) WorktreeRemove(dir string, force bool) error {
 	err := c.Git.WorktreeRemove(dir, force)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
@@ -56,25 +154,28 @@ func (c cachedPort) WorktreeRemove(dir string, force bool) error {
 // later worktrees() read (e.g. sync's prune step after detaching HEAD) sees the
 // stale pre-checkout ownership and can remove the wrong worktree. Reset even on
 // error: a partial checkout can still have moved HEAD, and a re-list is cheap.
-func (c cachedPort) Checkout(name string) error {
+func (c *cachedPort) Checkout(name string) error {
 	err := c.Git.Checkout(name)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
-func (c cachedPort) CheckoutDetach(ref string) error {
+func (c *cachedPort) CheckoutDetach(ref string) error {
 	err := c.Git.CheckoutDetach(ref)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
 // RenameBranch retargets any worktree HEAD that had the old name checked out
-// (git branch -m), so cached ownership is stale after it — invalidate like
-// Checkout. Dormant today (no in-process reader follows a rename), but the
-// cache comment promises every ownership-changing op invalidates.
-func (c cachedPort) RenameBranch(oldName, newName string) error {
+// (git branch -m), so cached ownership — and, if HEAD named the renamed
+// branch, the memoized current-branch answer — is stale after it: invalidate
+// like Checkout.
+func (c *cachedPort) RenameBranch(oldName, newName string) error {
 	err := c.Git.RenameBranch(oldName, newName)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
@@ -83,33 +184,38 @@ func (c cachedPort) RenameBranch(oldName, newName string) error {
 // than the cached list recorded. A rebase that fails mid-run can also have
 // already switched HEAD, so every wrapper invalidates on error as well as
 // success, exactly like Checkout.
-func (c cachedPort) RebaseOnto(newBase, oldBase, branch string) error {
+func (c *cachedPort) RebaseOnto(newBase, oldBase, branch string) error {
 	err := c.Git.RebaseOnto(newBase, oldBase, branch)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
-func (c cachedPort) RebaseOntoIn(dir, newBase, oldBase, branch string) error {
+func (c *cachedPort) RebaseOntoIn(dir, newBase, oldBase, branch string) error {
 	err := c.Git.RebaseOntoIn(dir, newBase, oldBase, branch)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
-func (c cachedPort) RebaseContinue() error {
+func (c *cachedPort) RebaseContinue() error {
 	err := c.Git.RebaseContinue()
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
-func (c cachedPort) RebaseAbort() error {
+func (c *cachedPort) RebaseAbort() error {
 	err := c.Git.RebaseAbort()
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
-func (c cachedPort) RebaseAbortIn(dir string) error {
+func (c *cachedPort) RebaseAbortIn(dir string) error {
 	err := c.Git.RebaseAbortIn(dir)
-	resetWorktreeCache()
+	c.resetMemos()
+	resetProcCaches()
 	return err
 }
 
@@ -118,14 +224,15 @@ func (c cachedPort) RebaseAbortIn(dir string) error {
 // corrupt the payload — so the swap never depends on the plain-mode port's
 // concrete type.
 func stackEnv(s *stack.State, asJSON bool) stack.Env {
-	g := gitShell
+	var g stack.Git = newGitPort()
 	if asJSON {
-		g = cachedPort{Git: git.QuietShell{}}
+		g = &cachedPort{Git: git.QuietShell{}}
 	}
 	return stack.Env{Git: g, Save: s.Save}
 }
 
 // currentBranch returns the name of the currently checked-out branch.
-func currentBranch() (string, error) {
-	return git.CurrentBranch()
-}
+// Detached HEAD is reported via git.ErrDetachedHEAD like the underlying
+// probe. Each command asks this at most once, so unlike the engine's
+// repeated port reads it needs no memo.
+func currentBranch() (string, error) { return git.CurrentBranch() }

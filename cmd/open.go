@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -73,11 +72,12 @@ func runOpen(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !git.RemoteExists(o.remote) {
+	p := newGitPort()
+	if !p.remoteExists(o.remote) {
 		return fmt.Errorf("remote %q does not exist", o.remote)
 	}
 	repoURL, host := "", ""
-	if raw, err := git.RemoteURL(o.remote); err == nil {
+	if raw, err := p.remoteURL(o.remote); err == nil {
 		repoURL, host = stack.RemoteToHTTPS(raw)
 	}
 

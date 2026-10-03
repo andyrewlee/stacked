@@ -146,7 +146,7 @@ func runUndoApply(asJSON bool, n int, force bool) error {
 	var notes []string
 	for i := 0; i < n; i++ {
 		e := &entries[len(entries)-1-i]
-		env := stack.Env{Git: gitShell}
+		env := stack.Env{Git: newGitPort()}
 		if s != nil {
 			env.Save = s.Save
 		} else {
@@ -318,6 +318,12 @@ func prepareUndoCreatedWorktrees(entries []stack.UndoEntry, live *stack.State) (
 	if err := os.Chdir(main.Path); err != nil {
 		return "", fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
 	}
+	// The process's cwd moved worktrees: the worktree list itself did not
+	// change, but worktree paths and HEAD now read relative to the main
+	// worktree — drop the memoized list so any later read re-lists (the
+	// per-port CurrentBranch/RepoRoot memos do not need this: the undo loop
+	// builds fresh ports after this move).
+	resetProcCaches()
 	if inProgress, err := git.RebaseInProgress(); err != nil {
 		return "", err
 	} else if inProgress {
@@ -405,10 +411,11 @@ func runUndoDryRun(asJSON bool, n int) error {
 	// The readings every step's plan needs — rebase flag, live tips, HEAD's
 	// branch — are step-invariant: a real run changes them only by undoing,
 	// which the preview already documents it does not model. Read once.
-	probes := stack.ReadUndoProbes(gitShell)
+	p := newGitPort()
+	probes := stack.ReadUndoProbes(p)
 	for i := 0; i < n; i++ {
 		e := &entries[len(entries)-1-i]
-		res, err := stack.UndoPreview(stack.Env{Git: gitShell}, si, e, shimActive(), i+1, probes)
+		res, err := stack.UndoPreview(stack.Env{Git: p}, si, e, shimActive(), i+1, probes)
 		if err != nil {
 			return err
 		}

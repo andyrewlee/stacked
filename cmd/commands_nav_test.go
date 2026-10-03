@@ -91,7 +91,7 @@ func TestUpToLeafInWorktreeTeleports(t *testing.T) {
 	// Give feat-b its own linked worktree. The in-place checkouts above bypass
 	// the cached port, so drop the memoized worktree list first.
 	mustCheckout(t, "feat-a")
-	resetWorktreeCache()
+	resetProcCaches()
 	var wt struct {
 		Branch  string   `json:"branch"`
 		Path    string   `json:"path"`

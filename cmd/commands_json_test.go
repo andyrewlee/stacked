@@ -532,7 +532,7 @@ func TestLogJSONDoesNotAnnotateMainWorktreeBranch(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "tracked subject")
 	linkedMain := filepath.Join(t.TempDir(), "main-wt")
 	mustRun(t, "git", "worktree", "add", "-q", linkedMain, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	jsonOut := captureStdout(t, func() {
 		if err := runLog([]string{"--json"}); err != nil {
@@ -803,7 +803,7 @@ func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
 	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	type worktreeCreateJSON struct {
 		Branch  string   `json:"branch"`
@@ -820,7 +820,7 @@ func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
 	var created worktreeCreateJSON
 	decodeStrictJSON(t, "worktree create --json", createOut, &created)
 	t.Cleanup(func() {
-		resetWorktreeCache()
+		resetProcCaches()
 		_ = runWorktree([]string{"rm", "feat-a"})
 	})
 	if created.Branch != "feat-a" || created.Path == "" || created.Summary != "created worktree" {
@@ -830,7 +830,7 @@ func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
 		t.Fatalf("worktree create copied = %v, want %v", created.Copied, want)
 	}
 
-	resetWorktreeCache()
+	resetProcCaches()
 	listOut := captureStdout(t, func() {
 		if err := runWorktree([]string{"ls", "--json"}); err != nil {
 			t.Fatalf("worktree ls --json: %v", err)
@@ -873,7 +873,7 @@ func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
 		t.Fatalf("feat-a worktree path = %q, want %q", listedFeatPath, created.Path)
 	}
 
-	resetWorktreeCache()
+	resetProcCaches()
 	type worktreeRemoveJSON struct {
 		Branch  string `json:"branch"`
 		Removed string `json:"removed"`
@@ -1579,21 +1579,21 @@ func TestGuideDoesNotReferenceMissingDocs(t *testing.T) {
 }
 
 func TestJSONStackEnvUsesQuietGit(t *testing.T) {
-	orig := gitShell
-	gitShell = cachedPort{Git: git.Shell{}}
-	defer func() { gitShell = orig }()
-
 	// JSON mode swaps the production port for its quiet variant (so rebase chatter
 	// cannot corrupt the payload); both keep the cached Worktrees() override.
-	jsonGit, ok := stackEnv(&stack.State{}, true).Git.(cachedPort)
+	jsonGit, ok := stackEnv(&stack.State{}, true).Git.(*cachedPort)
 	if !ok {
 		t.Fatal("JSON stack env did not use the cached port")
 	}
 	if _, ok := jsonGit.Git.(git.QuietShell); !ok {
 		t.Fatalf("JSON cached port wraps %T, want git.QuietShell", jsonGit.Git)
 	}
-	if _, ok := stackEnv(&stack.State{}, false).Git.(cachedPort); !ok {
+	plainGit, ok := stackEnv(&stack.State{}, false).Git.(*cachedPort)
+	if !ok {
 		t.Fatal("text stack env did not use the cached port")
+	}
+	if _, ok := plainGit.Git.(git.Shell); !ok {
+		t.Fatalf("text cached port wraps %T, want git.Shell", plainGit.Git)
 	}
 }
 
@@ -1680,7 +1680,7 @@ func TestDeleteJSONRemovesOwnedWorktree(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCheckout(t, "main")
-	resetWorktreeCache() // the in-place checkout bypassed the cached port
+	resetProcCaches() // the in-place checkout bypassed the cached port
 
 	var wt struct {
 		Branch  string   `json:"branch"`
@@ -1918,7 +1918,7 @@ func TestWorktreeAllJSONAggregateAndIdempotency(t *testing.T) {
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	type allResult struct {
 		Created []struct {
@@ -1980,7 +1980,7 @@ func TestWorktreeAllSkipsCurrentBranch(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCheckout(t, "feat-a")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	type allResult struct {
 		Created []struct {
@@ -2023,7 +2023,7 @@ func TestWorktreeAllPartialFailureJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 
 	// Occupy feat-b's computed worktree path with a FILE so `git worktree add`
 	// fails for it while feat-a succeeds.
@@ -2090,7 +2090,7 @@ func TestWorktreeRemoveAllHardFailure(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"--all"}); err != nil {
 		t.Fatalf("worktree --all: %v", err)
 	}
@@ -2153,7 +2153,7 @@ func TestWorktreeRemoveAllJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"--all"}); err != nil {
 		t.Fatalf("worktree --all: %v", err)
 	}
@@ -2204,7 +2204,7 @@ func TestWorktreeRemoveAllSkipsDirty(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"--all"}); err != nil {
 		t.Fatalf("worktree --all: %v", err)
 	}
@@ -2275,7 +2275,7 @@ func TestWorktreeRemoveAllIdempotent(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"--all"}); err != nil {
 		t.Fatalf("worktree --all: %v", err)
 	}

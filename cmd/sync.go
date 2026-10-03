@@ -40,7 +40,8 @@ func runSync(args []string) error {
 			remoteExplicit = true
 		}
 	})
-	if remoteExplicit && !git.RemoteExists(remote) {
+	p := newGitPort()
+	if remoteExplicit && !p.remoteExists(remote) {
 		return fmt.Errorf("remote %q does not exist", remote)
 	}
 
@@ -52,7 +53,7 @@ func runSync(args []string) error {
 			// the already-fetched remote tip when one exists.
 			basis := "refs/heads/" + s.Trunk
 			if !noFetch {
-				basis = resolveTrunkRef(remote, s.Trunk)
+				basis = resolveTrunkRef(p, remote, s.Trunk)
 			}
 			return stack.SyncPlanAgainst(env, s, noDelete, basis)
 		})
@@ -65,10 +66,11 @@ func runSync(args []string) error {
 
 // resolveTrunkRef picks the ref a dry-run sync or an explicit-remote prune
 // measures "merged" against: the named remote's tracking ref for the trunk
-// when it exists (already fetched), else the local trunk branch.
-func resolveTrunkRef(remote, trunk string) string {
+// when it exists (already fetched), else the local trunk branch. It shares
+// the caller's port so an earlier remoteExists check is not re-probed.
+func resolveTrunkRef(p *cachedPort, remote, trunk string) string {
 	trunkRef := "refs/heads/" + trunk
-	if git.RemoteExists(remote) {
+	if p.remoteExists(remote) {
 		remoteRef := "refs/remotes/" + remote + "/" + trunk
 		if _, err := git.RevParse(remoteRef); err == nil {
 			trunkRef = remoteRef

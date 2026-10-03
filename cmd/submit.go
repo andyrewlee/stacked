@@ -77,7 +77,8 @@ func runSubmit(args []string) error {
 		return err
 	}
 
-	if !git.RemoteExists(remote) {
+	p := newGitPort()
+	if !p.remoteExists(remote) {
 		return fmt.Errorf("remote %q does not exist", remote)
 	}
 
@@ -151,7 +152,7 @@ func runSubmit(args []string) error {
 	// so the user can open pull requests on their host by hand.
 	repoURL := ""
 	host := ""
-	if raw, err := git.RemoteURL(remote); err == nil {
+	if raw, err := p.remoteURL(remote); err == nil {
 		repoURL, host = stack.RemoteToHTTPS(raw)
 	}
 	prHints := stack.PRHintsFor(state, stackBranches, repoURL, host)

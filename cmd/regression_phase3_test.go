@@ -30,7 +30,7 @@ func TestWorktreeRemoveMainWorktreeFriendly(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "feat", "f.txt", "x\n", "feat") // leaves HEAD on feat in the main worktree
-	resetWorktreeCache()
+	resetProcCaches()
 	err := runWorktree([]string{"rm", "feat"})
 	errContains(t, err, "checked out in the main worktree, not a separate one")
 	if strings.Contains(err.Error(), "is a main working tree") {
@@ -44,7 +44,7 @@ func TestWorktreeAddCurrentBranchFriendly(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "feat", "f.txt", "x\n", "feat")
-	resetWorktreeCache()
+	resetProcCaches()
 	err := runWorktree([]string{"feat"})
 	errContains(t, err, "checked out in the main worktree")
 	if strings.Contains(err.Error(), "already exists") {
@@ -113,7 +113,7 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat", "f.txt", "x\n", "feat")
 	mustRun(t, "git", "checkout", "-q", "main")
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"feat"}); err != nil {
 		t.Fatalf("worktree feat: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 	if _, err := worktrees(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (cachedPort{Git: git.Shell{}}).RenameBranch("feat", "feat-renamed"); err != nil {
+	if err := (&cachedPort{Git: git.Shell{}}).RenameBranch("feat", "feat-renamed"); err != nil {
 		t.Fatalf("RenameBranch: %v", err)
 	}
 	wts, err := worktrees()
@@ -137,7 +137,7 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 
 	// The quiet (JSON-mode) port carries the same override: rename back
 	// through it and assert the cache refreshes again.
-	if err := (cachedPort{Git: git.QuietShell{}}).RenameBranch("feat-renamed", "feat"); err != nil {
+	if err := (&cachedPort{Git: git.QuietShell{}}).RenameBranch("feat-renamed", "feat"); err != nil {
 		t.Fatalf("quiet RenameBranch: %v", err)
 	}
 	wts, err = worktrees()

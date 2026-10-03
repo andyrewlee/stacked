@@ -186,7 +186,7 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 	if addErr != nil {
 		// Invalidate even on error: a failed add can still have changed
 		// registration state, and a spare re-list is cheap.
-		resetWorktreeCache()
+		resetProcCaches()
 		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, addErr)
 	}
 	// The new worktree's identity is fully known — append it to the cache so
@@ -197,7 +197,7 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
 		removeErr := git.WorktreeRemove(path, true)
-		resetWorktreeCache()
+		resetProcCaches()
 		if removeErr != nil {
 			return materializedWorktree{}, stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
 		}
@@ -226,7 +226,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 		// lookup misses it. Resolve via the head-name probe before answering
 		// "no worktree": rm must refuse a mid-rebase worktree, not deny it
 		// exists.
-		paused, perr := stack.PausedRebaseOwners(gitShell, wts)
+		paused, perr := stack.PausedRebaseOwners(newGitPort(), wts)
 		if perr != nil {
 			return perr
 		}
@@ -246,7 +246,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	// Removing the worktree the caller is standing in would delete this
 	// process's own cwd; a paused rebase inside the target would be destroyed
 	// with it. Both refuse up front rather than letting git fail partway.
-	if within, err := stack.CwdWithinWorktree(gitShell, wt.Path); err != nil {
+	if within, err := stack.CwdWithinWorktree(newGitPort(), wt.Path); err != nil {
 		return err
 	} else if within {
 		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
@@ -257,7 +257,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 		return fmt.Errorf("cannot remove worktree %q: a rebase is in progress there; finish or abort it first", wt.Path)
 	}
 	removeErr := git.WorktreeRemove(wt.Path, false)
-	resetWorktreeCache()
+	resetProcCaches()
 	if removeErr != nil {
 		return fmt.Errorf("removing worktree for %q: %w", branch, removeErr)
 	}
@@ -340,12 +340,15 @@ func worktreeRemoveAll(asJSON bool) error {
 	// Worktrees paused mid-rebase list as detached — LinkedOwnerOf cannot see
 	// their target branch, so resolve the pause set once up front and skip
 	// each paused branch by name rather than reporting "no worktree".
-	paused, perr := stack.PausedRebaseOwners(gitShell, wts)
+	paused, perr := stack.PausedRebaseOwners(newGitPort(), wts)
 	if perr != nil {
 		return perr
 	}
 
 	result := worktreeRemoveAllResult{Removed: []worktreeRemovedEntry{}}
+	// One port for the loop so its RepoRoot memo turns the per-candidate
+	// cwd checks into a single probe.
+	p := newGitPort()
 	for _, name := range names {
 		if name == mainBranch {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
@@ -361,7 +364,7 @@ func worktreeRemoveAll(asJSON bool) error {
 		// Never remove the worktree the caller is standing in (it would delete
 		// the process's cwd) or one holding a paused rebase — both are skips,
 		// like the dirty check, not hard failures.
-		if within, err := stack.CwdWithinWorktree(gitShell, wt.Path); err != nil {
+		if within, err := stack.CwdWithinWorktree(p, wt.Path); err != nil {
 			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
 			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
 		} else if within {
@@ -387,7 +390,7 @@ func worktreeRemoveAll(asJSON bool) error {
 			continue
 		}
 		removeErr := git.WorktreeRemove(wt.Path, false)
-		resetWorktreeCache()
+		resetProcCaches()
 		if removeErr != nil {
 			result.Failed = &worktreeAllFailure{Branch: name, Error: removeErr.Error()}
 			return bulkWorktreeFailure(asJSON, result, "removing worktree for", name, "removed", len(result.Removed), len(names), removeErr)

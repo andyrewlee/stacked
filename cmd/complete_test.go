@@ -207,12 +207,12 @@ func TestCompleteWorktree(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 	mustCheckout(t, "main")
-	resetWorktreeCache()
+	resetProcCaches()
 	if err := runWorktree([]string{"feat-b"}); err != nil {
 		t.Fatalf("worktree feat-b: %v", err)
 	}
 	t.Cleanup(func() {
-		resetWorktreeCache()
+		resetProcCaches()
 		_ = runWorktree([]string{"rm", "feat-b"})
 	})
 
@@ -303,7 +303,7 @@ func TestCompleteSilentFailures(t *testing.T) {
 	t.Run("no repository", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Chdir(dir)
-		resetWorktreeCache()
+		resetProcCaches()
 		out, err := runComplete(t, "checkout", "0", "--")
 		if err != nil || out != "" {
 			t.Fatalf("no-repo __complete = %q, %v — want empty/nil", out, err)

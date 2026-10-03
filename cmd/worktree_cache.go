@@ -7,31 +7,37 @@ import (
 	"github.com/andyrewlee/stacked/internal/git"
 )
 
-// worktreeCacheState memoizes `git worktree list --porcelain` for the
-// lifetime of one st invocation. Worktrees() is consulted by nearly every
-// read/navigation command — st log and st status annotate branches with where
-// they live, the teleport path looks up a branch's owner, and the
-// cross-worktree restack cascade resolves ownership per branch — so an
-// unmemoized probe spawns the same git subprocess many times in a single
+// The process-scoped git memo: `git worktree list --porcelain`, cached for
+// the lifetime of one st invocation. Worktrees() is consulted by nearly
+// every read/navigation command — st log and st status annotate branches
+// with where they live, the teleport path looks up a branch's owner, and the
+// cross-worktree restack cascade resolves ownership per branch — so
+// unmemoized probes spawn the same git subprocesses many times in a single
 // command. The cache stays correct because every worktree-mutating AND
-// HEAD-moving site invalidates it via resetWorktreeCache(): the cached port's
+// HEAD-moving site invalidates it via resetProcCaches(): the cached port's
 // WorktreeRemove/Checkout/CheckoutDetach/RenameBranch overrides
 // (cmd/gitenv.go) cover engine-driven removals and checkouts, and its
 // RebaseOnto/RebaseOntoIn/RebaseContinue/RebaseAbort/RebaseAbortIn overrides
 // cover rebase-driven HEAD moves (a rebase attempt — even one that errors —
 // can leave a different branch checked out in a worktree). The cmd layer's
-// direct git.WorktreeRemove and git.Checkout calls reset explicitly. The one surgical
-// exception is noteWorktreeAdded: a worktree the process just created is fully
-// described by the {Path, Branch} it asked git for, so `st worktree --all` —
-// which lists once per add otherwise — appends the known entry instead of
-// re-listing. worktrees() may therefore be called at ANY point in a command
-// and reflects the live worktree topology. New worktree-mutating or
-// HEAD-moving code must either go through the cached port, call
-// resetWorktreeCache(), or append what it knows via noteWorktreeAdded.
+// direct git.WorktreeRemove and git.Checkout calls reset explicitly, and so
+// does the one off-port HEAD move: prepareUndoCreatedWorktrees' os.Chdir into
+// the main worktree. The one surgical exception is noteWorktreeAdded: a
+// worktree the process just created is fully described by the {Path, Branch}
+// it asked git for, so `st worktree --all` — which lists once per add
+// otherwise — appends the known entry instead of re-listing. worktrees() may
+// therefore be called at ANY point in a command and reflects the live
+// worktree topology. New worktree-mutating or HEAD-moving code must either
+// go through the cached port, call resetProcCaches(), or append what it
+// knows via noteWorktreeAdded.
+//
+// CurrentBranch is NOT memoized here: its memo lives per cachedPort instance
+// (cmd/gitenv.go) so a stale branch name cannot outlive the port a command
+// was built on, no matter what moves HEAD outside the port.
 //
 // The state lives behind mutexed package vars so the test binary — which runs
 // many commands against different temp repos in one process — can reset it
-// between repos (resetWorktreeCache, called by the test harness).
+// between repos (resetProcCaches, called by the test harness).
 var worktreeCacheState = struct {
 	sync.Mutex
 	probed bool
@@ -82,11 +88,11 @@ func noteWorktreeAdded(path, branch string) {
 	worktreeCacheState.wts = wts
 }
 
-// resetWorktreeCache discards the memoized worktree list so the next
-// worktrees() call re-probes git. Every worktree-mutating call site
-// invalidates through it (except the appendable add); the test harness also
-// calls it when it chdirs into a fresh repo.
-func resetWorktreeCache() {
+// resetProcCaches discards the process-scoped git memo — the worktree
+// list — so the next worktrees() call re-lists. Every worktree-mutating or
+// HEAD-moving call site invalidates through it (except the appendable add);
+// the test harness also calls it when it chdirs into a fresh repo.
+func resetProcCaches() {
 	worktreeCacheState.Lock()
 	defer worktreeCacheState.Unlock()
 	worktreeCacheState.probed = false

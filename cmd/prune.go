@@ -46,7 +46,7 @@ func runPrune(args []string) error {
 		}
 	})
 	if remoteExplicit {
-		if !git.RemoteExists(remote) {
+		if !newGitPort().remoteExists(remote) {
 			return fmt.Errorf("remote %q does not exist", remote)
 		}
 		remoteRef := "refs/remotes/" + remote + "/" + s.Trunk
