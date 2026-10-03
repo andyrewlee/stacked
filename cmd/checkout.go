@@ -35,49 +35,59 @@ func runCheckout(args []string) error {
 		return err
 	}
 
-	s, err := loadState()
-	if err != nil {
-		return err
-	}
-
 	rest := fs.Args()
 	if len(rest) > 1 {
 		return errors.New("checkout takes at most one branch name")
 	}
 
-	if len(rest) == 1 {
-		name := rest[0]
-		if name != s.Trunk && !s.IsTracked(name) {
-			return fmt.Errorf("%q is not a tracked branch", name)
-		}
-		dest, err := teleportCheckout(name)
+	// Bare `st checkout` only lists: it never moves HEAD, so it stays a
+	// read-only command that runs while another st holds the lock.
+	if len(rest) == 0 {
+		s, err := loadState()
 		if err != nil {
 			return err
 		}
-		// A teleport without the shim does NOT move the parent shell, so report it
-		// as not-switched and tell the user how to get there; with the shim (or an
-		// in-place checkout) the move really happened.
-		teleportedNoShim := dest != "" && !shimActive()
-		payload := struct {
-			Branch   string `json:"branch"`
-			Switched bool   `json:"switched"`
-			Worktree string `json:"worktree,omitempty"`
-		}{name, !teleportedNoShim, dest}
-		return emit(asJSON, payload, func() {
-			safeName := sanitizeForTerminal(name)
-			safeDest := sanitizeForTerminal(dest)
-			switch {
-			case teleportedNoShim:
-				out("%s\n", teleportHintForTerminal(name, dest))
-			case dest != "":
-				out("switched to %s (worktree: %s)\n", safeName, safeDest)
-			default:
-				out("switched to %s\n", safeName)
-			}
-		})
+		return listBranches(s, asJSON)
 	}
 
-	return listBranches(s, asJSON)
+	// A targeted checkout moves HEAD: hold the repository lock from the state
+	// read through the checkout so a concurrent mutation cannot redirect the
+	// move (and this move cannot land mid-mutation).
+	s, release, err := lockAndLoad()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	name := rest[0]
+	if name != s.Trunk && !s.IsTracked(name) {
+		return fmt.Errorf("%q is not a tracked branch", name)
+	}
+	dest, err := teleportCheckout(name)
+	if err != nil {
+		return err
+	}
+	// A teleport without the shim does NOT move the parent shell, so report it
+	// as not-switched and tell the user how to get there; with the shim (or an
+	// in-place checkout) the move really happened.
+	teleportedNoShim := dest != "" && !shimActive()
+	payload := struct {
+		Branch   string `json:"branch"`
+		Switched bool   `json:"switched"`
+		Worktree string `json:"worktree,omitempty"`
+	}{name, !teleportedNoShim, dest}
+	return emit(asJSON, payload, func() {
+		safeName := sanitizeForTerminal(name)
+		safeDest := sanitizeForTerminal(dest)
+		switch {
+		case teleportedNoShim:
+			out("%s\n", teleportHintForTerminal(name, dest))
+		case dest != "":
+			out("switched to %s (worktree: %s)\n", safeName, safeDest)
+		default:
+			out("switched to %s\n", safeName)
+		}
+	})
 }
 
 // listBranches renders the trunk plus every tracked branch, marking the current

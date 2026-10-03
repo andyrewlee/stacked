@@ -75,6 +75,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **Navigation and `st init` now hold the repository lock.** `st checkout
+  <branch>`, `up`, `down`, `top`, `bottom`, and `init` previously read state
+  and moved HEAD (or wrote initial metadata) unlocked, so a concurrent `st`
+  mutation could land mid-move — an amend hitting the branch HEAD was switched
+  to, or two initializers racing the check-then-create. These commands now
+  hold the lock from the state/current-branch read through the checkout (or
+  the init write), refusing with exit 5 (`"code": "locked"`) under contention.
+  Bare `st checkout` (branch listing), `status`, `log`, `validate`, and the
+  `--dry-run` previews remain lock-free.
 - **`st sync --no-fetch` no longer prunes against the cached remote ref.**
   Offline sync previously detected merged branches against
   `refs/remotes/<remote>/<trunk>` but restacked survivors onto the unchanged

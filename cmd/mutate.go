@@ -10,8 +10,10 @@ import (
 )
 
 // acquireLock takes the repository stack lock; the caller must defer the
-// returned release function. It serializes mutating commands across concurrent
-// st processes (a no-op on platforms without flock).
+// returned release function. It serializes commands across concurrent st
+// processes (flock on unix-like platforms; an exclusive lock file with
+// stale-owner reclamation elsewhere — internal/stack/lock_other.go,
+// lock_stale.go).
 func acquireLock() (func(), error) {
 	return stack.Lock()
 }
@@ -31,6 +33,25 @@ func lockAndLoad() (*stack.State, func(), error) {
 		return nil, nil, err
 	}
 	return s, release, nil
+}
+
+// lockAndLoadCurrent is the navigation counterpart of lockAndLoad: a command
+// that checks out a branch must hold the lock from the state/current-branch
+// read through the checkout, or a concurrent st command can move HEAD between
+// the read and the move — amending or creating on the wrong branch, or having
+// its own cascade race this checkout. The caller must defer release exactly
+// once; on any error the lock is already released.
+func lockAndLoadCurrent() (s *stack.State, cur string, release func(), err error) {
+	s, release, err = lockAndLoad()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	cur, err = currentBranch()
+	if err != nil {
+		release()
+		return nil, "", nil, err
+	}
+	return s, cur, release, nil
 }
 
 // mutateState runs a stack-mutating op under the repo lock with the undo-snapshot
