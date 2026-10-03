@@ -6,6 +6,8 @@ package stack
 import (
 	"fmt"
 	"strings"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // Delete removes a tracked branch, re-parents its children onto the deleted
@@ -429,7 +431,10 @@ func applyPrune(env Env, s *State, candidates []string) ([]string, error) {
 		}
 	}
 	// Checkpoint each deleted branch's untracking exactly as the per-branch
-	// loop did — the crash-recovery bound is unchanged.
+	// loop did — the crash-recovery bound is unchanged. One checkpoint costs
+	// ~10ms (fsync-bound, measured via atomicWriteFile bench on M1 Max):
+	// material, but unbatchable — the per-branch granularity is precisely
+	// what a mid-prune crash recovers from, so it stays.
 	for _, name := range candidates {
 		if !deletedSet[name] {
 			continue
@@ -464,15 +469,28 @@ func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list branches merged into %q: %w", trunkRef, err)
 	}
+	// The containment diffs are independent read-only probes — fan them out
+	// and fold the results back in sorted-name order, so the merged map and
+	// the first error are exactly what a serial pass would produce.
+	unmerged := make([]string, 0, len(s.Branches))
 	for _, name := range sortedBranchNames(s) {
-		if merged[name] {
-			continue
+		if !merged[name] {
+			unmerged = append(unmerged, name)
 		}
-		contained, err := g.ChangesContainedIn(trunkRef, branchTipRef(name))
+	}
+	contained := make([]bool, len(unmerged))
+	if err := git.ParallelProbes(len(unmerged), func(i int) error {
+		ok, err := g.ChangesContainedIn(trunkRef, branchTipRef(unmerged[i]))
 		if err != nil {
-			return nil, fmt.Errorf("check whether %q's changes are contained in %q: %w", name, trunkRef, err)
+			return fmt.Errorf("check whether %q's changes are contained in %q: %w", unmerged[i], trunkRef, err)
 		}
-		if contained {
+		contained[i] = ok
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for i, name := range unmerged {
+		if contained[i] {
 			merged[name] = true
 		}
 	}
