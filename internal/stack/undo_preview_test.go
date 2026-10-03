@@ -54,7 +54,7 @@ func TestUndoPreviewListsRestore(t *testing.T) {
 	liveTip := f.branches["feat-a"]
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestUndoPreviewDeletesCreatedWithWorktree(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestUndoPreviewFindsLiveOwnerWithoutRecordedWorktree(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestUndoPreviewDirtyCreatedWorktreeBlocker(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestUndoPreviewCwdInsideCreatedWorktree(t *testing.T) {
 	// HEAD stays on feat-x — the caller's worktree is the doomed one.
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestUndoPreviewCwdInsideCreatedWorktree(t *testing.T) {
 	}
 
 	// With the shim available the teleport succeeds — no blocker.
-	res2, err := UndoPreview(env, s, entry, true, 1)
+	res2, err := UndoPreview(env, s, entry, true, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview(canTeleport): %v", err)
 	}
@@ -236,7 +236,7 @@ func TestUndoPreviewCountsDriftAndMissingRef(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestUndoPreviewCountsDriftAndMissingRef(t *testing.T) {
 	// The branch is gone now: missing live ref → "unknown", not 0, not a
 	// blocker (undo restores the ref by name).
 	delete(f.branches, "feat-a")
-	res2, err := UndoPreview(env, s, entry, false, 1)
+	res2, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview missing ref: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	// Current state written by a newer st.
 	s.Version = stateSchemaVersion + 1
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	raw, _ := json.Marshal(doc)
 	future := *entry
 	future.State = raw
-	res, err = UndoPreview(env, s, &future, false, 1)
+	res, err = UndoPreview(env, s, &future, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview future snapshot: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestUndoPreviewSchemaBarriers(t *testing.T) {
 	// Malformed snapshot bytes: label is still readable from the journal.
 	bad := *entry
 	bad.State = json.RawMessage("{bad json\n")
-	res, err = UndoPreview(env, s, &bad, false, 1)
+	res, err = UndoPreview(env, s, &bad, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview malformed: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestUndoPreviewRebaseInProgressBlocker(t *testing.T) {
 	f.rebaseActive = true
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 	}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -369,8 +369,8 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 	if res.WouldDelete[0].Worktree != "/wt/actual" {
 		t.Fatalf("worktree = %q, want the live owner path", res.WouldDelete[0].Worktree)
 	}
-	// The mismatch replaces the dirty probe, matching removeCreatedWorktree's
-	// refusal order.
+	// The mismatch replaces the dirty probe — the plan refuses before
+	// checking cleanliness, the same order the removal gate enforces.
 	for _, b := range res.Blockers {
 		if strings.HasPrefix(b, "worktree_dirty:") {
 			t.Fatalf("mismatched branch must not also report dirty: %v", res.Blockers)
@@ -388,7 +388,7 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	entry.AbsorbedCommits = map[string]string{"feat-a": amended}
 
 	callsBefore := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestUndoPreviewRefMovedSince(t *testing.T) {
 	mustCheckout(t, f, "a")
 	f.amend("external work")
 
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestUndoPreviewRefMovedSince(t *testing.T) {
 
 	// Step-2+ previews do not compare live tips: a real run would restore the
 	// step-1 refs first, so drift there would be a ghost, not a blocker.
-	deeper, err := UndoPreview(env, s, entry, false, 2)
+	deeper, err := UndoPreview(env, s, entry, false, 2, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview step 2: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestUndoPreviewRefMovedSince(t *testing.T) {
 
 	// A legacy entry (no PostRefs) reports the unconditional restore note.
 	legacy := mustSnapshot(t, s, f, "modify")
-	res, err = UndoPreview(env, s, legacy, false, 1)
+	res, err = UndoPreview(env, s, legacy, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview legacy: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestUndoPreviewPausedRebase(t *testing.T) {
 	pinPostRefs(t, f, entry)
 	f.addPausedWorktree("/wt-a", "a")
 
-	res, err := UndoPreview(env, s, entry, false, 1)
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
@@ -492,5 +492,29 @@ func TestUndoPreviewPausedRebase(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("blockers = %v, want paused_rebase:a", res.Blockers)
+	}
+}
+
+// TestUndoPreviewSharedProbes pins the multi-step preview's probe hoist:
+// handed an UndoProbes snapshot, the preview consumes the step-invariant
+// readings (rebase flag, live tips, HEAD's branch) without re-probing the
+// port for them — each entry in `st undo <n> --dry-run` shares one read.
+func TestUndoPreviewSharedProbes(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	entry := mustSnapshot(t, s, f, "modify")
+
+	probes := ReadUndoProbes(f)
+	callsBefore := f.callsSnapshot()
+	if _, err := UndoPreview(env, s, entry, false, 1, probes); err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	for _, m := range []string{"Tips", "CurrentBranch", "RebaseInProgress"} {
+		if got := f.calls[m] - callsBefore[m]; got != 0 {
+			t.Fatalf("preview with shared probes re-probed %s %d time(s)", m, got)
+		}
 	}
 }

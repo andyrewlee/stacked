@@ -402,9 +402,13 @@ func runUndoDryRun(asJSON bool, n int) error {
 
 	previews := make([]*stack.UndoPreviewResult, 0, n)
 	si := s
+	// The readings every step's plan needs — rebase flag, live tips, HEAD's
+	// branch — are step-invariant: a real run changes them only by undoing,
+	// which the preview already documents it does not model. Read once.
+	probes := stack.ReadUndoProbes(gitShell)
 	for i := 0; i < n; i++ {
 		e := &entries[len(entries)-1-i]
-		res, err := stack.UndoPreview(stack.Env{Git: gitShell}, si, e, shimActive(), i+1)
+		res, err := stack.UndoPreview(stack.Env{Git: gitShell}, si, e, shimActive(), i+1, probes)
 		if err != nil {
 			return err
 		}

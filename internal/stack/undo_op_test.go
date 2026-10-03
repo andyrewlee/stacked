@@ -983,7 +983,7 @@ func TestUndoPreviewBatchesExistenceProbes(t *testing.T) {
 	entry.CreatedBranches = []string{"b", "c", "d"}
 
 	before := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, true, 1)
+	res, err := UndoPreview(env, s, entry, true, 1, nil)
 	if err != nil {
 		t.Fatalf("undo preview: %v", err)
 	}

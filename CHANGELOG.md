@@ -75,6 +75,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   All-or-nothing: any refusal or dirty target worktree leaves the whole plan
   unapplied.
 
+### Changed
+- **Undo apply and `undo --dry-run` now share one computation.** `planUndo`
+  (internal/stack/undo_plan.go) is the single source for gate ordering,
+  created-branch/worktree discovery, dirty and path-mismatch verdicts, and
+  the checkout-target prediction: `Undo` executes the plan, `UndoPreview`
+  renders it, so a new gate or created-resource kind lands once and the
+  preview can no longer drift from the apply it mirrors. The engine also
+  gates on a paused rebase itself (belt under cmd's earlier refusal), and a
+  multi-step `st undo <n> --dry-run` reads the step-invariant probes —
+  rebase flag, live tips, HEAD's branch — once instead of per entry. The
+  emitted `--json` payload is unchanged.
+
 ### Fixed
 - **The installer validates the tarball before trusting it.** `install.sh`
   now lists the archive and refuses any member that would write outside the
