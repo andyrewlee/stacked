@@ -18,19 +18,35 @@ PKGS="./cmd/...,./internal/..."
 
 unitdir="$(mktemp -d)"
 e2edir="$(mktemp -d)"
-trap 'rm -rf "$unitdir" "$e2edir"' EXIT
+unitlog="$(mktemp)"
+e2elog="$(mktemp)"
+trap 'rm -rf "$unitdir" "$e2edir" "$unitlog" "$e2elog"' EXIT
 
-echo "==> running unit/integration tests (race + coverage)"
+# The two legs are independent — disjoint covdata dirs, disjoint packages,
+# the e2e binary builds itself — so they run concurrently and their logs
+# replay in order instead of interleaving.
+echo "==> running unit/integration tests (race + coverage) and e2e in parallel"
 # The cmd package drives real git subprocesses and already sits near go
 # test's 10m default ceiling; a slow subprocess on a loaded box tips it over
 # into a timeout panic, not a hang. 20m leaves headroom without masking a
 # real wedge (a truly stuck test still trips the alarm).
 go test ./cmd/... ./internal/... \
 	-race -coverpkg="$PKGS" -count=1 -timeout 20m \
-	-args -test.gocoverdir="$unitdir"
+	-args -test.gocoverdir="$unitdir" >"$unitlog" 2>&1 &
+unitpid=$!
+GOCOVERDIR="$e2edir" go test ./e2e/... -count=1 -timeout 20m >"$e2elog" 2>&1 &
+e2epid=$!
 
-echo "==> running black-box e2e tests (coverage-instrumented binary)"
-GOCOVERDIR="$e2edir" go test ./e2e/... -count=1 -timeout 20m
+unitrc=0
+e2erc=0
+wait "$unitpid" || unitrc=$?
+wait "$e2epid" || e2erc=$?
+cat "$unitlog"
+cat "$e2elog"
+if [ "$unitrc" -ne 0 ] || [ "$e2erc" -ne 0 ]; then
+	echo "cover.sh: unit/integration leg exited $unitrc, e2e leg exited $e2erc" >&2
+	exit 1
+fi
 
 echo "==> merging coverage (in-process + e2e)"
 go tool covdata textfmt -i="$unitdir,$e2edir" -o=cover.out
@@ -56,7 +72,7 @@ echo "OK: total coverage ${TOTAL}% meets threshold ${THRESHOLD}% (in-process + e
 FUNC_MIN="${COVERAGE_FUNC_MIN:-50}"
 ALLOW="scripts/cover-allow.txt"
 allowpats="$(mktemp)"
-trap 'rm -rf "$unitdir" "$e2edir" "$allowpats"' EXIT
+trap 'rm -rf "$unitdir" "$e2edir" "$unitlog" "$e2elog" "$allowpats"' EXIT
 awk -F'\t+' '$1 !~ /^#/ && NF >= 2 { print $1 "\t" $2 }' "$ALLOW" >"$allowpats"
 fails="$(go tool cover -func=cover.out | awk -v min="$FUNC_MIN" '
 	$1 == "total:" { next }

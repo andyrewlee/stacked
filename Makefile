@@ -22,17 +22,27 @@ GIT_MIN_VERSION := 2.17
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci ci-checks build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
 
 # THE gate: there is no remote CI — this Makefile is the whole pipeline.
-# Fails fast, in order. The Go-toolchain-only steps (vet/vet-cross/build) run
-# before lint, so a missing or wrong golangci-lint never hides a compile/vet
-# failure; lint still precedes the slow `cover` step. `cover` runs the whole
-# suite once (race + combined in-process/e2e coverage), so ci does not run the
-# tests three times. check-install covers the installer legs (install.sh
-# syntax, goreleaser schema/asset parity, the minisign decision matrix); its
-# optional tools skip loudly unless CI_STRICT=1.
-ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools check-shell fmt-check vet vet-cross build lint cover check-install
+# The pin/tool checks run serially first (seconds each), then the read-only
+# quality legs run CONCURRENTLY via a recursive `$(MAKE) -j` — they share no
+# mutable state (fmt-check/vet/vet-cross read the tree, lint only reads), so
+# the parallel fan-out needs no caller flags. `build` is the only writer (the
+# `st` binary) and stays serial; `cover` then runs the whole suite once
+# (race + combined in-process/e2e coverage, its two legs also parallel), and
+# check-install closes with the installer legs (install.sh syntax, goreleaser
+# schema/asset parity, the minisign decision matrix); its optional tools skip
+# loudly unless CI_STRICT=1.
+ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools check-shell
+	$(MAKE) -j ci-checks
+	$(MAKE) build
+	$(MAKE) cover check-install
+
+# The read-only middle legs of ci, fanned out by the recursive `$(MAKE) -j`
+# above. Adding a leg here is only safe while it writes nothing — a leg that
+# produces an artifact belongs in the serial recipe.
+ci-checks: fmt-check vet vet-cross lint
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
