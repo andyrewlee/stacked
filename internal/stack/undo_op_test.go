@@ -189,6 +189,62 @@ func TestUndoCurrentCreatedBranchDetachesWhenParentCheckedOutElsewhere(t *testin
 	}
 }
 
+// The linked-owner probe, not the error's wording, must drive the detach: a
+// git rewording that drops every known phrase still recovers because the
+// worktree list itself says 'a' is held elsewhere.
+func TestUndoDetachesViaLinkedOwnerProbeNotWording(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.addWorktree("/wt/a", "a")
+	f.checkoutErr["a"] = errors.New("checkout refused") // no known phrase
+
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("undo left the created branch behind")
+	}
+	if f.head != "" || f.detachedAt == "" {
+		t.Fatalf("HEAD = (%q, %q) after probe-detected worktree block, want detached", f.head, f.detachedAt)
+	}
+}
+
+// A branch paused mid-rebase in a linked worktree lists as `detached`, so the
+// plain owner lookup misses it — the paused-rebase head-name probe must see
+// the hold just the same.
+func TestUndoDetachesViaPausedRebaseOwnerProbe(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := Create(env, s, "b", "c-b", true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.addPausedWorktree("/wt/a", "a")
+	f.checkoutErr["a"] = errors.New("checkout refused") // no known phrase
+
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("undo left the created branch behind")
+	}
+	if f.head != "" || f.detachedAt == "" {
+		t.Fatalf("HEAD = (%q, %q) after paused-rebase block, want detached", f.head, f.detachedAt)
+	}
+}
+
 func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -205,7 +261,11 @@ func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 	if err := f.Checkout("main"); err != nil {
 		t.Fatal(err)
 	}
-	f.checkoutErr["a"] = errors.New("fatal: 'a' is already checked out at '/wt/a'")
+	// The linked-owner probe, not the message, recovers the final checkout:
+	// 'a' is held by another worktree and the refusal's wording is one git
+	// never emitted.
+	f.addWorktree("/wt/a", "a")
+	f.checkoutErr["a"] = errors.New("checkout refused")
 
 	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)

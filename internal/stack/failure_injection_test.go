@@ -1199,6 +1199,78 @@ func TestContinueFinalRestoreFailure(t *testing.T) {
 	}
 }
 
+// TestRestackInWorktreeAbortFailureProbeConfirmsClear pins the probe-driven
+// rollback classification: the worktree rebase fails, the compensating abort
+// ALSO fails, but the rebase probe confirms nothing is left paused — the
+// rollback's goal is met whatever the abort's wording was, so the plain
+// rebase error (not an AlsoFailed) is what comes back.
+func TestRestackInWorktreeAbortFailureProbeConfirmsClear(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	f.rebaseErr["a"] = errors.New("rebase exploded") // no pause left behind
+	f.rebaseAbortErr = errors.New("abort exploded")
+
+	_, err := Restack(env, s)
+	if err == nil || !strings.Contains(err.Error(), "rebase exploded") {
+		t.Fatalf("Restack = %v, want the rebase error", err)
+	}
+	if strings.Contains(err.Error(), "additionally failed") {
+		t.Fatalf("Restack = %v: probe confirmed nothing paused, so the abort failure must not compose", err)
+	}
+}
+
+// TestRestackInWorktreeAbortFailureStillPaused: when the abort fails AND the
+// probe still sees the paused rebase, the failure composes — naming both is
+// what tells the user to resolve the pause in the worktree themselves.
+func TestRestackInWorktreeAbortFailureStillPaused(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	f.conflictOn("a") // the rebase really does stop mid-flight in /wt/a
+	f.rebaseAbortErr = errors.New("abort exploded")
+
+	_, err := Restack(env, s)
+	if err == nil || !strings.Contains(err.Error(), "additionally failed to abort the paused rebase") {
+		t.Fatalf("Restack = %v, want the still-paused abort failure composed", err)
+	}
+	if !f.rebaseInWT["/wt/a"] {
+		t.Fatal("a failed abort must leave the worktree rebase marked in progress")
+	}
+}
+
+// TestRestackInWorktreeAbortProbeFailure: when the confirmation probe itself
+// fails, rollback state is unconfirmable — the failure composes rather than
+// claiming a possibly-paused rebase is gone.
+func TestRestackInWorktreeAbortProbeFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	f.rebaseErr["a"] = errors.New("rebase exploded")
+	f.rebaseAbortErr = errors.New("abort exploded")
+	// The skip-gate probe (call 1) passes; the rollback confirmation (call 2)
+	// dies, so the pause state is unconfirmable.
+	f.failAfter["RebaseInProgressIn"] = 1
+	f.failErr["RebaseInProgressIn"] = errors.New("probe dead")
+
+	_, err := Restack(env, s)
+	if err == nil || !strings.Contains(err.Error(), "additionally failed to abort the paused rebase") {
+		t.Fatalf("Restack = %v, want the unconfirmable abort failure composed", err)
+	}
+}
+
 // TestRestackInWorktreeIsCleanFailure pins the clean-tree probe in the
 // cross-worktree restack path (restackInWorktree, distinct from absorb's
 // preflight use of the same knob): a probe failure must surface wrapped,
