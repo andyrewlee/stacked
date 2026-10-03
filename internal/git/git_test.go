@@ -1050,6 +1050,21 @@ func TestWorktreesSingle(t *testing.T) {
 	}
 }
 
+// TestShellWorktreesDelegate pins the Shell port method's delegation to the
+// package-level Worktrees — same result, same repo.
+func TestShellWorktreesDelegate(t *testing.T) {
+	newRepo(t)
+	mainSHA := mustGit(t, "rev-parse", "HEAD")
+
+	wts, err := (Shell{}).Worktrees()
+	if err != nil {
+		t.Fatalf("Shell{}.Worktrees: %v", err)
+	}
+	if len(wts) != 1 || wts[0].Branch != "main" || wts[0].Head != mainSHA {
+		t.Fatalf("Shell{}.Worktrees = %+v, want the single main worktree at %s", wts, mainSHA)
+	}
+}
+
 // TestWorktreesLinked asserts a linked worktree is enumerated alongside the main
 // one with its branch and path, and a detached worktree is flagged.
 func TestWorktreesLinked(t *testing.T) {

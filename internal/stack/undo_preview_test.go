@@ -59,7 +59,6 @@ func TestUndoPreviewListsRestore(t *testing.T) {
 		t.Fatalf("UndoPreview: %v", err)
 	}
 	assertNoMutation(t, f, callsBefore)
-	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 0 {
 		t.Fatalf("blockers = %v, want none", res.Blockers)
 	}
@@ -107,7 +106,6 @@ func TestUndoPreviewDeletesCreatedWithWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	assertNoMutation(t, f, callsBefore)
 	assertNoMutation(t, f, callsBefore)
 	if len(res.Blockers) != 0 {
 		t.Fatalf("blockers = %v", res.Blockers)
@@ -394,7 +392,6 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	assertNoMutation(t, f, callsBefore)
 	assertNoMutation(t, f, callsBefore)
 	joined := strings.Join(res.Notes, "\n")
 	if !strings.Contains(joined, amended) || !strings.Contains(joined, "feat-a") || !strings.Contains(joined, "git cherry-pick") {
