@@ -49,9 +49,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused with "check out another branch or run st sync". `--dry-run`
   lists the same set under `"dryRun": true`.
 - **`st sync --no-fetch` skips every remote call.** No fetch, no trunk
-  fast-forward; prune and restack run against the already-fetched
-  `refs/remotes/<remote>/<trunk>` when it exists, else the local trunk.
-  The result note reports `trunk: skipped (--no-fetch)`.
+  fast-forward; prune and restack run against the local trunk, so a branch
+  landed only on the remote survives until the local trunk advances. The
+  result note reports `trunk: skipped (--no-fetch)`.
 - **`st track --all` adopts an existing branch stack in one command.**
   Every untracked local branch is adopted with its parent inferred from
   the full local-branch set — `a→b→c` becomes a real chain, not three
@@ -75,6 +75,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **`st sync --no-fetch` no longer prunes against the cached remote ref.**
+  Offline sync previously detected merged branches against
+  `refs/remotes/<remote>/<trunk>` but restacked survivors onto the unchanged
+  local trunk — a branch landed only on the remote could be deleted while its
+  child was replayed without that branch's content. The local trunk is now
+  the single basis for offline pruning, restacking, and `--dry-run`;
+  remote-only landed branches survive until the local trunk advances.
 - **Documentation corrections.** The 0.0.1 notes now list all seven shipped
   exit codes (`5` lock-held and `70` internal existed from the start) and name
   `shell` alongside `completion` as the `--json` exceptions; `worktree

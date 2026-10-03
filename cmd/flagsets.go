@@ -209,7 +209,7 @@ type syncOpts struct {
 func newSyncFlags(o *syncOpts) *flag.FlagSet {
 	fs := newFlagSet("sync", &o.asJSON)
 	fs.BoolVar(&o.noDelete, "no-delete", false, "do not delete merged branches")
-	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against already-fetched refs")
+	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against the local trunk")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
 	return fs

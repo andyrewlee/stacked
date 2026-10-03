@@ -1883,7 +1883,7 @@ func TestPruneRemoteBasisAndMissingRemoteRef(t *testing.T) {
 	}
 }
 
-func TestSyncNoFetchUsesExistingRemoteRef(t *testing.T) {
+func TestSyncNoFetchKeepsRemoteOnlyMerged(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 
@@ -1910,10 +1910,18 @@ func TestSyncNoFetchUsesExistingRemoteRef(t *testing.T) {
 	if !strings.Contains(out, "skipped (--no-fetch)") {
 		t.Fatalf("sync --no-fetch should note the skipped trunk step, got:\n%s", out)
 	}
-	// feat-a is contained in origin/main — the prune basis under --no-fetch —
-	// so it prunes even though local main does not contain it.
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() == nil {
-		t.Fatal("feat-a merged into origin/main should have been pruned")
+	// feat-a is contained in origin/main but NOT local main — under --no-fetch
+	// the local trunk is the only prune basis, so the branch survives until
+	// the local trunk advances to contain it.
+	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
+		t.Fatal("feat-a merged only into origin/main must survive offline sync")
+	}
+	s, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	if !s.IsTracked("feat-a") {
+		t.Fatal("feat-a was untracked by an offline sync that never fetched it")
 	}
 	// No fetch, no fast-forward: the local trunk must not have moved.
 	if got := mustRun(t, "git", "rev-parse", "main"); got != localMain {
