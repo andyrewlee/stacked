@@ -110,6 +110,9 @@ engine and these hold, the topology bookkeeping is sound.
 
 - `internal/stack/*_test.go` — pure engine: topology, store, **fake-git engine
   unit tests**, the **model/invariant** test, fuzz. Fast; the inner loop.
+  `conformance_test.go` runs each port scenario against BOTH the fake and
+  `git.Shell` in a temp repo (relational asserts, never literal SHAs) — every
+  new port method gets a row so fake↔real divergence can't hide.
 - `cmd/*_test.go` — adapters over real git (integration), dispatcher, parseArgs,
   golden output.
 - `e2e/*_test.go` — black-box: builds the real binary (harness in `e2e_test.go`)
