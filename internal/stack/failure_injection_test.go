@@ -10,6 +10,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // TestRestackSurfacesRebaseProbeError pins rebaseFailure's probe-error arm:
@@ -691,6 +693,81 @@ func TestProbeFailuresSurface(t *testing.T) {
 			},
 			wantSub: boom.Error(),
 		},
+		{
+			name:   "prune containment probe",
+			method: "ChangesContainedIn",
+			after:  -1,
+			setup:  stack2, // both branches unmerged → the per-branch containment check runs
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+				return err
+			},
+			wantSub: "changes are contained in",
+		},
+		{
+			name:   "delete preview merged probe",
+			method: "IsAncestor",
+			after:  -1,
+			setup:  stack2,
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := DeletePlan(env, s, "b", false)
+				return err
+			},
+			wantSub: `check whether "b" is merged into "a"`,
+		},
+		{
+			name:   "modify amend probe",
+			method: "AmendNoEdit",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := newEnvState()
+				mkBranch(t, env, s, f, "main", "a")
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Modify(env, s, "", false, false); return err },
+			wantSub: `amending "a"`,
+		},
+		{
+			name:   "modify amend-message probe",
+			method: "AmendMessage",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := newEnvState()
+				mkBranch(t, env, s, f, "main", "a")
+				return f, s, env
+			},
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := Modify(env, s, "new subject", false, false)
+				return err
+			},
+			wantSub: `amending "a"`,
+		},
+		{
+			name:   "worktree branch create probe",
+			method: "CreateBranchAt",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := newEnvState()
+				mkBranch(t, env, s, f, "main", "a")
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := CreateInWorktreePrep(env, s, "x"); return err },
+			wantSub: `creating branch "x"`,
+		},
+		{
+			name:   "fold advance probe",
+			method: "ForceBranch",
+			after:  -1,
+			setup: func(t *testing.T) (*fakeGit, *State, Env) {
+				f, s, env := stack2(t)
+				if err := f.Checkout("b"); err != nil {
+					t.Fatal(err)
+				}
+				return f, s, env
+			},
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Fold(env, s); return err },
+			wantSub: `advancing "a" to "b"`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -782,5 +859,667 @@ func TestCascadeExpectedHeadDegrade(t *testing.T) {
 	}
 	if f.head != "b" {
 		t.Fatalf("HEAD = %q, want b — the failed rebase parked it and no restore landed", f.head)
+	}
+}
+
+// TestDeleteMergedCheckProbeFailure pins the non-force merged check: the
+// IsAncestor probe must surface wrapped, leaving the branch and its record
+// untouched.
+func TestDeleteMergedCheckProbeFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	boom := errors.New("ancestor probe exploded")
+	f.failErr["IsAncestor"] = boom
+
+	_, err := Delete(env, s, "a", false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `check whether "a" is merged into "main"`) {
+		t.Fatalf("Delete = %v, want the merged check named", err)
+	}
+	if !s.IsTracked("a") || !f.BranchExists("a") {
+		t.Fatal("a failed merged check must not delete or untrack a")
+	}
+}
+
+// TestDeleteCurrentParentCheckoutFailure pins the parent-checkout arm: when
+// HEAD is on the doomed branch, Delete moves to its parent first — a refusal
+// there must surface wrapped and leave the branch intact.
+func TestDeleteCurrentParentCheckoutFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	boom := errors.New("cannot leave a")
+	f.checkoutErr["main"] = boom
+
+	_, err := Delete(env, s, "a", true)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `checking out parent "main"`) {
+		t.Fatalf("Delete = %v, want the parent checkout named", err)
+	}
+	if f.head != "a" || !f.BranchExists("a") || !s.IsTracked("a") {
+		t.Fatalf("a failed parent checkout changed something: head=%q exists=%v tracked=%v",
+			f.head, f.BranchExists("a"), s.IsTracked("a"))
+	}
+}
+
+// TestDeleteBranchFailureSurfaces pins DeleteBranch's failure through
+// stack.Delete: the wrapped error names the branch and the post-state keeps
+// everything tracked.
+func TestDeleteBranchFailureSurfaces(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("delete exploded")
+	f.deleteErr["a"] = boom
+
+	_, err := Delete(env, s, "a", true)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `deleting branch "a"`) {
+		t.Fatalf("Delete = %v, want the delete step named", err)
+	}
+	if !f.BranchExists("a") || !s.IsTracked("a") {
+		t.Fatal("a failed DeleteBranch must not lose the branch or its record")
+	}
+}
+
+// TestDeleteBranchRestoreDoubleFault pins the AlsoFailed composition in
+// Delete: the branch delete fails AND restoring the original branch fails —
+// both sentinels stay matchable.
+func TestDeleteBranchRestoreDoubleFault(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	deleteErr := errors.New("delete exploded")
+	probeErr := errors.New("current-branch probe exploded")
+	checkoutErr := errors.New("cannot check out main")
+	f.deleteErr["a"] = deleteErr
+	f.checkoutErr["main"] = checkoutErr
+	// Delete's own CurrentBranch read passes; restoreHEAD's fails — the
+	// already-on-target shortcut is skipped so the armed checkout really runs.
+	f.failErr["CurrentBranch"] = probeErr
+	f.failAfter["CurrentBranch"] = f.calls["CurrentBranch"] + 1
+
+	_, err := Delete(env, s, "a", true)
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("Delete = %v, want the delete sentinel matchable", err)
+	}
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Delete = %v, want the restore sentinel matchable", err)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main", f.head)
+	}
+}
+
+// TestDeleteSaveCheckpointFailure pins the post-delete persist: the branch is
+// gone from git and from in-memory state when the checkpoint fails — the
+// error must still surface rather than report a clean delete.
+func TestDeleteSaveCheckpointFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 0)
+
+	_, err := Delete(env2, s, "a", true)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, saveErr)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1", *saves)
+	}
+	if f.BranchExists("a") {
+		t.Fatal("a should be gone from git — the delete committed before the save failed")
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a should be untracked in memory — RemoveBranch ran before the save failed")
+	}
+}
+
+// TestDeleteRestackFailureRestoresHEAD pins the non-conflict restack arm:
+// deleting a re-parents its children and restacks them — a child's rebase
+// failure must surface wrapped with HEAD restored to where the caller started
+// (contrast the conflict arm, which leaves the rebase paused).
+func TestDeleteRestackFailureRestoresHEAD(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main") // b's re-parent onto main now needs a real rebase
+	boom := errors.New("rebase exploded")
+	f.rebaseErr["b"] = boom
+
+	_, err := Delete(env, s, "a", true)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, boom)
+	}
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("Delete = %v, must not classify a non-conflict failure as a conflict", err)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main restored after the failed restack", f.head)
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a still tracked — the delete committed before the restack failed")
+	}
+	if bb, _ := s.Get("b"); bb.Parent != "main" {
+		t.Fatalf("b parent = %q, want main (re-parented before the restack ran)", bb.Parent)
+	}
+}
+
+// TestDeleteFinalRestoreFailure pins the epilogue restoreHEAD: the delete and
+// the whole re-parent restack succeeded but checking the original branch back
+// out fails — the error must surface.
+func TestDeleteFinalRestoreFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main") // b restacks in place, parking HEAD on b
+	boom := errors.New("cannot check out main")
+	f.checkoutErr["main"] = boom
+
+	_, err := Delete(env, s, "a", true)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Delete = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `restore branch "main"`) {
+		t.Fatalf("Delete = %v, want the restore step named", err)
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b — the cascade parked it there", f.head)
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a still tracked — the delete committed before the restore failed")
+	}
+}
+
+// TestContinuePendingReparentSaveFailure pins the checkpoint after the
+// pending-reparent promotion: the reparent commits in memory but cannot
+// persist — the save error must surface, not be swallowed by the continue
+// flow.
+func TestContinuePendingReparentSaveFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "c")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+	f.conflictOn("b")
+	if _, err := Onto(env, s, "c"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Onto = %v, want the pause conflict", err)
+	}
+	if s.PendingReparent == nil || s.PendingReparent.Branch != "b" {
+		t.Fatalf("pending reparent = %+v, want b", s.PendingReparent)
+	}
+
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 0)
+	_, err := Continue(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Continue = %v, want wrapped %v", err, saveErr)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1 (the promotion checkpoint)", *saves)
+	}
+	// Characterize, don't aspire: the promotion already applied in memory even
+	// though the persist failed.
+	b, _ := s.Get("b")
+	if b.Parent != "c" || s.PendingReparent != nil {
+		t.Fatalf("promotion did not apply in memory: parent=%q pending=%+v", b.Parent, s.PendingReparent)
+	}
+}
+
+// TestContinueForeignStampSaveFailure pins the checkpoint after stamping the
+// conflicted branch's real rebase target (the non-pending path): the stamp
+// commits in memory but cannot persist — the error must surface.
+func TestContinueForeignStampSaveFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.conflictOn("b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want the pause conflict", err)
+	}
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 0)
+
+	_, err := Continue(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Continue = %v, want wrapped %v", err, saveErr)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1 (the foreign-stamp checkpoint)", *saves)
+	}
+}
+
+// TestContinueRestackFailureRestoresHEAD pins the post-continue cascade arm:
+// the conflicted branch completes but a dependent's restack fails
+// non-conflict — HEAD must be restored to the completed branch before the
+// error surfaces.
+func TestContinueRestackFailureRestoresHEAD(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	f.conflictOn("b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want the pause conflict", err)
+	}
+	boom := errors.New("rebase exploded")
+	f.rebaseErr["c"] = boom
+
+	_, err := Continue(env, s)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Continue = %v, want wrapped %v", err, boom)
+	}
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("Continue = %v, must not classify the sibling failure as a conflict", err)
+	}
+	if f.head != "b" {
+		t.Fatalf("HEAD = %q, want b restored after the failed cascade", f.head)
+	}
+}
+
+// TestContinueFinalSaveFailure pins the epilogue checkpoint: continue and
+// restack both completed but the final persist fails — the error must
+// surface rather than report a clean continue.
+func TestContinueFinalSaveFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.conflictOn("b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want the pause conflict", err)
+	}
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 1) // foreign-stamp save ok, final fails
+
+	_, err := Continue(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Continue = %v, want wrapped %v", err, saveErr)
+	}
+	if *saves != 2 {
+		t.Fatalf("saves = %d, want 2 (foreign-stamp + epilogue)", *saves)
+	}
+}
+
+// TestContinueFinalRestoreFailure pins the last checkpoint: continue, restack,
+// and persist all succeeded but checking the completed branch back out fails —
+// the error must surface.
+func TestContinueFinalRestoreFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+	f.conflictOn("b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want the pause conflict", err)
+	}
+	boom := errors.New("cannot check out b")
+	f.checkoutErr["b"] = boom
+
+	_, err := Continue(env, s)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Continue = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `restore branch "b"`) {
+		t.Fatalf("Continue = %v, want the restore step named", err)
+	}
+	if f.head != "c" {
+		t.Fatalf("HEAD = %q, want c — the cascade parked it there", f.head)
+	}
+}
+
+// TestRestackInWorktreeIsCleanFailure pins the clean-tree probe in the
+// cross-worktree restack path (restackInWorktree, distinct from absorb's
+// preflight use of the same knob): a probe failure must surface wrapped,
+// naming the worktree, without touching the branch.
+func TestRestackInWorktreeIsCleanFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	boom := errors.New("clean probe exploded")
+	f.failErr["IsCleanIn"] = boom
+
+	_, err := Restack(env, s)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Restack = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `checking worktree "/wt/a"`) {
+		t.Fatalf("Restack = %v, want the worktree clean check named", err)
+	}
+	b, _ := s.Get("a")
+	mainTip, _ := f.RevParse("main")
+	if b.ParentSHA == mainTip {
+		t.Fatal("a's ParentSHA was stamped despite the clean probe failing")
+	}
+}
+
+// TestRestackInWorktreeSaveCheckpointFailure pins the persist after the
+// cross-worktree rebase commits: the rebase already landed in the owner
+// worktree and ParentSHA is stamped in memory — only the save fails, and the
+// error must surface naming the worktree.
+func TestRestackInWorktreeSaveCheckpointFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addWorktree("/wt/a", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("advance-main")
+	mainTip, _ := f.RevParse("main")
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 0)
+
+	_, err := Restack(env2, s)
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("Restack = %v, want wrapped %v", err, saveErr)
+	}
+	if !strings.Contains(err.Error(), `save state after restacking "a" in worktree`) {
+		t.Fatalf("Restack = %v, want the cross-worktree checkpoint named", err)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1", *saves)
+	}
+	b, _ := s.Get("a")
+	if b.ParentSHA != mainTip {
+		t.Fatalf("a ParentSHA = %q, want %q stamped in memory before the failed save", b.ParentSHA, mainTip)
+	}
+}
+
+// TestApplyPruneSaveCheckpointFailure pins applyPrune's per-branch persist:
+// the branch is deleted and untracked in memory when its checkpoint fails —
+// the error must surface with the partial deletion list intact.
+func TestApplyPruneSaveCheckpointFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	saveErr := errors.New("save exploded")
+	env2, saves := envWithSaveErr(f, saveErr, 0)
+
+	deleted, err := PruneMergedAgainst(env2, s, branchTipRef(s.Trunk))
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("PruneMergedAgainst = %v, want wrapped %v", err, saveErr)
+	}
+	if !strings.Contains(err.Error(), `save state after pruning "a"`) {
+		t.Fatalf("PruneMergedAgainst = %v, want the prune checkpoint named", err)
+	}
+	if *saves != 1 {
+		t.Fatalf("saves = %d, want 1", *saves)
+	}
+	if len(deleted) != 1 || deleted[0] != "a" {
+		t.Fatalf("deleted = %v, want [a] — the delete committed before the save failed", deleted)
+	}
+	if f.BranchExists("a") {
+		t.Fatal("a should be gone from git — the delete committed before the save failed")
+	}
+	if s.IsTracked("a") {
+		t.Fatal("a should be untracked in memory — RemoveBranch ran before the save failed")
+	}
+}
+
+// TestRefusePruneCurrentProbeDegrade pins refusePruneCurrent's deliberate
+// degrade: a CurrentBranch failure is swallowed (cur=""), so the friendly
+// current-branch refusal is SKIPPED and the prune proceeds to the git-side
+// refusal instead — mirroring TestSnapshotUndoCurrentBranchDegrade.
+func TestRefusePruneCurrentProbeDegrade(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	aTip, _ := f.RevParse("a")
+	if err := f.ForceBranch("main", aTip); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.failErr["CurrentBranch"] = errors.New("probe exploded")
+
+	_, err := Prune(env, s, s.Trunk)
+	if err == nil {
+		t.Fatal("pruning the current branch must fail somewhere")
+	}
+	if strings.Contains(err.Error(), "check out another branch") {
+		t.Fatalf("Prune = %v, want the degrade: the friendly refusal must be skipped", err)
+	}
+	if !strings.Contains(err.Error(), "cannot delete the current branch") {
+		t.Fatalf("Prune = %v, want the git-side refusal that ran instead", err)
+	}
+	if !f.BranchExists("a") || !s.IsTracked("a") {
+		t.Fatal("the degraded prune must not lose a")
+	}
+}
+
+// TestUndoDetachFallbackProbeFailures pins the blocked-checkout detach
+// fallback in Undo (undo_op.go): when moving HEAD off a doomed branch is
+// refused by a blocked checkout, the RevParse and CheckoutDetach probes that
+// park HEAD must each surface wrapped.
+func TestUndoDetachFallbackProbeFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arm     func(f *fakeGit, boom error)
+		wantSub string
+	}{
+		{"resolve HEAD", func(f *fakeGit, boom error) { f.failErr["RevParse"] = boom }, `resolving HEAD before deleting "a"`},
+		{"detach", func(f *fakeGit, boom error) { f.failErr["CheckoutDetach"] = boom }, `detaching HEAD before deleting "a"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, env := newEnvState()
+			entry := mustSnapshot(t, s, f, "create") // LocalBranches = [main]
+			mkBranch(t, env, s, f, "main", "a")      // created by the undone op; HEAD on a
+			f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+			boom := errors.New("probe exploded")
+			tc.arm(f, boom)
+
+			_, err := Undo(env, s, entry, false)
+			if !errors.Is(err, boom) {
+				t.Fatalf("Undo = %v, want wrapped %v", err, boom)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("Undo = %v, want %q in the message", err, tc.wantSub)
+			}
+			if !f.BranchExists("a") {
+				t.Fatal("a was deleted despite the failed detach fallback")
+			}
+		})
+	}
+}
+
+// TestUndoDetachFallbackSkipsCheckoutRestore pins the healthy arm of the same
+// fallback: the blocked checkout parks HEAD detached, the doomed branch is
+// deleted, and the journal's recorded checkout restore is skipped (it would
+// re-enter the blocked checkout).
+func TestUndoDetachFallbackSkipsCheckoutRestore(t *testing.T) {
+	f, s, env := newEnvState()
+	entry := mustSnapshot(t, s, f, "create") // HEAD on main at snapshot time
+	mkBranch(t, env, s, f, "main", "a")
+	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if f.head != "" {
+		t.Fatalf("HEAD = %q, want detached after the blocked checkout parked it", f.head)
+	}
+	if f.BranchExists("a") || s.IsTracked("a") {
+		t.Fatal("the doomed branch should still be deleted after parking HEAD")
+	}
+}
+
+// TestInferParentPickAncestorProbeFailure pins the closest-ancestor
+// tie-break: with two unmerged ancestor candidates, deciding whether the
+// running best is an ancestor of the challenger must surface the probe
+// failure wrapped — never silently keep a worse parent.
+func TestInferParentPickAncestorProbeFailure(t *testing.T) {
+	f := newFakeGit()
+	mergedIntoName := map[string]bool{"c1": true, "c2": true}
+	mergedIntoTrunk := map[string]bool{}
+	boom := errors.New("ancestor probe exploded")
+	f.failErr["IsAncestor"] = boom
+
+	_, err := inferParentPick(f, "main", "x", mergedIntoTrunk, mergedIntoName, []string{"c1", "c2"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("inferParentPick = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "is an ancestor of") {
+		t.Fatalf("inferParentPick = %v, want the tie-break check named", err)
+	}
+}
+
+// TestUntrackMergedCheckProbeFailure pins the merged-into-parent check in
+// UntrackBranch: with the branch still alive in git the probe failure must
+// surface wrapped and the untrack must not proceed.
+func TestUntrackMergedCheckProbeFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b") // a has a child → the merged check runs
+	boom := errors.New("ancestor probe exploded")
+	f.failErr["IsAncestor"] = boom
+
+	_, err := UntrackBranch(env, s, "a")
+	if !errors.Is(err, boom) {
+		t.Fatalf("UntrackBranch = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `check whether "a" is merged into "main"`) {
+		t.Fatalf("UntrackBranch = %v, want the merged check named", err)
+	}
+	if !s.IsTracked("a") {
+		t.Fatal("a failed merged check untracked a anyway")
+	}
+}
+
+// TestUntrackMergedCheckDegradesWhenBranchMissing pins the sibling degrade:
+// the git branch is gone, so the probe failure is swallowed and the untrack
+// proceeds down the not-merged arm — children take the untracked branch's
+// recorded base as their new ParentSHA.
+func TestUntrackMergedCheckDegradesWhenBranchMissing(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	aBase, _ := s.Get("a")
+	wantParentSHA := aBase.ParentSHA
+	delete(f.branches, "a")                                         // git branch gone; state still tracks it
+	f.failErr["IsAncestor"] = errors.New("ancestor probe exploded") // swallowed
+
+	res, err := UntrackBranch(env, s, "a")
+	if err != nil {
+		t.Fatalf("UntrackBranch = %v, want the degrade swallowed", err)
+	}
+	if res == nil || s.IsTracked("a") {
+		t.Fatalf("untrack did not complete: res=%v tracked=%v", res, s.IsTracked("a"))
+	}
+	bb, _ := s.Get("b")
+	if bb.Parent != "main" || bb.ParentSHA != wantParentSHA {
+		t.Fatalf("b = (parent %q, sha %q), want (main, %q) — the not-merged arm", bb.Parent, bb.ParentSHA, wantParentSHA)
+	}
+}
+
+// TestRebaseTargetIsParentBaseAncestorProbeDegrades pins the "was this rebase
+// st-initiated" verdict: the ancestor probe's failure must degrade to false
+// (foreign target → warning note), never propagate or panic.
+func TestRebaseTargetIsParentBaseAncestorProbeDegrades(t *testing.T) {
+	f := newFakeGit()
+	root := f.branches["main"]
+	f.commit("advance") // main moves off root; root is a valid non-tip commit
+	b := &Branch{Parent: "main"}
+	f.failErr["IsAncestor"] = errors.New("ancestor probe exploded")
+
+	if rebaseTargetIsParentBase(f, b, root) {
+		t.Fatal("ancestor probe failure must degrade to false (foreign target), not true")
+	}
+}
+
+// TestAbsorbStackSetProbeFailure pins the CommitRange stack-set walk in
+// absorbPlan: the probe must surface wrapped, naming the range.
+func TestAbsorbStackSetProbeFailure(t *testing.T) {
+	f, s, env, _ := absorbEnv(t)
+	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+	boom := errors.New("commit-range probe exploded")
+	f.failErr["CommitRange"] = boom
+
+	_, err := AbsorbPlan(env, s)
+	if !errors.Is(err, boom) {
+		t.Fatalf("AbsorbPlan = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), "walk main..c") {
+		t.Fatalf("AbsorbPlan = %v, want the range named", err)
+	}
+}
+
+// TestUndoPreviewCommitsLostProbeDegrade pins the commitsLostFromRef degrade:
+// a CommitRange failure is swallowed per-ref into "unknown" — never a
+// blocker, never an error (undo restores the ref by name).
+func TestUndoPreviewCommitsLostProbeDegrade(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	entry := mustSnapshot(t, s, f, "modify")
+	f.failErr["CommitRange"] = errors.New("commit-range probe exploded")
+
+	res, err := UndoPreview(env, s, entry, false, 0)
+	if err != nil {
+		t.Fatalf("UndoPreview = %v, want the degrade swallowed", err)
+	}
+	if len(res.WouldRestore) == 0 {
+		t.Fatal("WouldRestore = [], want the recorded refs")
+	}
+	for _, r := range res.WouldRestore {
+		if r.CommitsLostFromRef != "unknown" {
+			t.Fatalf("%s CommitsLostFromRef = %v, want the unknown degrade", r.Branch, r.CommitsLostFromRef)
+		}
+	}
+}
+
+// TestModifyCommitFailurePropagates drives the commitErr knob through
+// Modify --commit: the failure must surface wrapped naming the branch.
+func TestModifyCommitFailurePropagates(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	boom := errors.New("commit exploded")
+	f.commitErr = boom
+
+	_, err := Modify(env, s, "msg", true, true)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Modify --commit = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `committing on "a"`) {
+		t.Fatalf("Modify --commit = %v, want the commit step named", err)
 	}
 }
