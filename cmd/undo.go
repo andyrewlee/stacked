@@ -16,7 +16,7 @@ func init() {
 	register(&Command{
 		Name:       "undo",
 		Summary:    "Undo the last stack-mutating command",
-		Usage:      "st undo [<n>] [--list | --dry-run] [--json]",
+		Usage:      "st undo [<n>] [--list | --dry-run] [--force] [--json]",
 		Run:        runUndo,
 		NewFlagSet: undoFlagSet,
 	})
@@ -49,6 +49,12 @@ func runUndo(args []string) error {
 	if o.list && o.dryRun {
 		return fmt.Errorf("--list and --dry-run are mutually exclusive")
 	}
+	if o.force && o.dryRun {
+		return fmt.Errorf("--force and --dry-run are mutually exclusive: a preview never moves refs")
+	}
+	if o.force && o.list {
+		return fmt.Errorf("--force and --list are mutually exclusive: listing never moves refs")
+	}
 	if o.list {
 		if len(rest) == 1 {
 			return fmt.Errorf("--list takes no step count")
@@ -58,7 +64,7 @@ func runUndo(args []string) error {
 	if o.dryRun {
 		return runUndoDryRun(o.asJSON, n)
 	}
-	return runUndoApply(o.asJSON, n)
+	return runUndoApply(o.asJSON, n, o.force)
 }
 
 // undoStepResult is one completed step of a multi-step undo: Index is the
@@ -80,7 +86,7 @@ type undoStepResult struct {
 // atomic, but stack.Undo's earlier cleanup may already have run; see its
 // failure-boundary comment). The already-undone prefix is reported like
 // worktree rm --all's partial-progress contract.
-func runUndoApply(asJSON bool, n int) error {
+func runUndoApply(asJSON bool, n int, force bool) error {
 	release, err := acquireLock()
 	if err != nil {
 		return err
@@ -147,7 +153,7 @@ func runUndoApply(asJSON bool, n int) error {
 			raw := e.State
 			env.Save = func() error { return stack.RestoreState(raw) }
 		}
-		res, err := stack.Undo(env, s, e)
+		res, err := stack.Undo(env, s, e, force)
 		if err != nil {
 			return failUndoSteps(asJSON, n, steps, restoredSet, notes,
 				fmt.Errorf("stopped at step %d of %d undoing %q: %w", i+1, n, e.Label, err))
@@ -451,7 +457,7 @@ func renderUndoPreviewText(res *stack.UndoPreviewResult, step, total int) {
 			lost = fmt.Sprintf("%d", n)
 		}
 		out("  restores: %s %s→%s (%s commits lost from ref)\n",
-			sanitizeForTerminal(r.Branch), r.From, r.To, lost)
+			sanitizeForTerminal(r.Branch), sanitizeForTerminal(r.From), sanitizeForTerminal(r.To), lost)
 	}
 	for _, d := range res.WouldDelete {
 		line := "  deletes: " + sanitizeForTerminal(d.Branch)

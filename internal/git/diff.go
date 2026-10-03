@@ -532,7 +532,7 @@ func parseBlamePorcelain(out string) map[int]BlameLine {
 		cur = nil
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if len(line) >= 42 && line[40] == ' ' && isHex40(line[:40]) {
+		if len(line) >= 42 && line[40] == ' ' && IsHex40(line[:40]) {
 			flush()
 			if fields := strings.Fields(line[41:]); len(fields) >= 2 {
 				orig, err1 := strconv.Atoi(fields[0])
@@ -583,7 +583,11 @@ func decodeBlameFilename(v string) (string, bool) {
 	return p, true
 }
 
-func isHex40(s string) bool {
+// IsHex40 reports whether s is a full 40-character lowercase hex object id
+// (SHA-1, the object format this tool is written against). It is the guard
+// for values handed to git plumbing that would otherwise accept revision
+// expressions like HEAD~2 or the all-zeros delete value.
+func IsHex40(s string) bool {
 	if len(s) != 40 {
 		return false
 	}

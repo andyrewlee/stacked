@@ -60,12 +60,14 @@ type undoOpts struct {
 	asJSON bool
 	list   bool
 	dryRun bool
+	force  bool
 }
 
 func newUndoFlags(o *undoOpts) *flag.FlagSet {
 	fs := newFlagSet("undo", &o.asJSON)
 	fs.BoolVar(&o.list, "list", false, "show the undo journal without reverting anything")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "preview what the next undo would restore/delete without changing anything")
+	fs.BoolVar(&o.force, "force", false, "restore recorded tips even when a branch moved outside st since the command ran")
 	return withDefaults(fs, "undo")
 }
 

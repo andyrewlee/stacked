@@ -224,10 +224,19 @@ message.
     the LIVE owning path (discovered even when the journal recorded none).
     `blockers` lists, in the real undo's gate order, everything a real run
     would refuse on: `rebase_in_progress`, `state_too_new`,
-    `malformed_snapshot`, `cwd_inside_created_worktree:<b>`,
+    `malformed_snapshot`, `malformed_journal`,
+    `cwd_inside_created_worktree:<b>`,
     `recorded_worktree_mismatch:<b>`, `worktree_dirty:<b>`,
-    `missing_restore_target:<b>` — a missing ref is NOT a blocker (undo
-    restores it). `wouldCheckout` is the landing branch a real run performs,
+    `missing_restore_target:<b>`, `ref_moved_since:<b>` — a missing ref is
+    NOT a blocker (undo
+    restores it). `ref_moved_since:<b>` marks a branch whose live tip no
+    longer matches either the recorded pre- or post-operation tip — it moved
+    outside `st`; the real run refuses unless `--force`, and the dry-run
+    reports it only on the newest entry (deeper steps run after the earlier
+    restores rewrite the refs the preview still sees). `malformed_journal`
+    is emitted when an entry's ref values are not full commit ids — such
+    entries are already dropped at journal load, so it can only appear when
+    the journal raced a manual edit mid-command. `wouldCheckout` is the landing branch a real run performs,
     or null when the recorded branch would be deleted by the undo itself,
     and when `wouldDetach` is set — the
     doomed-current-branch path whose intermediate checkout a real run
@@ -284,6 +293,14 @@ message.
   step keeps its entry, so rerunning `st undo` after fixing the cause is
   safe; a state-save failure specifically reports that the refs were already
   restored. The already-undone prefix is reported in place.
+  Entries written by current `st` also pin the post-operation tips, so undo
+  first verifies nothing moved outside `st` between the command and the
+  undo: a branch with external commits — or a branch the op deleted that
+  someone recreated — is refused (`ref_moved_since` in `--dry-run`) rather
+  than silently rewound, and `st undo --force` restores anyway while naming
+  the overwritten refs. Entries recorded before this pinning — or retained
+  for a FAILED operation whose refs `st abort`/`st continue` legitimately
+  moved afterwards — restore unconditionally, as they always did.
 - Mutating commands, HEAD-moving navigation (`checkout <branch>`,
   `up`, `down`, `top`, `bottom`), and `init` are serialized across `st`
   processes by an advisory lock (a second one fails fast rather than

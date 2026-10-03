@@ -36,8 +36,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   worktrees (even when none was recorded) and dirtiness, and `blockers`
   names — in the real undo's gate order — everything a real run would
   refuse on (`rebase_in_progress`, `state_too_new`, `malformed_snapshot`,
-  `cwd_inside_created_worktree`, `worktree_dirty`,
-  `recorded_worktree_mismatch`). The preview holds the advisory lock but
+  `malformed_journal`, `cwd_inside_created_worktree`, `worktree_dirty`,
+  `recorded_worktree_mismatch`, `ref_moved_since`). The preview holds the
+  advisory lock but
   mutates nothing: state, journal, refs, worktrees, and cwd are byte-for-
   byte unchanged, and a later real undo revalidates everything. `--dry-run`
   and `--list` are mutually exclusive; blockers are data, exit is still 0.
@@ -75,6 +76,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **`st undo` no longer rewinds refs that moved outside `st`.** Journal
+  entries written by current `st` record where every branch stood *after*
+  the operation (`postRefs`), and undo now verifies live tips against them
+  before touching anything: a branch committed on externally (or deleted by
+  the op and recreated externally) is refused with `ref_moved_since` —
+  `st undo --dry-run` names it — instead of being silently rewound to a
+  reflog-only recovery. The restore itself is a compare-and-swap keyed on
+  the recorded post-operation tips, `st undo --force` restores anyway while
+  naming the overwritten refs, and a ref already back on its recorded tip
+  is skipped so retries stay idempotent. Entries without `postRefs` (older
+  journals, and entries retained for failed operations whose refs
+  `st abort`/`st continue` legitimately move afterwards) restore
+  unconditionally as before, with a note saying so. Journal ref values are
+  also validated as full commit ids at load and again before any update —
+  a crafted `undo.json` can no longer hand `git update-ref` a revision
+  expression or the all-zeros delete value — and `st undo --dry-run` now
+  terminal-sanitizes the journal SHAs it prints.
 - **A failed `st absorb` now keeps the recovery pointers to the commits it
   already made.** Absorb records each amendment's commit into its undo
   journal entry as it lands — and refreshes them to the post-cascade tips —

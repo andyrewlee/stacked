@@ -2696,3 +2696,125 @@ func TestUndoDryRunMultiStep(t *testing.T) {
 		t.Fatal("preview deleted feat-b")
 	}
 }
+
+// TestUndoRefusesExternalDrift pins the CAS behavior end to end on real git:
+// a branch committed on outside st between the op and the undo refuses —
+// before any mutation — while --force restores the recorded tip anyway and
+// reports the override.
+func TestUndoRefusesExternalDrift(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	recorded := mustRun(t, "git", "rev-parse", "feat-a")
+
+	write(t, "a.txt", "a2\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	// An external commit lands on feat-a between the op and the undo.
+	write(t, "a.txt", "a3\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "external work")
+	external := mustRun(t, "git", "rev-parse", "feat-a")
+
+	err := runUndo(nil)
+	if err == nil {
+		t.Fatal("undo succeeded over an externally moved ref")
+	}
+	if !strings.Contains(err.Error(), "moved outside st") || !strings.Contains(err.Error(), "feat-a") {
+		t.Fatalf("error = %q, want the diverged branch named", err)
+	}
+	if got := mustRun(t, "git", "rev-parse", "feat-a"); got != external {
+		t.Fatalf("feat-a = %s after refused undo, want the external tip %s", got, external)
+	}
+	// The refused entry stays in the journal for the --force retry.
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run"}); err != nil {
+			t.Fatalf("dry-run after refused undo: %v", err)
+		}
+	})
+	if !strings.Contains(out, "ref_moved_since:feat-a") {
+		t.Fatalf("dry-run output = %q, want a ref_moved_since blocker", out)
+	}
+
+	out = captureStdout(t, func() {
+		if err := runUndo([]string{"--force"}); err != nil {
+			t.Fatalf("undo --force over a diverged ref: %v", err)
+		}
+	})
+	if got := mustRun(t, "git", "rev-parse", "feat-a"); got != recorded {
+		t.Fatalf("feat-a = %s after --force, want the recorded tip %s", got, recorded)
+	}
+	if !strings.Contains(out, "force") || !strings.Contains(out, "feat-a") {
+		t.Fatalf("force output = %q, want a note naming the overwritten ref", out)
+	}
+}
+
+// A poisoned journal entry — ref values that are not full commit ids — is
+// ignored everywhere the journal is read: it can neither be previewed nor
+// applied, and the emit contains no raw journal bytes.
+func TestUndoJournalRejectsNonOIDRefValues(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	tip := mustRun(t, "git", "rev-parse", "feat-a")
+
+	gitDir, err := git.GitCommonDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poisoned := []map[string]any{
+		{
+			"label": "modify",
+			"state": json.RawMessage(`{"version":1,"trunk":"main","branches":{}}`),
+			"refs":  map[string]string{"feat-a": "HEAD~2", "main": tip},
+		},
+		{
+			"label": "healthy",
+			"state": json.RawMessage(`{"version":1,"trunk":"main","branches":{}}`),
+			"refs":  map[string]string{"feat-a": tip},
+		},
+	}
+	writeJSONFile(t, filepath.Join(gitDir, "stacked", "undo.json"), poisoned)
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run"}); err != nil {
+			t.Fatalf("dry-run over a poisoned entry: %v", err)
+		}
+	})
+	if strings.Contains(out, "HEAD~2") || strings.Contains(out, "\x1b") {
+		t.Fatalf("dry-run echoed journal values: %q", out)
+	}
+	if !strings.Contains(out, "would undo: healthy") {
+		t.Fatalf("dry-run = %q, want only the healthy entry previewed", out)
+	}
+}
+
+// A multi-step dry-run must not raise ghost drift on deeper steps: a real
+// undo restores each step's pre-op refs before the next runs, and the
+// previews model state, not refs, so only the newest entry compares live
+// tips.
+func TestUndoDryRunMultiStepNoGhostDrift(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	write(t, "a.txt", "a2\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify 1: %v", err)
+	}
+	write(t, "a.txt", "a3\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify 2: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runUndo([]string{"--dry-run", "2"}); err != nil {
+			t.Fatalf("dry-run 2: %v", err)
+		}
+	})
+	if strings.Contains(out, "ref_moved_since") {
+		t.Fatalf("multi-step dry-run raised ghost drift: %q", out)
+	}
+}

@@ -377,7 +377,7 @@ func RevParse(ref string) (string, error) {
 func localBranchRef(ref string) string {
 	// A 40-hex value can never be a branch name (refname rules forbid it), so
 	// it skips the show-ref probe outright.
-	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") || isHex40(ref) {
+	if ref == "HEAD" || strings.HasPrefix(ref, "refs/") || IsHex40(ref) {
 		return ref
 	}
 	if BranchExists(ref) {
@@ -540,9 +540,68 @@ func UpdateRefs(updates map[string]string) error {
 		// missing ones.
 		fmt.Fprintf(&b, "update %s\x00%s\x00\x00", ref, updates[ref])
 	}
+	return runUpdateRefsStdin(b.String())
+}
+
+// RefUpdate is one ref change in a compare-and-swap batch. New is the object
+// id the ref moves to (a full nonzero 40-hex oid — updates never delete).
+// Old is the value the ref must currently hold for the move to apply:
+//
+//	""          → no verification (undo journals recorded before post-op tips)
+//	zero oid    → the ref must NOT exist (resurrecting a branch the op deleted;
+//	              if someone recreated it since, the update refuses rather
+//	              than clobbering the external recreation)
+//	<full oid>  → the ref must currently equal it (the post-op tip recorded
+//	              in the undo journal; a mismatch means the branch moved
+//	              outside st between the op and the undo)
+type RefUpdate struct {
+	New string
+	Old string
+}
+
+// UpdateRefsCas applies every update as ONE `git update-ref -z --stdin`
+// transaction with per-ref compare-and-swap semantics: each ref moves only if
+// it currently matches the update's Old expectation, and one mismatch fails
+// the whole batch with no ref moved. New must be a full nonzero object id and
+// Old must be empty or a full object id — anything else is rejected before
+// git runs, so a revision expression or delete value in the old/new field can
+// never reach update-ref's resolver.
+func UpdateRefsCas(updates map[string]RefUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(updates))
+	for ref, u := range updates {
+		if err := validRefArg("ref", ref); err != nil {
+			return err
+		}
+		if hasControlOrSpace(ref) {
+			return fmt.Errorf("ref %q contains whitespace or control bytes", ref)
+		}
+		if !IsHex40(u.New) || u.New == "0000000000000000000000000000000000000000" {
+			return fmt.Errorf("update value for %q is not a full nonzero object id: %q", ref, u.New)
+		}
+		if u.Old != "" && !IsHex40(u.Old) {
+			return fmt.Errorf("expected-old value for %q is not a full object id: %q", ref, u.Old)
+		}
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	var b strings.Builder
+	for _, ref := range refs {
+		// update SP <ref> NUL <newvalue> NUL <oldvalue> NUL — empty oldvalue
+		// means "no verification", all-zeros means "must not exist".
+		fmt.Fprintf(&b, "update %s\x00%s\x00%s\x00", ref, updates[ref].New, updates[ref].Old)
+	}
+	return runUpdateRefsStdin(b.String())
+}
+
+// runUpdateRefsStdin feeds a pre-built -z record batch to one
+// `git update-ref --stdin` transaction.
+func runUpdateRefsStdin(batch string) error {
 	cmd := exec.Command("git", "update-ref", "-z", "--stdin")
 	cmd.Env = gitEnv()
-	cmd.Stdin = strings.NewReader(b.String())
+	cmd.Stdin = strings.NewReader(batch)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

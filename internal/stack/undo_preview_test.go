@@ -386,7 +386,7 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	entry := mustSnapshot(t, s, f, "absorb")
 	// The recorded amended tip is the commit undo is about to orphan — the
 	// preview must name it before the user decides.
-	const amended = "abc123def456"
+	const amended = "abc123def456abc123def456abc123def456abc1"
 	entry.AbsorbedCommits = map[string]string{"feat-a": amended}
 
 	callsBefore := f.callsSnapshot()
@@ -404,5 +404,63 @@ func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 		if strings.Contains(b, amended) {
 			t.Fatalf("absorb advisory is not a refusal, but landed in blockers: %v", res.Blockers)
 		}
+	}
+}
+
+// TestUndoPreviewRefMovedSince pins the dry-run side of the external-drift
+// preflight: a ref that no longer sits where the op left it surfaces as a
+// ref_moved_since blocker, while entries without PostRefs carry the
+// unconditional-restore note instead.
+func TestUndoPreviewRefMovedSince(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+
+	mustCheckout(t, f, "a")
+	f.amend("external work")
+
+	res, err := UndoPreview(env, s, entry, false, 1)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	found := false
+	for _, b := range res.Blockers {
+		if b == "ref_moved_since:a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("blockers = %v, want ref_moved_since:a", res.Blockers)
+	}
+
+	// Step-2+ previews do not compare live tips: a real run would restore the
+	// step-1 refs first, so drift there would be a ghost, not a blocker.
+	deeper, err := UndoPreview(env, s, entry, false, 2)
+	if err != nil {
+		t.Fatalf("UndoPreview step 2: %v", err)
+	}
+	for _, b := range deeper.Blockers {
+		if strings.HasPrefix(b, "ref_moved_since:") {
+			t.Fatalf("deeper preview reported ghost drift: %v", deeper.Blockers)
+		}
+	}
+
+	// A legacy entry (no PostRefs) reports the unconditional restore note.
+	legacy := mustSnapshot(t, s, f, "modify")
+	res, err = UndoPreview(env, s, legacy, false, 1)
+	if err != nil {
+		t.Fatalf("UndoPreview legacy: %v", err)
+	}
+	joined := strings.Join(res.Notes, "\n")
+	if !strings.Contains(joined, "unconditionally") {
+		t.Fatalf("notes = %v, want the unconditional-restore note", res.Notes)
 	}
 }

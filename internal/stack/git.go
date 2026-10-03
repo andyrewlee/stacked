@@ -45,6 +45,13 @@ type Git interface {
 	// honor this). An update creates a missing ref, which is what resurrects
 	// pruned branches on undo.
 	UpdateRefs(updates map[string]string) error
+	// UpdateRefsCas applies every ref update as ONE compare-and-swap
+	// transaction: each ref moves only if it currently holds the update's Old
+	// expectation ("" = unverified, zero oid = must not exist, oid = must
+	// equal it), and one mismatch fails the whole batch with no ref moved.
+	// Undo uses it so a branch moved outside st between the op and the undo
+	// is refused rather than silently rewound.
+	UpdateRefsCas(updates map[string]git.RefUpdate) error
 	ResetSoft(ref string) error
 	Commit(message string, all bool) error
 	AmendNoEdit(all bool) error

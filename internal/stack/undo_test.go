@@ -533,21 +533,22 @@ func TestSetLastUndoAbsorbedRequiresActiveAbsorb(t *testing.T) {
 
 	t.Run("active absorb entry takes cumulative updates", func(t *testing.T) {
 		initGitRepo(t)
-		first := UndoEntry{Label: "create", Refs: map[string]string{"main": "m0"}, CurrentBranch: "a"}
+		sha := func(c byte) string { return strings.Repeat(string(c), 40) }
+		first := UndoEntry{Label: "create", Refs: map[string]string{"main": sha('f')}, CurrentBranch: "a"}
 		absorb := UndoEntry{
 			Label:           "absorb",
 			State:           json.RawMessage(`{"version":1,"trunk":"main","branches":{}}`),
-			Refs:            map[string]string{"a": "a0"},
+			Refs:            map[string]string{"a": sha('a')},
 			CreatedBranches: []string{"b"},
 		}
 		if err := writeUndo([]UndoEntry{first, absorb}); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := SetLastUndoAbsorbed(map[string]string{"a": "a1"}); err != nil {
+		if err := SetLastUndoAbsorbed(map[string]string{"a": sha('1')}); err != nil {
 			t.Fatalf("first checkpoint: %v", err)
 		}
-		if err := SetLastUndoAbsorbed(map[string]string{"a": "a1", "b": "b1"}); err != nil {
+		if err := SetLastUndoAbsorbed(map[string]string{"a": sha('1'), "b": sha('2')}); err != nil {
 			t.Fatalf("cumulative checkpoint: %v", err)
 		}
 
@@ -563,7 +564,7 @@ func TestSetLastUndoAbsorbedRequiresActiveAbsorb(t *testing.T) {
 			t.Fatalf("earlier entry = %+v, want its label/refs/checkout preserved and no absorbed map", entries[0])
 		}
 		got := entries[1]
-		if !reflect.DeepEqual(got.AbsorbedCommits, map[string]string{"a": "a1", "b": "b1"}) {
+		if !reflect.DeepEqual(got.AbsorbedCommits, map[string]string{"a": sha('1'), "b": sha('2')}) {
 			t.Fatalf("AbsorbedCommits = %v, want the cumulative map", got.AbsorbedCommits)
 		}
 		var gotState, wantState map[string]any
@@ -588,4 +589,95 @@ func mustUndoPath(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// Journal values that are not full commit ids are dropped at load like
+// unparseable JSON: the file is user-writable, and a revision expression
+// (HEAD~2) or the all-zeros delete value handed to update-ref would resolve
+// to a commit undo never recorded. Healthy sibling entries survive.
+func TestLoadUndoDropsMalformedRefValues(t *testing.T) {
+	initGitRepo(t)
+	writeStackFile(t, "main.txt", "main\n")
+	mustStackGit(t, "add", "-A")
+	mustStackGit(t, "commit", "-q", "-m", "main")
+	tip := strings.TrimSpace(mustStackGit(t, "rev-parse", "HEAD"))
+	zeros := strings.Repeat("0", 40)
+	state := json.RawMessage(`{"version":1,"trunk":"main","branches":{}}`)
+
+	cases := []struct {
+		name   string
+		poison func(*UndoEntry)
+	}{
+		{"revision expression", func(e *UndoEntry) { e.Refs["main"] = "HEAD~2" }},
+		{"zero new value", func(e *UndoEntry) { e.Refs["main"] = zeros }},
+		{"short value", func(e *UndoEntry) { e.Refs["main"] = "abc123" }},
+		{"postRef revision", func(e *UndoEntry) { e.PostRefs = map[string]string{"main": "HEAD~1"} }},
+		{"absorbed revision", func(e *UndoEntry) { e.AbsorbedCommits = map[string]string{"feat": "main^"} }},
+		{"control-byte ref key", func(e *UndoEntry) { e.Refs["x\ny"] = tip }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			good := UndoEntry{Label: "good", State: state, Refs: map[string]string{"main": tip}}
+			bad := UndoEntry{Label: "bad", State: state, Refs: map[string]string{"main": tip}}
+			tc.poison(&bad)
+			if err := writeUndo([]UndoEntry{good, bad}); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := loadUndo()
+			if err != nil {
+				t.Fatalf("loadUndo: %v", err)
+			}
+			if len(entries) != 1 || entries[0].Label != "good" {
+				t.Fatalf("loadUndo kept %d entries (%+v), want only the healthy one", len(entries), entries)
+			}
+		})
+	}
+}
+
+// A retained entry pins the post-operation tips undo's compare-and-swap
+// restore verifies against: every recorded branch's live tip after the op,
+// plus the tips of branches the op created.
+func TestFinalizeUndoRecordsPostRefs(t *testing.T) {
+	initGitRepo(t)
+	writeStackFile(t, "main.txt", "main\n")
+	mustStackGit(t, "add", "-A")
+	mustStackGit(t, "commit", "-q", "-m", "main")
+	mustStackGit(t, "checkout", "-q", "-b", "feat")
+
+	mainTip := strings.TrimSpace(mustStackGit(t, "rev-parse", "main"))
+	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	s.Track("feat", "main", mainTip)
+	entry, err := s.RecordUndo(git.Shell{}, "op")
+	if err != nil {
+		t.Fatalf("RecordUndo: %v", err)
+	}
+	preTip := entry.Refs["feat"]
+
+	// The op moves feat's tip and creates a branch.
+	writeStackFile(t, "feat.txt", "feat\n")
+	mustStackGit(t, "add", "-A")
+	mustStackGit(t, "commit", "-q", "-m", "feat work")
+	mustStackGit(t, "branch", "created-by-op")
+	postTip := strings.TrimSpace(mustStackGit(t, "rev-parse", "feat"))
+
+	if err := FinalizeUndo(git.Shell{}, s, entry); err != nil {
+		t.Fatalf("FinalizeUndo: %v", err)
+	}
+	if entry.PostRefs["feat"] != postTip || entry.PostRefs["created-by-op"] != postTip {
+		t.Fatalf("in-memory postRefs = %v, want feat and created-by-op at %s", entry.PostRefs, postTip)
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("journal = %d entries, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.Refs["feat"] != preTip {
+		t.Fatalf("refs[feat] = %s, want the pre-op tip %s", got.Refs["feat"], preTip)
+	}
+	if got.PostRefs["feat"] != postTip || got.PostRefs["created-by-op"] != postTip {
+		t.Fatalf("postRefs = %v, want both branches pinned at %s", got.PostRefs, postTip)
+	}
 }

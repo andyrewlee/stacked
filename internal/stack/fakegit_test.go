@@ -2,7 +2,6 @@ package stack
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -147,9 +146,12 @@ func (f *fakeGit) alwaysConflictOn(branch string) { f.conflictEvery[branch] = tr
 // pin which target each rebase replayed onto.
 type rebaseCall struct{ newBase, oldBase, branch string }
 
+// newID mints fake commit ids as full lowercase 40-hex object ids, matching
+// the shape real SHAs take anywhere values are validated or compared — the
+// fake must not pass journal/OID barriers on credentials real git lacks.
 func (f *fakeGit) newID() string {
 	f.seq++
-	return "c" + strconv.Itoa(f.seq)
+	return fmt.Sprintf("%040x", f.seq)
 }
 
 // resolve turns a ref (branch name, commit id, or HEAD) into a commit id.
@@ -717,6 +719,46 @@ func (f *fakeGit) UpdateRefs(updates map[string]string) error {
 	}
 	for name, id := range resolved {
 		f.branches[name] = id
+	}
+	return nil
+}
+
+// UpdateRefsCas mirrors the shell's compare-and-swap batch: every New must
+// resolve AND every Old expectation must hold — "" unverified, the zero oid
+// requires the branch absent, an oid requires the tip to equal it — before
+// any ref moves. One mismatch fails the whole batch naming the ref, like git
+// reporting a CAS failure on `update <ref> <new> <old>`.
+func (f *fakeGit) UpdateRefsCas(updates map[string]git.RefUpdate) error {
+	if err := f.fail("UpdateRefsCas"); err != nil {
+		return err
+	}
+	type casUpdate struct {
+		name string
+		id   string
+	}
+	resolved := map[string]casUpdate{}
+	for ref, u := range updates {
+		name := strings.TrimPrefix(ref, "refs/heads/")
+		id := f.resolve(u.New)
+		if id == "" {
+			return fmt.Errorf("unknown revision %q", u.New)
+		}
+		tip, exists := f.branches[name]
+		switch u.Old {
+		case "":
+		case zeroSHA:
+			if exists {
+				return fmt.Errorf("cannot lock ref %q: ref already exists but expected it not to", ref)
+			}
+		default:
+			if !exists || tip != u.Old {
+				return fmt.Errorf("cannot lock ref %q: is at %q but expected %q", ref, tip, u.Old)
+			}
+		}
+		resolved[name] = casUpdate{name: name, id: id}
+	}
+	for _, u := range resolved {
+		f.branches[u.name] = u.id
 	}
 	return nil
 }

@@ -260,7 +260,7 @@ func TestUndoPreviewParity(t *testing.T) {
 			}
 			// The real run on an identical fresh fixture.
 			rf, rs, re := tc.build(t)
-			_, uerr := Undo(Env{Git: rf}, rs, re)
+			_, uerr := Undo(Env{Git: rf}, rs, re, false)
 			if tc.wantUndoErr == "" {
 				if uerr != nil {
 					t.Fatalf("Undo: %v (preview predicted %v blockers)", uerr, preview.Blockers)

@@ -73,7 +73,7 @@ func TestUndoCreateDeletesBranchAndRestoresHEAD(t *testing.T) {
 	if _, err := Create(env, s, "b", "c-b", true); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
@@ -96,7 +96,7 @@ func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
 	f.addWorktree("/wt/b", "b")
 	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
 
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
@@ -125,7 +125,7 @@ func TestUndoCreateRemovesUnrecordedLinkedWorktree(t *testing.T) {
 	}
 	f.addWorktree("/wt/unrecorded", "b")
 
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
@@ -153,7 +153,7 @@ func TestUndoCreateRefusesDirtyUnrecordedWorktree(t *testing.T) {
 	f.addWorktree("/wt/unrecorded", "b")
 	f.markWorktreeDirty("b")
 
-	_, err := Undo(env, s, entry)
+	_, err := Undo(env, s, entry, false)
 	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
 		t.Fatalf("undo error = %v, want dirty-worktree refusal", err)
 	}
@@ -178,7 +178,7 @@ func TestUndoCurrentCreatedBranchDetachesWhenParentCheckedOutElsewhere(t *testin
 	}
 	f.checkoutErr["a"] = errors.New("fatal: 'a' is already checked out at '/repo'")
 
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
@@ -207,7 +207,7 @@ func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 	}
 	f.checkoutErr["a"] = errors.New("fatal: 'a' is already checked out at '/wt/a'")
 
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
@@ -231,7 +231,7 @@ func TestUndoModifyRestoresEveryRef(t *testing.T) {
 	if _, err := Modify(env, s, "", true, false); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	assertUndoRestored(t, f, s, entry)
@@ -249,7 +249,7 @@ func TestUndoRenameRestoresOldNameAndChecksItOut(t *testing.T) {
 	if _, err := Rename(env, s, "a", "z"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("z") || s.IsTracked("z") {
@@ -282,7 +282,7 @@ func TestUndoRenameWithNilStateRecoversOldName(t *testing.T) {
 	// FinalizeUndo records the created branch on the persisted entry; with s==nil
 	// it is the only signal that "z" must be deleted.
 	entry.CreatedBranches = []string{"z"}
-	if _, err := Undo(env, nil, entry); err != nil { // s==nil: Load failed
+	if _, err := Undo(env, nil, entry, false); err != nil { // s==nil: Load failed
 		t.Fatalf("undo (nil state): %v", err)
 	}
 	if f.BranchExists("z") {
@@ -309,7 +309,7 @@ func TestUndoDeleteResurrectsBranchFromSnapshotRef(t *testing.T) {
 	if _, err := Delete(env, s, "a", true); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if got, err := f.RevParse("a"); err != nil || got != aTip {
@@ -337,7 +337,7 @@ func TestUndoCreateWithDirtyTreeDetachesHEAD(t *testing.T) {
 	f.clean = false
 	f.checkoutErr["a"] = errors.New("your local changes would be overwritten")
 
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	if f.BranchExists("b") {
@@ -365,7 +365,7 @@ func TestUndoPropagatesCheckoutErrorOnDirtyTree(t *testing.T) {
 	f.clean = false
 	f.checkoutErr["a"] = boom
 
-	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+	if _, err := Undo(env, s, entry, false); !errors.Is(err, boom) {
 		t.Fatalf("undo error = %v, want %v", err, boom)
 	}
 	if !f.BranchExists("b") {
@@ -389,7 +389,7 @@ func TestUndoPropagatesCheckoutErrorOnCleanTree(t *testing.T) {
 	boom := errors.New("checkout refused")
 	f.checkoutErr["a"] = boom
 
-	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+	if _, err := Undo(env, s, entry, false); !errors.Is(err, boom) {
 		t.Fatalf("undo error = %v, want %v", err, boom)
 	}
 	if !f.BranchExists("b") {
@@ -409,7 +409,7 @@ func TestUndoPropagatesFinalCheckoutErrorOnDirtyTree(t *testing.T) {
 	f.clean = false
 	f.checkoutErr["a"] = boom
 
-	if _, err := Undo(env, s, entry); !errors.Is(err, boom) {
+	if _, err := Undo(env, s, entry, false); !errors.Is(err, boom) {
 		t.Fatalf("undo error = %v, want %v", err, boom)
 	}
 }
@@ -432,7 +432,7 @@ func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
 	f.addWorktree("/wt/other", "b")
 	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
 
-	_, err := Undo(env, s, entry)
+	_, err := Undo(env, s, entry, false)
 	if err == nil {
 		t.Fatal("undo succeeded despite created-worktree path mismatch")
 	}
@@ -468,7 +468,7 @@ func TestUndoRefusesInsideUnrecordedDoomedWorktree(t *testing.T) {
 	// (f.head stays "a" — the fake binds head to the main worktree; the linked
 	// worktree is where the process's cwd notionally sits via repoRoot)
 
-	_, err := Undo(env, s, entry)
+	_, err := Undo(env, s, entry, false)
 	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
 		t.Fatalf("undo = %v, want the cwd-inside refusal", err)
 	}
@@ -498,7 +498,7 @@ func TestUndoPropagatesRepoRootProbeFailure(t *testing.T) {
 	boom := errors.New("rev-parse exploded")
 	f.failErr["RepoRoot"] = boom
 
-	_, err := Undo(env, s, entry)
+	_, err := Undo(env, s, entry, false)
 	if err == nil || !strings.Contains(err.Error(), "rev-parse exploded") {
 		t.Fatalf("undo = %v, want the RepoRoot probe failure surfaced", err)
 	}
@@ -563,7 +563,7 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, s, entry)
+		_, err := Undo(env, s, entry, false)
 		if !errors.Is(err, ErrStateTooNew) {
 			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
 		}
@@ -576,7 +576,7 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, nil, entry)
+		_, err := Undo(env, nil, entry, false)
 		if !errors.Is(err, ErrStateTooNew) {
 			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
 		}
@@ -589,7 +589,7 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, s, entry)
+		_, err := Undo(env, s, entry, false)
 		if !errors.Is(err, ErrStateTooNew) {
 			t.Fatalf("undo error = %v, want ErrStateTooNew", err)
 		}
@@ -616,7 +616,7 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 				stampVersion(t, entry, version)
 			}
 
-			if _, err := Undo(env, s, entry); err != nil {
+			if _, err := Undo(env, s, entry, false); err != nil {
 				t.Fatalf("undo with schema v%d snapshot: %v", version, err)
 			}
 			if f.BranchExists("b") {
@@ -631,7 +631,7 @@ func TestUndoRejectsFutureSnapshot(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, s, entry)
+		_, err := Undo(env, s, entry, false)
 		if err == nil || errors.Is(err, ErrStateTooNew) {
 			t.Fatalf("undo error = %v, want a parse error (not ErrStateTooNew)", err)
 		}
@@ -699,7 +699,7 @@ func TestUndoTrunkSnapshotRejected(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, s, entry)
+		_, err := Undo(env, s, entry, false)
 		if err == nil || !strings.Contains(err.Error(), "corrupted") {
 			t.Fatalf("undo error = %v, want a corruption error", err)
 		}
@@ -711,7 +711,7 @@ func TestUndoTrunkSnapshotRejected(t *testing.T) {
 		saves := 0
 		env.Save = func() error { saves++; return nil }
 
-		_, err := Undo(env, nil, entry)
+		_, err := Undo(env, nil, entry, false)
 		if err == nil || !strings.Contains(err.Error(), "corrupted") {
 			t.Fatalf("undo error = %v, want a corruption error", err)
 		}
@@ -750,7 +750,7 @@ func TestUndoRefRestoreFailure(t *testing.T) {
 
 	saves := 0
 	env.Save = func() error { saves++; return nil }
-	_, err = Undo(env, s, entry)
+	_, err = Undo(env, s, entry, false)
 	if err == nil {
 		t.Fatal("Undo succeeded despite an unresolvable recorded ref")
 	}
@@ -799,8 +799,8 @@ func TestUndoRefRestoreFailureNilState(t *testing.T) {
 
 	saves := 0
 	env.Save = func() error { saves++; return nil }
-	if _, err := Undo(env, nil, entry); err == nil {
-		t.Fatal("Undo(nil state) succeeded despite an unresolvable recorded ref")
+	if _, err := Undo(env, nil, entry, false); err == nil {
+		t.Fatal("Undo(nil state, false) succeeded despite an unresolvable recorded ref")
 	}
 	if saves != 0 {
 		t.Fatalf("Save ran %d times despite the failed ref restore", saves)
@@ -841,7 +841,7 @@ func TestUndoCleanupThenBatchFailure(t *testing.T) {
 
 	saves := 0
 	env.Save = func() error { saves++; return nil }
-	if _, err := Undo(env, s, entry); err == nil {
+	if _, err := Undo(env, s, entry, false); err == nil {
 		t.Fatal("Undo succeeded despite an unresolvable recorded ref")
 	}
 	if saves != 0 {
@@ -860,7 +860,7 @@ func TestUndoCleanupThenBatchFailure(t *testing.T) {
 	// skips the already-deleted branch, the batch restores a to the recorded
 	// snapshot tip, and the op completes.
 	entry.Refs["a"] = recordedA
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("retry after batch failure: %v", err)
 	}
 	assertUndoRestored(t, f, s, entry)
@@ -927,7 +927,7 @@ func TestUndoBatchesExistenceProbes(t *testing.T) {
 	entry.CreatedBranches = []string{"b", "c", "d"}
 
 	before := f.callsSnapshot()
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	for method, want := range map[string]int{"Tips": 1, "BranchExists": 0, "RevParse": 0} {
@@ -957,7 +957,7 @@ func TestUndoDegradesToPerBranchProbes(t *testing.T) {
 
 	f.failErr["Tips"] = errors.New("for-each-ref exploded")
 	before := f.callsSnapshot()
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("undo: %v", err)
 	}
 	assertUndoRestored(t, f, s, entry)
@@ -997,5 +997,210 @@ func TestUndoPreviewBatchesExistenceProbes(t *testing.T) {
 	}
 	if len(res.WouldDelete) != 3 {
 		t.Fatalf("WouldDelete = %v, want b, c, d", res.WouldDelete)
+	}
+}
+
+// pinPostRefs mimics FinalizeUndo's post-operation tip capture on an
+// in-memory entry: the tips of every recorded branch plus the op-created
+// branches the op left live.
+func pinPostRefs(t *testing.T, f *fakeGit, entry *UndoEntry, created ...string) {
+	t.Helper()
+	tips, err := f.Tips()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.PostRefs = postRefsFor(entry, tips, true, created)
+}
+
+// TestUndoRefusesExternallyMovedRef pins the external-drift refusal: a branch
+// committed on outside st between the op and the undo is drift — undo refuses
+// before any mutation instead of rewinding the unrecorded commits.
+func TestUndoRefusesExternallyMovedRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+	postB, _ := f.RevParse("b")
+
+	// Someone amends a outside st: the live tip now differs from BOTH the
+	// recorded pre-op tip and the post-op tip undo expects to CAS against.
+	mustCheckout(t, f, "a")
+	f.amend("external work")
+	extA, _ := f.RevParse("a")
+
+	before := f.callsSnapshot()
+	_, err := Undo(env, s, entry, false)
+	if err == nil {
+		t.Fatal("Undo succeeded over an externally moved ref")
+	}
+	if !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "moved outside st") {
+		t.Fatalf("error = %q, want it to name the diverged branch", err)
+	}
+	// The refusal is a preflight: no cleanup, no ref batch, no save ran.
+	for method, want := range map[string]int{"DeleteBranch": 0, "UpdateRefsCas": 0, "Checkout": 0, "WorktreeRemove": 0} {
+		if got := f.calls[method] - before[method]; got != want {
+			t.Fatalf("%s calls during refused Undo = %d, want %d", method, got, want)
+		}
+	}
+	if got, _ := f.RevParse("a"); got != extA {
+		t.Fatalf("a = %q after refused undo, want the external tip %q", got, extA)
+	}
+	if got, _ := f.RevParse("b"); got != postB {
+		t.Fatalf("b = %q after refused undo, want %q", got, postB)
+	}
+}
+
+// TestUndoForceRestoresDivergedRef pins the escape hatch: the same divergence
+// that refuses a plain undo is restored unconditionally under force, with a
+// note naming the overwritten refs.
+func TestUndoForceRestoresDivergedRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+	mustCheckout(t, f, "a")
+	f.amend("external work")
+
+	res, err := Undo(env, s, entry, true)
+	if err != nil {
+		t.Fatalf("Undo(force) over a diverged ref: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+	joined := strings.Join(res.Notes, "\n")
+	if !strings.Contains(joined, "a") || !strings.Contains(joined, "force") {
+		t.Fatalf("notes = %v, want a --force note naming the overwritten ref", res.Notes)
+	}
+}
+
+// TestUndoRetryOnAlreadyRestoredRef pins idempotent retry under CAS: when the
+// live tip already equals the recorded pre-op tip — an earlier undo restored
+// it before failing later — it is skipped rather than CAS'd against the
+// post-op tip it no longer matches.
+func TestUndoRetryOnAlreadyRestoredRef(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	pinPostRefs(t, f, entry)
+
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("first undo: %v", err)
+	}
+	// Live tips now equal the recorded pre-op values while postRefs still
+	// name the post-op tips: a naive CAS would refuse the retry.
+	if _, err := Undo(env, s, entry, false); err != nil {
+		t.Fatalf("retry of an already-restored entry refused: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+}
+
+// TestUndoRefusesRecreatedBranch: the op deleted a recorded branch, so its
+// post-op expectation is "absent". An external recreation must refuse rather
+// than be silently overwritten by the resurrect restore.
+func TestUndoRefusesRecreatedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "delete")
+	// The op deletes b and untracks it — b is absent from postRefs.
+	if err := f.DeleteBranch("b", true); err != nil {
+		t.Fatal(err)
+	}
+	delete(s.Branches, "b")
+	pinPostRefs(t, f, entry)
+
+	// Someone recreates b at a different commit before the undo.
+	aTip, _ := f.RevParse("a")
+	if err := f.CreateBranchAt("b", aTip); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Undo(env, s, entry, false); err == nil {
+		t.Fatal("Undo resurrected over an externally recreated branch")
+	}
+	if got, _ := f.RevParse("b"); got != aTip {
+		t.Fatalf("b = %q after refused undo, want the external tip %q", got, aTip)
+	}
+}
+
+// TestUndoRefusesAmendedCreatedBranch: a branch the op created is doomed to
+// deletion, so a post-op commit on it must refuse — undoing would discard
+// work that was never recorded anywhere.
+func TestUndoRefusesAmendedCreatedBranch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	mkBranch(t, env, s, f, "a", "doomed")
+	pinPostRefs(t, f, entry, "doomed")
+
+	// A post-op commit lands on the doomed branch outside st.
+	mustCheckout(t, f, "doomed")
+	f.commit("work on the created branch")
+	mustCheckout(t, f, "a")
+
+	if _, err := Undo(env, s, entry, false); err == nil {
+		t.Fatal("Undo deleted an externally amended created branch")
+	}
+	if !f.BranchExists("doomed") {
+		t.Fatal("doomed branch deleted despite the drift refusal")
+	}
+}
+
+// TestUndoLegacyEntryRestoresUnconditionally pins the backward-compatible
+// path: entries without PostRefs (written before the field existed, or kept
+// for a failed op whose refs abort/continue legitimately moved) restore
+// unconditionally — and say so.
+func TestUndoLegacyEntryRestoresUnconditionally(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "modify")
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	// No pinPostRefs: the entry predates the field.
+	mustCheckout(t, f, "a")
+	f.amend("external work")
+
+	res, err := Undo(env, s, entry, false)
+	if err != nil {
+		t.Fatalf("legacy undo over a moved ref: %v", err)
+	}
+	assertUndoRestored(t, f, s, entry)
+	joined := strings.Join(res.Notes, "\n")
+	if !strings.Contains(joined, "unconditionally") {
+		t.Fatalf("notes = %v, want the unconditional-restore note", res.Notes)
 	}
 }

@@ -216,8 +216,8 @@ func TestUndoStateSaveFailureRefsAlreadyRestored(t *testing.T) {
 	disk := postStateRaw // simulated persisted metadata
 	env.Save = func() error {
 		saves++
-		// Each save attempt must follow exactly one UpdateRefs batch.
-		if f.calls["UpdateRefs"] != saves {
+		// Each save attempt must follow exactly one UpdateRefsCas batch.
+		if f.calls["UpdateRefsCas"] != saves {
 			orderOK = false
 		}
 		if saves == 1 {
@@ -231,15 +231,15 @@ func TestUndoStateSaveFailureRefsAlreadyRestored(t *testing.T) {
 		return nil
 	}
 
-	_, err = Undo(env, s, entry)
+	_, err = Undo(env, s, entry, false)
 	if !errors.Is(err, saveErr) {
 		t.Fatalf("Undo with a failing save = %v, want %v", err, saveErr)
 	}
 	if !strings.Contains(err.Error(), "already restored") {
 		t.Fatalf("error %q must report that the refs were already restored", err)
 	}
-	if saves != 1 || f.calls["UpdateRefs"] != 1 || !orderOK {
-		t.Fatalf("saves=%d UpdateRefs=%d orderOK=%v, want 1/1/true", saves, f.calls["UpdateRefs"], orderOK)
+	if saves != 1 || f.calls["UpdateRefsCas"] != 1 || !orderOK {
+		t.Fatalf("saves=%d UpdateRefsCas=%d orderOK=%v, want 1/1/true", saves, f.calls["UpdateRefsCas"], orderOK)
 	}
 	// Every recorded ref was restored even though the save failed.
 	for name, sha := range entry.Refs {
@@ -271,7 +271,7 @@ func TestUndoStateSaveFailureRefsAlreadyRestored(t *testing.T) {
 
 	// Retry the same retained entry with a working save: the batch re-runs
 	// idempotently, the snapshot persists, and the op completes.
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("retry after save failure: %v", err)
 	}
 	gotState, err = json.Marshal(s)
@@ -686,7 +686,7 @@ func TestProbeFailuresSurface(t *testing.T) {
 			run: func(env Env, f *fakeGit, s *State) error {
 				entry := mustSnapshot(t, s, f, "worktree")
 				entry.CreatedBranches = []string{"c"}
-				_, err := Undo(env, s, entry)
+				_, err := Undo(env, s, entry, false)
 				return err
 			},
 			wantSub: boom.Error(),
@@ -734,7 +734,7 @@ func TestSnapshotUndoCurrentBranchDegrade(t *testing.T) {
 	if err := f.Checkout("main"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Undo(env, s, entry); err != nil {
+	if _, err := Undo(env, s, entry, false); err != nil {
 		t.Fatalf("Undo: %v", err)
 	}
 	if f.head == "a" {
