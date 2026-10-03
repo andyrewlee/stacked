@@ -75,6 +75,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **`st undo` restores refs before saving snapshot metadata.** The ref
+  transaction now runs ahead of the state save: a failed transaction leaves
+  live refs and persisted metadata consistent with each other (previously a
+  failed restore could leave snapshot-era `parentSHA`s beside the newer
+  tips). A failed save after a successful restore reports that the refs were
+  already restored, and the retained journal entry makes a plain `st undo`
+  retry complete the operation.
+- **Cross-worktree restacks no longer use a stale owner map.** Rebasing one
+  branch in place moves the caller's worktree HEAD, which invalidates which
+  worktree "owns" the next branch in the cascade — a stale owner routed the
+  conflict through the foreign-worktree path and auto-aborted it instead of
+  leaving it paused for `st continue`. The worktree memo now resets after
+  every rebase attempt (success or failure).
 - **Navigation and `st init` now hold the repository lock.** `st checkout
   <branch>`, `up`, `down`, `top`, `bottom`, and `init` previously read state
   and moved HEAD (or wrote initial metadata) unlocked, so a concurrent `st`

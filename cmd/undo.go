@@ -74,9 +74,12 @@ type undoStepResult struct {
 
 // runUndoApply reverts the newest n journal entries, newest-first — the order
 // that makes each step's restore land on the state the next-older entry
-// expected. Each entry is its own atomic unit (Undo + DropUndo inside the one
-// lock acquisition); a refusal mid-sequence stops with the already-undone
-// prefix reported, mirroring worktree rm --all's partial-progress contract.
+// expected. Each step runs Undo + DropUndo inside the one lock acquisition,
+// and only a successful step drops its entry — a mid-sequence failure leaves
+// the failed entry in the journal for retry (the ref restore itself is
+// atomic, but stack.Undo's earlier cleanup may already have run; see its
+// failure-boundary comment). The already-undone prefix is reported like
+// worktree rm --all's partial-progress contract.
 func runUndoApply(asJSON bool, n int) error {
 	release, err := acquireLock()
 	if err != nil {

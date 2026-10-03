@@ -1283,3 +1283,72 @@ func TestWorktreeRemoveAllLeavesUntracked(t *testing.T) {
 	}
 	r.stOK("validate")
 }
+
+// TestRestackCacheInvalidationKeepsConflictPaused pins the stale-worktree-owner
+// regression: `st restack --all` memoizes `git worktree list` for the process.
+// Rebasing feat-a IN PLACE moves the caller's worktree HEAD from feat-b to
+// feat-a — if the memoized list is not invalidated, feat-b still looks owned
+// by the caller's worktree and is misrouted through restackInWorktree, which
+// ABORTS its conflict instead of leaving it paused for `st continue`. With the
+// cache reset after every rebase attempt, feat-b is re-probed as unowned and
+// its conflict pauses in the caller's worktree (exit 2).
+func TestRestackCacheInvalidationKeepsConflictPaused(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T) (*repo, string) {
+		r := newRepo(t)
+		r.initStack()
+		// main seeds the line; feat-a only adds an unrelated file so it rebases
+		// cleanly; feat-b edits the seeded line so it conflicts when main
+		// advances it.
+		r.writeFile("shared.txt", "seed\n")
+		r.git("add", "shared.txt")
+		r.git("commit", "-q", "-m", "seed")
+		r.create("feat-a", "a.txt", "a\n", "a")
+		r.writeFile("shared.txt", "edited-by-b\n")
+		r.create("feat-b", "b.txt", "b\n", "b")
+
+		// A linked worktree owns main and advances the seeded line, so the
+		// caller's `restack --all` must first rebase feat-a in place — the
+		// move that invalidates the cached owner map.
+		wt := filepath.Join(t.TempDir(), "wt")
+		r.git("worktree", "add", "-q", wt, "main")
+		if err := os.WriteFile(filepath.Join(wt, "shared.txt"), []byte("trunk-advance\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r.gitIn(wt, "add", "shared.txt")
+		r.gitIn(wt, "commit", "-q", "-m", "advance main")
+		return r, wt
+	}
+
+	assertPaused := func(t *testing.T, r *repo, res result) {
+		t.Helper()
+		wantExit(t, res, 2)
+		if !r.isAncestor("main", "feat-a") {
+			t.Fatal("feat-a must have restacked onto the advanced main before feat-b's conflict")
+		}
+		// The regression discriminator: the paused rebase's metadata lives in
+		// the caller's git dir. The misrouted path aborts instead, leaving no
+		// rebase-merge state at all.
+		gitDir := r.gitIn(r.dir, "rev-parse", "--absolute-git-dir")
+		if _, err := os.Stat(filepath.Join(gitDir, "rebase-merge")); err != nil {
+			t.Fatalf("feat-b's conflict must remain paused in the caller's worktree: %v", err)
+		}
+		r.stOK("abort")
+	}
+
+	t.Run("text", func(t *testing.T) {
+		r, _ := build(t)
+		res := r.st("restack", "--all")
+		assertPaused(t, r, res)
+	})
+	t.Run("json", func(t *testing.T) {
+		r, _ := build(t)
+		res := r.st("restack", "--all", "--json")
+		wantExit(t, res, 2)
+		if !strings.Contains(res.stderr, `"conflict"`) || !strings.Contains(res.stderr, "feat-b") {
+			t.Fatalf("conflict envelope missing code/branch:\n%s", res.stderr)
+		}
+		assertPaused(t, r, res)
+	})
+}

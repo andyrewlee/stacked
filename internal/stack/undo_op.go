@@ -8,13 +8,20 @@ import (
 )
 
 // Undo reverts the mutation recorded in entry: branches the undone command
-// created are deleted (moving HEAD out of the way first when needed), the
-// state is rolled back to the snapshot, every recorded ref is restored, and
-// the branch that was checked out at capture time is checked out again when
-// possible. s is the currently-loaded state (nil when it could not be loaded);
-// on success it is replaced in place with the snapshot state and persisted via
-// env.save(). The working tree is never modified. The journal entry itself is
-// not dropped — that is the caller's job after a successful undo.
+// created are deleted (moving HEAD out of the way first when needed), every
+// recorded ref is restored in one transaction, the state is rolled back to the
+// snapshot, and the branch that was checked out at capture time is checked out
+// again when possible. s is the currently-loaded state (nil when it could not
+// be loaded); on success it is replaced in place with the snapshot state and
+// persisted via env.save(). The working tree is never modified. The journal
+// entry itself is not dropped — that is the caller's job after a successful
+// undo.
+//
+// Failure boundary: the op is not transactional. Earlier cleanup may already
+// have deleted created worktrees/branches when a later phase fails; the
+// retained journal entry makes a retry safe — a failed ref transaction moved
+// nothing, and a failed save reports the already-restored refs so the error
+// is never mistaken for "nothing happened".
 func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 	g := env.Git
 	// Both schema barriers run before ANY git call, Save, or bookkeeping: a
@@ -120,19 +127,11 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		}
 	}
 
-	if s != nil {
-		*s = *prev
-		if s.Branches == nil {
-			s.Branches = make(map[string]*Branch)
-		}
-	}
-	if err := env.save(); err != nil {
-		return nil, fmt.Errorf("restoring stack state: %w", err)
-	}
-
-	// Restore every recorded ref in ONE update-ref transaction: on failure no
-	// ref moves, which is strictly better for a recovery path than a
-	// sequential loop that can die halfway.
+	// Restore every recorded ref in ONE update-ref transaction BEFORE saving
+	// the snapshot metadata: on failure no ref moves, so the live refs and
+	// persisted metadata stay consistent with each other and the retained
+	// journal entry can simply be retried. Saving first would instead leave
+	// snapshot-era parentSHAs beside the newer un-restored tips.
 	updates := make(map[string]string, len(entry.Refs))
 	names := make([]string, 0, len(entry.Refs))
 	for name, sha := range entry.Refs {
@@ -149,6 +148,20 @@ func Undo(env Env, s *State, entry *UndoEntry) (*OpResult, error) {
 		for name, sha := range entry.Refs {
 			liveSet[name] = sha
 		}
+	}
+
+	// Refs are restored; now swap in and persist the snapshot metadata. If
+	// the save fails the live refs are already rolled back while persisted
+	// metadata is not — do NOT roll the transaction back: the journal entry
+	// was not dropped, so a retry restores the same refs and saves then.
+	if s != nil {
+		*s = *prev
+		if s.Branches == nil {
+			s.Branches = make(map[string]*Branch)
+		}
+	}
+	if err := env.save(); err != nil {
+		return nil, fmt.Errorf("saving restored stack state (branch refs were already restored; fix the cause and rerun `st undo`): %w", err)
 	}
 
 	if !skipCheckoutRestore && entry.CurrentBranch != "" && liveSet.exists(g, entry.CurrentBranch) {

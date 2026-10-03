@@ -252,6 +252,127 @@ func TestAbortRestoresState(t *testing.T) {
 	}
 }
 
+// TestUndoRefFailureRetainsEntryAndState proves the real-Git retry contract: a
+// ref lock makes the snapshot-ref transaction fail atomically, so undo leaves
+// post-operation refs, state, and journal bytes untouched and keeps the
+// entry — and once the lock clears, retrying that same entry restores the
+// recorded refs and metadata and drops exactly that entry.
+func TestUndoRefFailureRetainsEntryAndState(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "f.txt", "A\n", "a")
+	mustCreate(t, "feat-b", "f.txt", "A\nB\n", "b")
+	mustCheckout(t, "feat-a")
+
+	// A modify-style entry: no created branches, refs = pre-op tips. The
+	// amend touches a file feat-b does not, so the cascade restack is clean.
+	write(t, "a2.txt", "C\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	entries, err := stack.ListUndo()
+	if err != nil {
+		t.Fatalf("ListUndo: %v", err)
+	}
+	newest := entries[len(entries)-1]
+	if newest.Label != "modify" {
+		t.Fatalf("newest undo entry = %q, want the modify", newest.Label)
+	}
+	postA := mustRun(t, "git", "rev-parse", "feat-a")
+	postB := mustRun(t, "git", "rev-parse", "feat-b")
+	postState, err := os.ReadFile(".git/stacked/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	postUndo, err := os.ReadFile(".git/stacked/undo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the ref transaction to fail: a .lock file on one recorded ref
+	// makes git's lock acquisition fail, so the whole batch aborts.
+	commonDir := mustRun(t, "git", "rev-parse", "--git-common-dir")
+	commonDir, err = filepath.Abs(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(commonDir, "refs", "heads", "feat-a.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("create ref lock: %v", err)
+	}
+	_ = lockFile.Close()
+	t.Cleanup(func() { _ = os.Remove(lockPath) })
+
+	assertUnchanged := func(t *testing.T) {
+		t.Helper()
+		if got := mustRun(t, "git", "rev-parse", "feat-a"); got != postA {
+			t.Fatalf("feat-a = %s after failed undo, want post-op %s", got, postA)
+		}
+		if got := mustRun(t, "git", "rev-parse", "feat-b"); got != postB {
+			t.Fatalf("feat-b = %s after failed undo, want post-op %s", got, postB)
+		}
+		got, err := os.ReadFile(".git/stacked/state.json")
+		if err != nil || !bytes.Equal(got, postState) {
+			t.Fatalf("state.json changed despite the failed undo (err=%v)", err)
+		}
+		got, err = os.ReadFile(".git/stacked/undo.json")
+		if err != nil || !bytes.Equal(got, postUndo) {
+			t.Fatalf("undo.json changed: the failed entry must be retained (err=%v)", err)
+		}
+	}
+
+	for _, mode := range []string{"text", "json"} {
+		t.Run(mode, func(t *testing.T) {
+			args := []string{}
+			if mode == "json" {
+				args = append(args, "--json")
+			}
+			if err := runUndo(args); err == nil {
+				t.Fatal("undo succeeded despite the locked ref")
+			}
+			assertUnchanged(t)
+		})
+	}
+
+	// Clear only the fixture lock and retry: every snapshot ref and the
+	// metadata restore, and exactly the modify entry drops.
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("remove ref lock: %v", err)
+	}
+	if err := runUndo(nil); err != nil {
+		t.Fatalf("retry after clearing the ref lock: %v", err)
+	}
+	for name, sha := range newest.Refs {
+		if got := mustRun(t, "git", "rev-parse", name); got != sha {
+			t.Fatalf("ref %s = %s after retry, want recorded %s", name, got, sha)
+		}
+	}
+	s := stateT(t)
+	var want stack.State
+	if err := json.Unmarshal(newest.State, &want); err != nil {
+		t.Fatalf("snapshot state: %v", err)
+	}
+	gotState, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantState, err := json.Marshal(&want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotState, wantState) {
+		t.Fatalf("state after retry:\n got  %s\nwant %s", gotState, wantState)
+	}
+	after, err := stack.ListUndo()
+	if err != nil {
+		t.Fatalf("ListUndo: %v", err)
+	}
+	if len(after) != len(entries)-1 {
+		t.Fatalf("journal depth = %d after retry, want %d (exactly one entry dropped)", len(after), len(entries)-1)
+	}
+}
+
 func TestUndoRejectsActiveRebase(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

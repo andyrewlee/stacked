@@ -16,8 +16,11 @@ import (
 // command. The cache stays correct because every worktree-mutating AND
 // HEAD-moving site invalidates it via resetWorktreeCache(): the cached port's
 // WorktreeRemove/Checkout/CheckoutDetach/RenameBranch overrides
-// (cmd/gitenv.go) cover engine-driven removals and checkouts, and the cmd
-// layer's direct git.WorktreeRemove calls reset explicitly. The one surgical
+// (cmd/gitenv.go) cover engine-driven removals and checkouts, and its
+// RebaseOnto/RebaseOntoIn/RebaseContinue/RebaseAbort/RebaseAbortIn overrides
+// cover rebase-driven HEAD moves (a rebase attempt — even one that errors —
+// can leave a different branch checked out in a worktree). The cmd layer's
+// direct git.WorktreeRemove and git.Checkout calls reset explicitly. The one surgical
 // exception is noteWorktreeAdded: a worktree the process just created is fully
 // described by the {Path, Branch} it asked git for, so `st worktree --all` —
 // which lists once per add otherwise — appends the known entry instead of

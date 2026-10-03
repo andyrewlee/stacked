@@ -186,36 +186,102 @@ func TestOntoConflictSaveFailAbortFail(t *testing.T) {
 	}
 }
 
-// TestUndoSaveFailureStopsBeforeRefRestore: env.save() inside Undo runs
-// BEFORE UpdateRefs — a persistence failure must abort the whole op with the
-// refs untouched (a half-applied undo that saved nothing is worse than none).
-func TestUndoSaveFailureStopsBeforeRefRestore(t *testing.T) {
+// TestUndoStateSaveFailureRefsAlreadyRestored pins the post-transaction save
+// arm: Undo restores every recorded ref in ONE UpdateRefs batch BEFORE it
+// assigns/persists the snapshot, so when env.save() fails the refs are already
+// restored (the error must say so), in-memory metadata is the snapshot, the
+// simulated persisted state keeps the post-operation bytes, and retrying the
+// retained entry completes.
+func TestUndoStateSaveFailureRefsAlreadyRestored(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
 
-	prev := &State{Trunk: "main", Branches: map[string]*Branch{}}
-	raw, err := json.Marshal(prev)
+	entry := mustSnapshot(t, s, f, "modify")
+	// Amend a so every recorded tip differs from the live post-operation ref —
+	// the restore must be observable, not a same-value no-op.
+	if _, err := Modify(env, s, "", true, false); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	postStateRaw, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := &UndoEntry{
-		Label:         "create a",
-		State:         raw,
-		Refs:          map[string]string{"main": f.branches["main"], "a": f.branches["a"]},
-		LocalBranches: []string{"main", "a"},
-	}
 
 	saveErr := errors.New("disk full")
-	env2, saves := envWithSaveErr(f, saveErr, 0)
-	if _, err := Undo(env2, s, entry); !errors.Is(err, saveErr) {
+	saves := 0
+	orderOK := true
+	disk := postStateRaw // simulated persisted metadata
+	env.Save = func() error {
+		saves++
+		// Each save attempt must follow exactly one UpdateRefs batch.
+		if f.calls["UpdateRefs"] != saves {
+			orderOK = false
+		}
+		if saves == 1 {
+			return saveErr
+		}
+		raw, err := json.Marshal(s)
+		if err != nil {
+			return err
+		}
+		disk = raw
+		return nil
+	}
+
+	_, err = Undo(env, s, entry)
+	if !errors.Is(err, saveErr) {
 		t.Fatalf("Undo with a failing save = %v, want %v", err, saveErr)
 	}
-	if *saves == 0 {
-		t.Fatal("the checkpoint save was never attempted")
+	if !strings.Contains(err.Error(), "already restored") {
+		t.Fatalf("error %q must report that the refs were already restored", err)
 	}
-	if f.calls["UpdateRefs"] != 0 {
-		t.Fatalf("UpdateRefs ran %d times despite the save failure — refs moved with nothing persisted", f.calls["UpdateRefs"])
+	if saves != 1 || f.calls["UpdateRefs"] != 1 || !orderOK {
+		t.Fatalf("saves=%d UpdateRefs=%d orderOK=%v, want 1/1/true", saves, f.calls["UpdateRefs"], orderOK)
 	}
+	// Every recorded ref was restored even though the save failed.
+	for name, sha := range entry.Refs {
+		got, err := f.RevParse(branchTipRef(name))
+		if err != nil || got != sha {
+			t.Fatalf("ref %q = %q (%v) after failed save, want restored %q", name, got, err, sha)
+		}
+	}
+	// In-memory metadata is the snapshot; the simulated disk still holds the
+	// post-operation bytes.
+	gotState, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prev State
+	if err := json.Unmarshal(entry.State, &prev); err != nil {
+		t.Fatal(err)
+	}
+	wantState, err := json.Marshal(&prev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotState) != string(wantState) {
+		t.Fatalf("in-memory state after failed save:\n got  %s\nwant %s", gotState, wantState)
+	}
+	if string(disk) != string(postStateRaw) {
+		t.Fatalf("persisted state moved despite the failed save:\n got  %s\nwant %s", disk, postStateRaw)
+	}
+
+	// Retry the same retained entry with a working save: the batch re-runs
+	// idempotently, the snapshot persists, and the op completes.
+	if _, err := Undo(env, s, entry); err != nil {
+		t.Fatalf("retry after save failure: %v", err)
+	}
+	gotState, err = json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(disk) != string(gotState) {
+		t.Fatalf("retry persisted %s, want the in-memory snapshot %s", disk, gotState)
+	}
+	assertUndoRestored(t, f, s, entry)
 }
 
 // TestRepairedParentSHAMergeBaseFallback pins the silent-fallback arm: when
