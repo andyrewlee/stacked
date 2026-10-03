@@ -227,13 +227,18 @@ message.
     `malformed_snapshot`, `malformed_journal`,
     `cwd_inside_created_worktree:<b>`,
     `recorded_worktree_mismatch:<b>`, `worktree_dirty:<b>`,
-    `missing_restore_target:<b>`, `ref_moved_since:<b>` — a missing ref is
+    `missing_restore_target:<b>`, `ref_moved_since:<b>`,
+    `paused_rebase:<b>` — a missing ref is
     NOT a blocker (undo
     restores it). `ref_moved_since:<b>` marks a branch whose live tip no
     longer matches either the recorded pre- or post-operation tip — it moved
     outside `st`; the real run refuses unless `--force`, and the dry-run
     reports it only on the newest entry (deeper steps run after the earlier
-    restores rewrite the refs the preview still sees). `malformed_journal`
+    restores rewrite the refs the preview still sees). `paused_rebase:<b>`
+    marks a branch this entry would rewrite that has a rebase paused in a
+    linked worktree (that worktree lists as `detached`, so only the rebase
+    head-name names its branch); the real run refuses unless `--force`.
+    `malformed_journal`
     is emitted when an entry's ref values are not full commit ids — such
     entries are already dropped at journal load, so it can only appear when
     the journal raced a manual edit mid-command. `wouldCheckout` is the landing branch a real run performs,
@@ -284,6 +289,15 @@ message.
   trunk.
 - `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
   stack is in sync.
+- Every mutating command refuses (exit 1) while a rebase is paused — in the
+  current worktree, or in a LINKED worktree when the paused branch is the trunk
+  or a tracked branch. A linked worktree mid-rebase lists as `detached`, so
+  the refusal resolves the paused branch through the rebase head-name and
+  names the worktree path to resolve (`st continue`/`st abort` run there).
+  Pauses on branches `st` does not track never block. `continue`, `abort`,
+  `undo`, and the `worktree` commands bypass this sweep — `continue`/`abort`
+  resolve pauses, while `undo` and `worktree rm` apply their own narrower
+  refusals scoped to the refs or worktree they would touch.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not
   touch the working tree. `undo <n>` rewinds the newest `n` journal entries
   newest-first; each step drops its journal entry only after its restore
@@ -301,6 +315,12 @@ message.
   the overwritten refs. Entries recorded before this pinning — or retained
   for a FAILED operation whose refs `st abort`/`st continue` legitimately
   moved afterwards — restore unconditionally, as they always did.
+  Undo also refuses when a ref it would rewrite — or a doomed branch it
+  would delete — has a rebase paused in a linked worktree
+  (`paused_rebase` in `--dry-run`): git refuses the delete mid-cleanup and a
+  later `--continue`/`--abort` would update-ref the branch anyway, so a
+  restore cannot stick. Pauses on branches the entry does not touch never
+  block it; `st undo --force` bypasses the refusal.
 - Mutating commands, HEAD-moving navigation (`checkout <branch>`,
   `up`, `down`, `top`, `bottom`), and `init` are serialized across `st`
   processes by an advisory lock (a second one fails fast rather than
@@ -347,6 +367,9 @@ One stack, N agents, one worktree per branch:
    branch that has one — worktrees of untracked branches are untouched
    (dirty ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
    `st undo` after a `create --worktree` also removes the worktree it created.
+   A worktree paused mid-rebase is found even though `git worktree list`
+   reports it `detached` — `rm` refuses it and `rm --all` skips it as
+   "a rebase is in progress there", rather than answering "no worktree".
 
    Worktree paths are byte-exact: on git ≥ 2.36 the listing uses the
    NUL-framed `worktree list --porcelain -z` grammar, so paths containing

@@ -70,10 +70,12 @@ func mutateState(label string, asJSON bool, op func(stack.Env, *stack.State) err
 	}
 	defer release()
 	env := stackEnv(s, asJSON)
-	// Refuse state mutations while a rebase is paused: edits mid-rebase can
-	// orphan the pending-reparent record or reorder the stack under the rebase.
+	// Refuse state mutations while a rebase is paused — here or in a linked
+	// worktree: edits mid-rebase can orphan the pending-reparent record or
+	// reorder the stack under the rebase, and git's own "used by worktree"
+	// refusals would otherwise land mid-operation.
 	// continue/abort/undo/worktree bypass mutateState and are unaffected.
-	if err := stack.RequireNoPausedRebase(env.Git); err != nil {
+	if err := stack.RequireNoPausedRebase(env.Git, s); err != nil {
 		return err
 	}
 	undoEntry, err := s.RecordUndo(env.Git, label)

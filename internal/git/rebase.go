@@ -121,6 +121,27 @@ func RebaseHeadName() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return rebaseHeadNameAt(gitDir)
+}
+
+// RebaseHeadNameIn returns the branch a paused rebase in the worktree at dir
+// targets, resolved through that worktree's own git dir — the metadata is
+// per-worktree like RebaseInProgressIn's. A worktree mid-rebase reports
+// "detached" in `git worktree list`, so head-name is the only way to learn
+// which branch its --continue/--abort will eventually update-ref. Empty
+// means no in-progress rebase was found or it names no branch.
+func RebaseHeadNameIn(dir string) (string, error) {
+	if dir == "" {
+		return "", fmt.Errorf("worktree dir is empty")
+	}
+	gitDir, err := Run("-C", dir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	return rebaseHeadNameAt(gitDir)
+}
+
+func rebaseHeadNameAt(gitDir string) (string, error) {
 	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
 		data, err := os.ReadFile(filepath.Join(gitDir, dir, "head-name"))
 		if err != nil {

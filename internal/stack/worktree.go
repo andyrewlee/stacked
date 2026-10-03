@@ -157,6 +157,44 @@ func LinkedOwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool)
 	return git.Worktree{}, false
 }
 
+// PausedRebaseOwners maps each branch that has a rebase paused in a detached
+// worktree to that worktree, in one pass over a caller-fetched worktree list.
+// A worktree mid-rebase lists as `detached` with no branch attribute, so
+// OwnerOf/LinkedOwnerOf cannot see the branch its --continue/--abort will
+// eventually update-ref — only rebase-merge|rebase-apply/head-name names it.
+// Git itself refuses `branch -D` and `rebase --onto` for such a branch, so an
+// op that reaches it fails mid-mutation; the mutation gate and undo use this
+// map to refuse UP FRONT instead (untracked heads like "detached HEAD" never
+// match a tracked name, so foreign pauses on branches st does not manage do
+// not block anything).
+func PausedRebaseOwners(g Git, wts []git.Worktree) (map[string]git.Worktree, error) {
+	var paused map[string]git.Worktree
+	for _, wt := range wts {
+		if wt.Branch != "" {
+			continue // attached worktrees report their owner branch directly
+		}
+		inRebase, err := g.RebaseInProgressIn(wt.Path)
+		if err != nil {
+			return nil, fmt.Errorf("checking rebase state in worktree %q: %w", wt.Path, err)
+		}
+		if !inRebase {
+			continue
+		}
+		head, err := g.RebaseHeadNameIn(wt.Path)
+		if err != nil {
+			return nil, fmt.Errorf("reading paused rebase head-name in worktree %q: %w", wt.Path, err)
+		}
+		if head == "" {
+			continue
+		}
+		if paused == nil {
+			paused = map[string]git.Worktree{}
+		}
+		paused[head] = wt
+	}
+	return paused, nil
+}
+
 // ownerElsewhere reports whether branch is checked out in a worktree OTHER than
 // the one this process runs in. In a single-tree repo (or when branch is the
 // current branch here) it returns false, so the in-place rebase path is taken

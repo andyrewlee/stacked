@@ -67,13 +67,46 @@ func AlsoFailed(primary error, what string, secondary error) error {
 // state edits mid-rebase can orphan the PendingReparent record or reorder the
 // stack under the paused rebase (e.g. renaming the branch being rebased). st
 // continue/st abort bypass this on purpose — they exist to resolve the pause.
-func RequireNoPausedRebase(g Git) error {
+//
+// The sweep also covers LINKED worktrees: a worktree mid-rebase reports
+// `detached` in `git worktree list`, so owner resolution cannot see the branch
+// its paused rebase targets. Git protects the branch itself (`branch -D` and
+// `rebase --onto` both refuse a worktree-owned branch), but the refusal lands
+// mid-operation — after earlier prune/cascade steps already applied. Refusing
+// here keeps every mutation all-or-nothing and names where to resolve it.
+// Pauses targeting branches st does not track are ignored: st ops can never
+// reach them.
+func RequireNoPausedRebase(g Git, s *State) error {
 	inProgress, err := g.RebaseInProgress()
 	if err != nil {
 		return fmt.Errorf("checking rebase state: %w", err)
 	}
 	if inProgress {
 		return errors.New("a rebase is in progress; resolve it with `st continue` or `st abort` first")
+	}
+	wts, err := g.Worktrees()
+	if err != nil {
+		return fmt.Errorf("listing worktrees for paused-rebase check: %w", err)
+	}
+	if !IsMultiWorktree(wts) {
+		return nil
+	}
+	paused, err := PausedRebaseOwners(g, wts)
+	if err != nil {
+		return err
+	}
+	// Deterministic refusal when several tracked branches are paused: report
+	// the sorted first (each names its own worktree; resolve and retry).
+	var names []string
+	for head := range paused {
+		if head == s.Trunk || s.IsTracked(head) {
+			names = append(names, head)
+		}
+	}
+	if len(names) > 0 {
+		sort.Strings(names)
+		head := names[0]
+		return fmt.Errorf("branch %q has a rebase in progress in worktree %q; resolve it there (`st continue` or `st abort`) before mutating the stack", head, paused[head].Path)
 	}
 	return nil
 }

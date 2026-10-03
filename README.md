@@ -240,7 +240,10 @@ the branch checked out in the main worktree is skipped, and a rerun is a
 no-op. `st worktree rm --all` is the bulk teardown: it removes the linked worktree
 of every tracked branch that has one — worktrees belonging to untracked
 branches are left alone — skipping dirty ones (in-progress work is never
-discarded) and the branch checked out in the main worktree. The stack metadata is
+discarded) and the branch checked out in the main worktree. A worktree paused
+mid-rebase is refused by `rm` and skipped by `rm --all` as "a rebase is in
+progress there" — it lists as `detached`, but `st` still knows which branch
+its rebase owns. The stack metadata is
 shared across all worktrees, so every `st` command sees the same stack.
 
 #### `st shell install [bash|zsh|fish]`
@@ -281,7 +284,11 @@ stash first). If a rebase hits a conflict, resolve it, stage the files with
 `git add`, then run `st continue`. When a dependent branch lives in its own
 worktree (see `st worktree`), it is rebased *inside that worktree* — git won't
 let it be rebased from here — as long as that worktree is clean; a dirty
-dependent worktree is skipped with a note rather than clobbered.
+dependent worktree is skipped with a note rather than clobbered. Similarly,
+every mutating command refuses while a tracked branch (or the trunk) has a
+rebase paused in a linked worktree — git would refuse mid-operation anyway,
+so `st` fails upfront naming the branch and its worktree; resolve it there
+with `st continue` or `st abort`. Pauses on untracked branches never block.
 
 #### `st continue`
 Resumes a restack that stopped on a merge conflict. After you resolve the conflict
@@ -402,7 +409,11 @@ branch was recreated), `st undo` refuses rather than silently rewinding it —
 restores the recorded tips anyway and names the refs it overwrote. Entries
 written by older versions — and entries kept for failed operations whose refs
 `st abort`/`st continue` may legitimately have moved — restore unconditionally
-with a note saying so.
+with a note saying so. Undo likewise refuses when a branch it would rewrite
+has a rebase paused in a linked worktree (`paused_rebase:<name>` in
+`--dry-run`) — a later `git rebase --continue`/`--abort` would overwrite the
+restored tip anyway. Pauses on branches the entry does not touch never block
+it; `--force` bypasses the refusal.
 
 #### `st repair`
 Fixes the drift `st validate` reports: untracks branches whose git branch was

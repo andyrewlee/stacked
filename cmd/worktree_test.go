@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1242,5 +1243,102 @@ func TestNoteWorktreeAddedKeepsCacheCoherent(t *testing.T) {
 	}
 	if _, ok := stack.LinkedOwnerOf(fresh, "feat-x"); ok {
 		t.Fatal("reset cache still reports the appended phantom worktree")
+	}
+}
+
+// TestWorktreePausedRebaseGates pins the plan-002 contract against real Git:
+// a tracked branch paused mid-rebase in a LINKED worktree reports `detached`
+// to `git worktree list`, so the rebase head-name — not the branch owner —
+// carries the truth. The mutation gate, `worktree rm`, `rm --all`, and undo
+// must all refuse before git would fail mid-operation.
+func TestWorktreePausedRebaseGates(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	// Diverge main FIRST so the journal records the diverged tip — an
+	// out-of-band main move after snapshotting is exactly the plan-001 drift
+	// check, which would fire ahead of the pause refusal under test.
+	mustCheckout(t, "main")
+	write(t, "a.txt", "diverged\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
+	mustCheckout(t, "feat-a")
+
+	// A modify entry that rewrites feat-a on undo (touches a2.txt only so
+	// the main-side a.txt edit conflicts on rebase).
+	write(t, "a2.txt", "B\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	mustCheckout(t, "main")
+	resetWorktreeCache()
+
+	wt, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
+	}
+	// Real Git reports the paused worktree as detached; drop the warmed list
+	// so lookups see the same porcelain truth a fresh process would.
+	resetWorktreeCache()
+
+	// Mutation gate: a tracked-branch mutation refuses upfront, naming the
+	// branch and its worktree, before git could fail mid-operation.
+	delErr := runDelete([]string{"feat-a"})
+	if delErr == nil || !strings.Contains(delErr.Error(), "rebase in progress") ||
+		!strings.Contains(delErr.Error(), "feat-a") || !strings.Contains(delErr.Error(), wt.Path) {
+		t.Fatalf("runDelete on paused branch = %v, want the worktree pause refusal", delErr)
+	}
+	if !strings.Contains(delErr.Error(), "st continue") || !strings.Contains(delErr.Error(), "st abort") {
+		t.Fatalf("pause refusal lost the continue/abort pointer: %v", delErr)
+	}
+	// Nothing half-deleted: branch, tracking, and worktree all survive.
+	if err := exec.Command("git", "rev-parse", "--verify", "-q", "refs/heads/feat-a").Run(); err != nil {
+		t.Fatal("refused delete removed the paused branch anyway")
+	}
+	if _, statErr := os.Stat(wt.Path); statErr != nil {
+		t.Fatalf("refused delete removed %q: %v", wt.Path, statErr)
+	}
+	s, err := loadState()
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	if !s.IsTracked("feat-a") {
+		t.Fatal("refused delete untracked the paused branch")
+	}
+
+	// worktree rm: the branch's worktree is found through the paused
+	// head-name (porcelain reports it detached) and refused.
+	rmErr := worktreeRemove("feat-a", false)
+	if rmErr == nil || !strings.Contains(rmErr.Error(), "rebase is in progress there") {
+		t.Fatalf("worktreeRemove on paused branch = %v, want the pause refusal", rmErr)
+	}
+
+	// rm --all: the paused worktree is skipped with a reason, not removed.
+	out := captureStdout(t, func() {
+		if err := worktreeRemoveAll(false); err != nil {
+			t.Fatalf("worktreeRemoveAll: %v", err)
+		}
+	})
+	if !strings.Contains(out, "skipped feat-a") || !strings.Contains(out, "rebase is in progress there") {
+		t.Fatalf("rm --all output = %q, want a paused-rebase skip for feat-a", out)
+	}
+	if _, statErr := os.Stat(wt.Path); statErr != nil {
+		t.Fatalf("rm --all removed the paused worktree %q: %v", wt.Path, statErr)
+	}
+
+	// Undo: the modify journal entry rewrites feat-a — a pause there blocks.
+	undoErr := runUndoApply(false, 1, false)
+	if undoErr == nil || !strings.Contains(undoErr.Error(), "cannot undo") ||
+		!strings.Contains(undoErr.Error(), "rebase in progress") || !strings.Contains(undoErr.Error(), "feat-a") {
+		t.Fatalf("runUndoApply with paused journal branch = %v, want the pause refusal", undoErr)
+	}
+	// --force bypasses the pause (the caller accepts the risk).
+	if err := runUndoApply(false, 1, true); err != nil {
+		t.Fatalf("runUndoApply --force blocked by a pause: %v", err)
 	}
 }

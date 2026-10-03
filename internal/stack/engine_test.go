@@ -1244,18 +1244,71 @@ func TestContinuePromotesPendingReparentWhenHeadNameEmpty(t *testing.T) {
 // while a rebase is paused, and a dead probe surfaces rather than letting the
 // mutation through.
 func TestRequireNoPausedRebase(t *testing.T) {
-	f, _, _ := newEnvState()
-	if err := RequireNoPausedRebase(f); err != nil {
+	f, s, _ := newEnvState()
+	if err := RequireNoPausedRebase(f, s); err != nil {
 		t.Fatalf("no rebase in progress: %v", err)
 	}
 	f.rebaseActive = true
-	if err := RequireNoPausedRebase(f); err == nil || !strings.Contains(err.Error(), "rebase is in progress") {
+	if err := RequireNoPausedRebase(f, s); err == nil || !strings.Contains(err.Error(), "rebase is in progress") {
 		t.Fatalf("paused rebase = %v, want a refusal", err)
 	}
 	f.rebaseActive = false
 	f.failErr["RebaseInProgress"] = errors.New("probe dead")
-	if err := RequireNoPausedRebase(f); err == nil || !strings.Contains(err.Error(), "probe dead") {
+	if err := RequireNoPausedRebase(f, s); err == nil || !strings.Contains(err.Error(), "probe dead") {
 		t.Fatalf("probe failure = %v, want it surfaced", err)
+	}
+}
+
+// TestRequireNoPausedRebaseLinkedWorktree pins the multi-worktree arm of the
+// gate: a worktree paused mid-rebase reports detached, so owner lookups miss
+// the branch its rebase targets. A tracked branch paused elsewhere must
+// refuse UP FRONT — git's own "used by worktree" refusal would otherwise land
+// mid-operation — while a pause on an untracked branch blocks nothing.
+func TestRequireNoPausedRebaseLinkedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+
+	f.addPausedWorktree("/wt-a", "a")
+	err := RequireNoPausedRebase(f, s)
+	if err == nil {
+		t.Fatal("tracked branch paused in a linked worktree passed the gate")
+	}
+	if !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "/wt-a") {
+		t.Fatalf("error = %q, want branch and worktree named", err)
+	}
+	if !strings.Contains(err.Error(), "st continue") {
+		t.Fatalf("error = %q, want a resolve hint", err)
+	}
+
+	// A pause on an untracked branch can never be reached by a stack op.
+	f2, s2, _ := newEnvState()
+	f2.addPausedWorktree("/wt-foreign", "untracked-branch")
+	if err := RequireNoPausedRebase(f2, s2); err != nil {
+		t.Fatalf("untracked paused branch blocked the gate: %v", err)
+	}
+
+	// The trunk itself paused in a linked worktree also refuses: sync's
+	// fast-forward would be clobbered by the pending --continue/--abort.
+	s3 := &State{Trunk: "main", Branches: map[string]*Branch{}}
+	f3 := newFakeGit()
+	f3.addPausedWorktree("/wt-main", "main")
+	if err := RequireNoPausedRebase(f3, s3); err == nil {
+		t.Fatal("trunk paused in a linked worktree passed the gate")
+	}
+
+	// A dead sweep probe surfaces rather than letting the mutation through:
+	// guessing "not paused" is how a delete lands mid-cleanup.
+	f4, s4, _ := newEnvState()
+	f4.failErr["Worktrees"] = errors.New("list dead")
+	if err := RequireNoPausedRebase(f4, s4); err == nil || !strings.Contains(err.Error(), "list dead") {
+		t.Fatalf("Worktrees probe failure = %v, want it surfaced", err)
+	}
+	f5, s5, env5 := newEnvState()
+	mkBranch(t, env5, s5, f5, "main", "a")
+	f5.addPausedWorktree("/wt-a", "a")
+	f5.failErr["RebaseHeadNameIn"] = errors.New("head-name dead")
+	if err := RequireNoPausedRebase(f5, s5); err == nil || !strings.Contains(err.Error(), "head-name dead") {
+		t.Fatalf("RebaseHeadNameIn probe failure = %v, want it surfaced", err)
 	}
 }
 

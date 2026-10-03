@@ -145,6 +145,16 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalI
 		for _, name := range undoExternalDrift(liveSet, g, s, entry) {
 			res.Blockers = append(res.Blockers, "ref_moved_since:"+name)
 		}
+		// Paused-rebase owners mirror Undo's second preflight — same
+		// newest-entry scoping: an earlier step's doomed-worktree removal
+		// could itself resolve the pause.
+		paused, err := undoPausedRebases(g, s, liveSet, entry)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range paused {
+			res.Blockers = append(res.Blockers, "paused_rebase:"+name)
+		}
 	}
 	if entry.PostRefs == nil {
 		res.Notes = append(res.Notes, "the journal entry has no post-operation tips on record; branch refs would restore unconditionally")

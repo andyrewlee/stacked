@@ -1932,6 +1932,46 @@ func TestRebaseInProgressIn(t *testing.T) {
 	}
 }
 
+// TestRebaseHeadNameIn pins the plan-002 characterization against real Git: a
+// linked worktree paused mid-rebase reports `detached` in `git worktree
+// list`, so the head-name file in its own git dir is the only probe that
+// names the branch its --continue/--abort will rewrite.
+func TestRebaseHeadNameIn(t *testing.T) {
+	newRepo(t)
+	mustGit(t, "checkout", "-q", "-b", "feat")
+	writeFile(t, "f.txt", "feat\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "feat")
+	mustGit(t, "checkout", "-q", "main")
+	writeFile(t, "f.txt", "main\n")
+	mustGit(t, "add", "f.txt")
+	mustGit(t, "commit", "-q", "-m", "main-advance")
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, "worktree", "add", "-q", wt, "feat")
+	out, err := exec.Command("git", "-C", wt, "rebase", "main").CombinedOutput()
+	if err == nil {
+		t.Fatalf("git -C wt rebase main unexpectedly succeeded:\n%s", out)
+	}
+
+	name, err := RebaseHeadNameIn(wt)
+	if err != nil {
+		t.Fatalf("RebaseHeadNameIn: %v", err)
+	}
+	if name != "feat" {
+		t.Fatalf("RebaseHeadNameIn = %q, want feat", name)
+	}
+	// The main worktree's head-name probe stays blind to the linked pause.
+	if main, err := RebaseHeadName(); err != nil || main != "" {
+		t.Fatalf("RebaseHeadName = %q err=%v, want empty", main, err)
+	}
+	// After --abort the same worktree reports empty, not an error.
+	mustGit(t, "-C", wt, "rebase", "--abort")
+	if empty, err := RebaseHeadNameIn(wt); err != nil || empty != "" {
+		t.Fatalf("RebaseHeadNameIn on clean worktree = %q err=%v", empty, err)
+	}
+}
+
 // TestRebaseOntoSHA covers the worktree-local rebase-target reader: both
 // metadata backends resolve their recorded commit, and missing or corrupt
 // metadata is a distinct actionable error — never a guess.

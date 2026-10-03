@@ -91,6 +91,16 @@ type fakeGit struct {
 	// and continues clear the right per-dir entry.
 	rebaseInWT map[string]bool
 	rebaseWT   string
+	// rebaseHeadInWT maps a worktree dir with a paused rebase to the branch
+	// its head-name names — the ref its --continue/--abort will rewrite. It
+	// backs RebaseHeadNameIn; a detached linked worktree mid-rebase is
+	// modeled by pausedLinkedWorktrees below.
+	rebaseHeadInWT map[string]string
+	// pausedLinkedWorktrees models linked worktrees paused mid-rebase: path ->
+	// the branch the paused rebase targets. Worktrees reports them detached
+	// (no Branch — matching `git worktree list` mid-rebase), so owner lookups
+	// cannot see them; only the head-name probe can.
+	pausedLinkedWorktrees map[string]string
 	// repoRoot is what RepoRoot reports — the top level of the worktree the
 	// test's cwd is meant to sit in. "" means "the main worktree" (the fake
 	// does not model a path for it), so a guard comparing against a linked
@@ -114,20 +124,22 @@ type fakeGit struct {
 
 func newFakeGit() *fakeGit {
 	f := &fakeGit{
-		commits:         map[string]*fakeCommit{},
-		branches:        map[string]string{},
-		remoteRefs:      map[string]string{},
-		conflictNext:    map[string]bool{},
-		conflictEvery:   map[string]bool{},
-		checkoutErr:     map[string]error{},
-		deleteErr:       map[string]error{},
-		rebaseErr:       map[string]error{},
-		failErr:         map[string]error{},
-		failAfter:       map[string]int{},
-		calls:           map[string]int{},
-		clean:           true,
-		linkedWorktrees: map[string]string{},
-		rebaseInWT:      map[string]bool{},
+		commits:               map[string]*fakeCommit{},
+		branches:              map[string]string{},
+		remoteRefs:            map[string]string{},
+		conflictNext:          map[string]bool{},
+		conflictEvery:         map[string]bool{},
+		checkoutErr:           map[string]error{},
+		deleteErr:             map[string]error{},
+		rebaseErr:             map[string]error{},
+		failErr:               map[string]error{},
+		failAfter:             map[string]int{},
+		calls:                 map[string]int{},
+		clean:                 true,
+		linkedWorktrees:       map[string]string{},
+		rebaseInWT:            map[string]bool{},
+		rebaseHeadInWT:        map[string]string{},
+		pausedLinkedWorktrees: map[string]string{},
 	}
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, subject: "init", content: map[string]bool{id: true}}
@@ -463,7 +475,19 @@ func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
 	for branch, path := range f.linkedWorktrees {
 		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch]})
 	}
+	for path := range f.pausedLinkedWorktrees {
+		list = append(list, git.Worktree{Path: path, Detached: true, Head: f.detachedAt})
+	}
 	return list, nil
+}
+
+// addPausedWorktree registers a linked worktree at path paused mid-rebase on
+// branch: `git worktree list` reports it detached (owner lookups miss it) and
+// the rebase probes answer as its rebase-merge metadata would.
+func (f *fakeGit) addPausedWorktree(path, branch string) {
+	f.pausedLinkedWorktrees[path] = branch
+	f.rebaseInWT[path] = true
+	f.rebaseHeadInWT[path] = branch
 }
 
 // dirtyWorktrees marks linked worktrees (by branch) as dirty for IsCleanIn.
@@ -523,6 +547,13 @@ func (f *fakeGit) RebaseInProgressIn(dir string) (bool, error) {
 		return false, err
 	}
 	return f.rebaseInWT[dir], nil
+}
+
+func (f *fakeGit) RebaseHeadNameIn(dir string) (string, error) {
+	if err := f.fail("RebaseHeadNameIn"); err != nil {
+		return "", err
+	}
+	return f.rebaseHeadInWT[dir], nil
 }
 
 func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
