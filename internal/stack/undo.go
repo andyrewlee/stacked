@@ -258,32 +258,41 @@ func DropUndo() error {
 	return writeUndo(entries[:len(entries)-1])
 }
 
-// SetLastUndoCreatedBranches records local branches that were created by the
-// in-progress operation represented by the latest undo entry.
-func SetLastUndoCreatedBranches(names []string) error {
+// mutateLastUndo loads the journal, applies fn to its newest entry, and
+// rewrites it. An empty journal is a no-op unless missingErr is non-nil, which
+// is returned instead — a caller that promises the entry exists surfaces its
+// absence rather than silently no-oping. When fn fails the journal is left
+// untouched.
+func mutateLastUndo(missingErr error, fn func(*UndoEntry) error) error {
 	entries, err := loadUndo()
 	if err != nil {
 		return err
 	}
 	if len(entries) == 0 {
-		return nil
+		return missingErr
 	}
-	entries[len(entries)-1].CreatedBranches = names
+	if err := fn(&entries[len(entries)-1]); err != nil {
+		return err
+	}
 	return writeUndo(entries)
+}
+
+// SetLastUndoCreatedBranches records local branches that were created by the
+// in-progress operation represented by the latest undo entry.
+func SetLastUndoCreatedBranches(names []string) error {
+	return mutateLastUndo(nil, func(e *UndoEntry) error {
+		e.CreatedBranches = names
+		return nil
+	})
 }
 
 // SetLastUndoCreatedWorktrees records linked worktrees materialized by the
 // in-progress operation, keyed by branch name.
 func SetLastUndoCreatedWorktrees(paths map[string]string) error {
-	entries, err := loadUndo()
-	if err != nil {
-		return err
-	}
-	if len(entries) == 0 {
+	return mutateLastUndo(nil, func(e *UndoEntry) error {
+		e.CreatedWorktrees = paths
 		return nil
-	}
-	entries[len(entries)-1].CreatedWorktrees = paths
-	return writeUndo(entries)
+	})
 }
 
 // SetLastUndoAbsorbed records, on the latest undo entry, the absorb target →
@@ -294,18 +303,15 @@ func SetLastUndoCreatedWorktrees(paths map[string]string) error {
 // the pointer would attach to the wrong operation (or nowhere), which must
 // surface as an error rather than a silent no-op claiming durability.
 func SetLastUndoAbsorbed(commits map[string]string) error {
-	entries, err := loadUndo()
-	if err != nil {
-		return err
-	}
-	if len(entries) == 0 {
-		return fmt.Errorf("cannot record absorb recovery commits: the undo journal is empty")
-	}
-	if entries[len(entries)-1].Label != "absorb" {
-		return fmt.Errorf("cannot record absorb recovery commits: latest undo entry is %q, not an absorb", entries[len(entries)-1].Label)
-	}
-	entries[len(entries)-1].AbsorbedCommits = commits
-	return writeUndo(entries)
+	return mutateLastUndo(
+		fmt.Errorf("cannot record absorb recovery commits: the undo journal is empty"),
+		func(e *UndoEntry) error {
+			if e.Label != "absorb" {
+				return fmt.Errorf("cannot record absorb recovery commits: latest undo entry is %q, not an absorb", e.Label)
+			}
+			e.AbsorbedCommits = commits
+			return nil
+		})
 }
 
 // absorbedCommitsNote renders the recovery pointer Undo and UndoPreview share
@@ -330,15 +336,10 @@ func absorbedCommitsNote(commits map[string]string) string {
 // SetLastUndoPostRefs records, on the latest undo entry, the post-operation
 // branch tips undo's compare-and-swap restore verifies live refs against.
 func SetLastUndoPostRefs(tips map[string]string) error {
-	entries, err := loadUndo()
-	if err != nil {
-		return err
-	}
-	if len(entries) == 0 {
+	return mutateLastUndo(nil, func(e *UndoEntry) error {
+		e.PostRefs = tips
 		return nil
-	}
-	entries[len(entries)-1].PostRefs = tips
-	return writeUndo(entries)
+	})
 }
 
 // FinalizeUndo completes the undo protocol after a successful mutation: the

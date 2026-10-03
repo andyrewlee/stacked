@@ -17,6 +17,7 @@ func init() {
 		Usage:      "st worktree <branch> | --all | ls|list | rm|remove <branch> | rm --all [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
+		SubVerbs:   []string{"list", "ls", "remove", "rm"},
 		// worktree completes tracked branches that lack a linked worktree in
 		// the create form, and worktree owners after `rm`/`remove`. --all takes
 		// no names at all.
@@ -455,12 +456,7 @@ func worktreeList(asJSON bool) error {
 
 // emitWorktree renders the result of a create/already-exists worktree action.
 func emitWorktree(asJSON bool, branch, path string, copied []string, summary string) error {
-	payload := struct {
-		Branch  string   `json:"branch"`
-		Path    string   `json:"path"`
-		Copied  []string `json:"copied,omitempty"`
-		Summary string   `json:"summary"`
-	}{branch, path, copied, summary}
+	payload := worktreeAllEntry{Branch: branch, Path: path, Copied: copied, Summary: summary}
 	return emit(asJSON, payload, func() {
 		out("%s: %s -> %s\n", summary, sanitizeForTerminal(branch), sanitizeForTerminal(path))
 		if len(copied) > 0 {
