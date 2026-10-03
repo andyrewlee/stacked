@@ -6,8 +6,9 @@ commands report outcomes through stable exit codes.
 
 ## No prompts
 
-Local stack operations do not read from stdin or open an interactive editor. The
-rebase path runs with `GIT_EDITOR`/sequence-editor disabled; when a rebase stops
+Local stack operations do not read from stdin or open an interactive editor.
+`git rebase --onto` never invokes an editor, and `st continue` pins
+`GIT_EDITOR=true`/`GIT_SEQUENCE_EDITOR=true`; when a rebase stops
 on a conflict, `st` returns control to you (exit code 2) rather than blocking —
 resolve the files, `git add` them, and run `st continue` (or `st abort`).
 
@@ -62,7 +63,8 @@ message.
 ### Result shapes
 
 - **Stack-mutating commands** (`create`, `modify`, `restack`, `continue`, `fold`,
-  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`, `prune`) share one shape:
+  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`, `prune`, `sync`)
+  share one shape:
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
@@ -141,7 +143,7 @@ message.
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
-- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip dirty/main-worktree branches into `skipped`. `st shell install` emits a shell script, not JSON.
+- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip branches into `skipped` with a `reason`: `rm --all` reasons are "worktree has uncommitted changes", "checked out in the main worktree", "you are inside it", and "a rebase is in progress there"; `--all` skips the main worktree's branch the same way. `st shell install` emits a shell script, not JSON.
 - **`submit --json`** — `submit` pushes the current stack path
   (trunk→current); `submit --all` pushes the whole tracked forest in
   dependency order (parents before children) and works from any branch,
@@ -428,4 +430,6 @@ Candidate policy: `checkout`/`co` → trunk + tracked branches; `onto`/`move` �
 tracked + trunk minus the current branch's subtree; `track` → untracked local
 branches, or tracked + trunk when completing `--parent`'s value; `worktree`/`wt`
 → tracked branches lacking a linked worktree, or — after `rm`/`remove` —
-branches owning one. All other commands and positions emit nothing.
+branches owning one; `delete` and `untrack` → tracked branches; `rename` →
+tracked + trunk on the first positional (the new-name positional completes
+nothing). All other commands and positions emit nothing.
