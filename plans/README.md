@@ -15,7 +15,7 @@ Recommended execution order: **021 → 022 → 003 → 023 → 024**, then the r
 | [024](024-absorb-recovery-checkpoints.md) | Checkpoint absorb recovery commits before resets/cascades | P1 | M | — | DONE |
 | 001 | Guard `st undo` ref restoration — expected-old OIDs, OID validation, sanitized preview | P1 | M | — | DONE |
 | 002 | Detect paused rebases in linked worktrees before mutating their branches | P1 | M | — | DONE |
-| 004 | Harden the release gate — pin enforcement, encrypted-key + pubkey-match preflight | P1 | S | — | BLOCKED — comment-based encryption detection is incorrect; require bounded sign/verify rehearsal |
+| 004 | Harden the release gate — pin enforcement, encrypted-key + pubkey-match preflight | P1 | S | — | DONE |
 | 005 | Harden `install.sh` — tarball member validation, env-var scoping | P2 | S–M | — | BLOCKED — retain archive validation; remove unsupported environment/JSON claims |
 | 006 | Provision the release signing key + first signed release | P1 | S (ops) | 004 | BLOCKED — correct key-comment assumption; operator-selected release work only |
 | 007 | Pin the failure arms of Sync, Delete, Continue, cross-worktree restack | P2 | M | — | TODO |

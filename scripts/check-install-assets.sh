@@ -22,10 +22,11 @@
 # Signing runs only when MINISIGN_KEY_FILE points at a key and minisign is
 # installed (a release rehearsal): then the snapshot really signs checksums.txt
 # and the script asserts dist/checksums.txt.minisig below. Otherwise
-# --skip=sign keeps the pipeline faithful — CI legs never hold the release key.
+# --skip=sign keeps the pipeline faithful — no release key is needed for a
+# local asset-shape check.
 #
-# Skips cleanly when goreleaser isn't installed — CI installs it via
-# goreleaser-action on the ubuntu leg; a local dev box may not have it.
+# Skips cleanly when goreleaser isn't installed — a local dev box may not have
+# it; `make release`/`CI_STRICT=1` runs require the pinned tool.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -33,7 +34,7 @@ cd "$(dirname "$0")/.."
 sh -n install.sh
 
 if ! command -v goreleaser >/dev/null 2>&1; then
-	echo "check-install-assets: goreleaser not installed; skipping artifact check (CI installs it via goreleaser-action)"
+	echo "check-install-assets: goreleaser not installed; skipping artifact check (install the pinned version — required on the release path and under CI_STRICT=1)"
 	exit 0
 fi
 

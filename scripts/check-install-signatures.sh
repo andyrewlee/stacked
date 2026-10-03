@@ -143,7 +143,11 @@ installed_ok() {
 	[ -x "$FIXT/bin/st" ] && [ "$("$FIXT/bin/st")" = "st 0.0.0-test fixture" ]
 }
 
-pass() { echo "PASS: $1"; }
+cases=0
+pass() {
+	cases=$((cases + 1))
+	echo "PASS: $1"
+}
 fails=0
 fail() {
 	echo "FAIL: $1" >&2
@@ -239,4 +243,4 @@ if [ "$fails" -ne 0 ]; then
 	echo "check-install-signatures: $fails case(s) failed" >&2
 	exit 1
 fi
-echo "OK: installer signature/checksum decision matrix passed (9 cases)"
+echo "OK: installer signature/checksum decision matrix passed ($cases cases)"
