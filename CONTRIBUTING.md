@@ -110,8 +110,9 @@ Releases are cut locally from a tag:
 git tag vX.Y.Z            # must match defaultVersion in cmd/root.go
 git push origin vX.Y.Z    # the GitHub release attaches to this tag
 make release              # build, sign, and publish (needs GITHUB_TOKEN and
-                          #  MINISIGN_KEY_FILE; check-release-ready gates the
-                          #  embedded pubkey and the key file first)
+                          #  MINISIGN_KEY_FILE; check-release-ready verifies the
+                          #  embedded pubkey actually pairs with the key file —
+                          #  and the pinned goreleaser + installer legs gate too)
 make snapshot             # build the release artifacts without publishing
 ```
 
@@ -142,8 +143,10 @@ Every release signs `checksums.txt` with minisign (the `signs:` pipe in
 `install.sh` downloads that signature and verifies it against the public key
 embedded in the script (`MINISIGN_PUBKEY`), **failing closed** when it cannot
 verify — so a release must never go out unsigned, and `make release`
-hard-fails when the embedded pubkey is still a placeholder or the signing key
-file is absent (`check-release-ready`).
+hard-fails when the embedded pubkey is still a placeholder, the signing key
+cannot sign non-interactively, or the pair does not match: `check-release-ready`
+rehearses a bounded `minisign -S -W` sign plus a `-V` verify against the
+embedded pubkey before anything is published.
 
 **One-time provisioning (operator; the key is never committed):**
 

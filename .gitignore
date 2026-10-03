@@ -14,9 +14,9 @@
 # GoReleaser output
 /dist/
 
-# Release signing key — never committed; it lives in the MINISIGN_KEY GitHub
-# secret (see CONTRIBUTING.md's Releasing section). The public key
-# (stacked.pub) is deliberately NOT ignored.
+# Release signing key — never committed; it lives outside the repo at the
+# path named by MINISIGN_KEY_FILE (see CONTRIBUTING.md's Releasing section).
+# The public key (stacked.pub) is deliberately NOT ignored.
 stacked.key
 
 # Go workspace file

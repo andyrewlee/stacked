@@ -22,7 +22,7 @@ GIT_MIN_VERSION := 2.17
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
 
 # THE gate: there is no remote CI — this Makefile is the whole pipeline.
 # Fails fast, in order. The Go-toolchain-only steps (vet/vet-cross/build) run
@@ -75,6 +75,11 @@ check-deps:
 	fi
 	@if [ -f go.sum ]; then \
 		echo "go.sum exists; this project must have no module dependencies"; \
+		exit 1; \
+	fi
+	@if ! out=$$(go mod tidy -diff 2>&1); then \
+		echo "$$out"; \
+		echo "go.mod/go.sum are not tidy (run go mod tidy)"; \
 		exit 1; \
 	fi
 	@echo "deps: standard library only"
@@ -303,9 +308,13 @@ check-release-ready:
 	@sh scripts/check-release-ready.sh
 
 # Cut a release from the current git tag with GoReleaser (needs GITHUB_TOKEN).
-release: check-release-version check-release-ready
+# The pinned-toolchain and strict installer legs gate the publish path too:
+# an unpinned goreleaser or an asset/signature contract the installer rejects
+# must be caught before `goreleaser release` runs, not mid-publish.
+release: check-release-version check-release-ready check-goreleaser-version check-install
 	goreleaser release --clean
 
-# Build release artifacts locally without publishing (dry run).
-snapshot:
+# Build release artifacts locally without publishing (dry run). Snapshots use
+# the same schema the release reads, so the pin gates this path as well.
+snapshot: check-goreleaser-version
 	goreleaser build --snapshot --clean

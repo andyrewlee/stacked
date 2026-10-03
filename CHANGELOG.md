@@ -76,6 +76,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unapplied.
 
 ### Fixed
+- **The release gate now proves the signing key actually works.** `make
+  release` and `make snapshot` require the pinned goreleaser (an unpinned
+  tool could publish a release `install.sh` rejects), and `make release`
+  also runs the strict installer checks. `check-release-ready` replaces its
+  key-comment grep — which matched encrypted and unencrypted keys alike —
+  with a bounded, noninteractive rehearsal: `minisign -S -W` signs a probe
+  (an encrypted or malformed key fails fast, as it would mid-release) and
+  `minisign -V` verifies it against the embedded `MINISIGN_PUBKEY`, refusing
+  a mismatched pair before anything is published. `make check-deps` also
+  proves `go mod tidy` is a no-op, `check-shell` is `.PHONY` again (a stray
+  file named `check-shell` no longer disables the shellcheck leg), the
+  signature matrix reports its real case count instead of a stale literal,
+  and comments claiming a CI leg installs release tooling now describe the
+  local-only release flow.
 - **Mutations now refuse upfront when a tracked branch (or the trunk) has a
   rebase paused in a linked worktree.** A worktree mid-rebase reports
   `detached` in `git worktree list`, so the owner lookup could not see the

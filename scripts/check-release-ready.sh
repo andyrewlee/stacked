@@ -25,9 +25,39 @@ esac
 # actionable message instead of inside goreleaser's template expansion.
 : "${MINISIGN_KEY_FILE:?MINISIGN_KEY_FILE must point at the minisign secret key file the .goreleaser.yaml signs: pipe reads}"
 
-if ! grep -q 'secret key' "$MINISIGN_KEY_FILE"; then
-	echo "MINISIGN_KEY_FILE ($MINISIGN_KEY_FILE) does not look like a minisign secret key" >&2
+# minisign is mandatory on the publish path: the signs: pipe shells out to it,
+# and the pairing rehearsal below is the only proof the key is usable — a
+# skip here is a skipped proof, not a missing optional check.
+if ! command -v minisign >/dev/null 2>&1; then
+	echo "minisign not installed; the signing rehearsal cannot run — the" >&2
+	echo "release must prove the key pairs with the embedded pubkey" >&2
 	exit 1
 fi
 
-echo "release gate: embedded MINISIGN_PUBKEY set; signing key at $MINISIGN_KEY_FILE"
+# Bounded, noninteractive sign/verify rehearsal — the audit-corrected check.
+# Do NOT detect passphrase-encryption by grepping the key's comment line:
+# minisign writes the same default comment for both key forms. The sign
+# attempt itself is the detector: `-W` (no password) makes an encrypted or
+# malformed key fail fast, and stdin is /dev/null so nothing can block on a
+# prompt mid-release. Verify against the embedded pubkey to prove the
+# secret key pairs with what install.sh will check signatures against.
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+echo "release-gate probe" >"$tmp/probe"
+
+if ! minisign -S -W -s "$MINISIGN_KEY_FILE" -m "$tmp/probe" -x "$tmp/probe.minisig" </dev/null 2>"$tmp/sign.err"; then
+	cat "$tmp/sign.err" >&2
+	echo "MINISIGN_KEY_FILE ($MINISIGN_KEY_FILE) cannot sign non-interactively:" >&2
+	echo "it is passphrase-encrypted or malformed — the signs: pipe runs" >&2
+	echo "minisign -S -W and would fail mid-release; generate an unencrypted" >&2
+	echo "key per CONTRIBUTING.md's Signing runbook" >&2
+	exit 1
+fi
+
+if ! minisign -V -P "$key" -m "$tmp/probe" -x "$tmp/probe.minisig" >/dev/null 2>&1; then
+	echo "MINISIGN_PUBKEY in install.sh does not match $MINISIGN_KEY_FILE:" >&2
+	echo "a release signed by this key is unverifiable by the installer" >&2
+	exit 1
+fi
+
+echo "release gate: embedded MINISIGN_PUBKEY verified against $MINISIGN_KEY_FILE"
