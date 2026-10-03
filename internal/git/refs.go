@@ -248,7 +248,7 @@ func catFile(stdin []string, args ...string) ([]byte, error) {
 			msg = strings.TrimSpace(stdout.String())
 		}
 		if msg != "" {
-			return stdout.Bytes(), fmt.Errorf("git cat-file %s: %s: %w", strings.Join(args, " "), msg, err)
+			return stdout.Bytes(), fmt.Errorf("git cat-file %s: %s: %w", strings.Join(args, " "), redactCredentials(msg), err)
 		}
 		return stdout.Bytes(), fmt.Errorf("git cat-file %s: %w", strings.Join(args, " "), err)
 	}
@@ -425,7 +425,7 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	}
 	msg := strings.TrimSpace(string(out))
 	if msg != "" {
-		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s: %w", ancestorRef, descendantRef, msg, err)
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s: %w", ancestorRef, descendantRef, redactCredentials(msg), err)
 	}
 	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestorRef, descendantRef, err)
 }
@@ -611,7 +611,7 @@ func runUpdateRefsStdin(batch string) error {
 			msg = strings.TrimSpace(stdout.String())
 		}
 		if msg != "" {
-			return fmt.Errorf("git update-ref --stdin: %s: %w", msg, err)
+			return fmt.Errorf("git update-ref --stdin: %s: %w", redactCredentials(msg), err)
 		}
 		return fmt.Errorf("git update-ref --stdin: %w", err)
 	}
