@@ -969,3 +969,169 @@ func TestPrunePlanListsWithoutDeleting(t *testing.T) {
 		t.Fatalf("HEAD = %q, want main", f.head)
 	}
 }
+
+// TestSyncFastForwardRestoreDoubleFault pins the post-fast-forward restore
+// arm: the remote fast-forward fails AND putting HEAD back on the original
+// branch fails too — the caller must see BOTH wrapped in one AlsoFailed,
+// each sentinel still errors.Is-matchable.
+func TestSyncFastForwardRestoreDoubleFault(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+
+	ffErr := errors.New("fast-forward exploded")
+	checkoutErr := errors.New("cannot check out feat-a")
+	f.checkoutErr["feat-a"] = checkoutErr
+	// checkout=f models the failed fast-forward parking HEAD on the trunk, so
+	// the restore really does attempt the checkout (no already-on-target
+	// shortcut).
+	remote := &fakeRemote{exists: true, err: ffErr, checkout: f}
+
+	_, err := Sync(env, remote, s, "origin", false, false)
+	if !errors.Is(err, ffErr) {
+		t.Fatalf("Sync = %v, want the fast-forward sentinel matchable", err)
+	}
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Sync = %v, want the restore sentinel matchable", err)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main — the failed ff left it parked and the restore never landed", f.head)
+	}
+}
+
+// TestSyncDetachParkingProbeFailures pins the detach-parking arm: with the
+// trunk checked out in a linked worktree, sync parks HEAD detached before
+// pruning — failures of BOTH probes (resolving HEAD, then the detach itself)
+// must surface wrapped instead of silently proceeding to prune.
+func TestSyncDetachParkingProbeFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arm     func(f *fakeGit, boom error)
+		wantSub string
+	}{
+		{"resolve HEAD", func(f *fakeGit, boom error) { f.failErr["RevParse"] = boom }, "resolving HEAD before pruning"},
+		{"detach", func(f *fakeGit, boom error) { f.failErr["CheckoutDetach"] = boom }, "detaching HEAD before pruning"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "feat-a")
+			f.addWorktree("/wt/trunk", "main")
+			boom := errors.New("probe exploded")
+			tc.arm(f, boom)
+
+			_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+			if !errors.Is(err, boom) {
+				t.Fatalf("Sync = %v, want wrapped %v", err, boom)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("Sync = %v, want %q in the message", err, tc.wantSub)
+			}
+			if f.head != "feat-a" {
+				t.Fatalf("HEAD = %q, want feat-a — the failed park must not strand HEAD elsewhere", f.head)
+			}
+			if !f.BranchExists("feat-a") {
+				t.Fatal("the failed park deleted feat-a anyway")
+			}
+		})
+	}
+}
+
+// TestSyncTrunkCheckoutFailure pins the single-tree arm: with the trunk owned
+// nowhere, sync checks out the trunk before pruning — a refusal there must
+// surface wrapped, leaving HEAD and every branch untouched.
+func TestSyncTrunkCheckoutFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	boom := errors.New("cannot switch to main")
+	f.checkoutErr["main"] = boom
+
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `checkout trunk "main" before pruning`) {
+		t.Fatalf("Sync = %v, want the trunk-checkout step named", err)
+	}
+	if f.head != "feat-a" {
+		t.Fatalf("HEAD = %q, want feat-a", f.head)
+	}
+	if !s.IsTracked("feat-a") || !f.BranchExists("feat-a") {
+		t.Fatal("a failed trunk checkout must not touch feat-a")
+	}
+}
+
+// TestSyncPruneRestoreDoubleFault pins the post-prune restore arm: the merged
+// enumeration fails AND restoring the original branch fails — the caller sees
+// one AlsoFailed carrying both sentinels.
+func TestSyncPruneRestoreDoubleFault(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+
+	pruneErr := errors.New("merged enumeration exploded")
+	checkoutErr := errors.New("cannot restore feat-a")
+	f.failErr["MergedInto"] = pruneErr
+	f.checkoutErr["feat-a"] = checkoutErr
+
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	if !errors.Is(err, pruneErr) {
+		t.Fatalf("Sync = %v, want the prune sentinel matchable", err)
+	}
+	if !errors.Is(err, checkoutErr) {
+		t.Fatalf("Sync = %v, want the restore sentinel matchable", err)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main — sync parked on the trunk and the restore failed", f.head)
+	}
+}
+
+// TestSyncSaveCheckpointFailures pins both sync save arms — the post-prune
+// checkpoint and the post-restack checkpoint. Each must surface the save
+// error instead of swallowing it (the mutations behind them already
+// committed).
+func TestSyncSaveCheckpointFailures(t *testing.T) {
+	boom := errors.New("save exploded")
+	for _, tc := range []struct {
+		name       string
+		failAfterN int
+		wantSaves  int
+	}{
+		{"post-prune checkpoint", 0, 1},
+		{"post-restack checkpoint", 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, env := newEnvState()
+			mkBranch(t, env, s, f, "main", "feat-a")
+			env2, saves := envWithSaveErr(f, boom, tc.failAfterN)
+
+			// feat-a is unmerged and undrifted: nothing prunes, nothing
+			// restacks — only the two unconditional checkpoints run.
+			_, err := Sync(env2, &fakeRemote{exists: false}, s, "origin", false, false)
+			if !errors.Is(err, boom) {
+				t.Fatalf("Sync = %v, want wrapped %v", err, boom)
+			}
+			if *saves != tc.wantSaves {
+				t.Fatalf("saves = %d, want %d", *saves, tc.wantSaves)
+			}
+		})
+	}
+}
+
+// TestSyncFinalRestoreFailure pins the epilogue restoreHEAD: everything else
+// succeeded but checking out the original branch fails — the error surfaces
+// and HEAD stays on the trunk sync parked it on.
+func TestSyncFinalRestoreFailure(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	boom := errors.New("cannot restore feat-a")
+	f.checkoutErr["feat-a"] = boom
+
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
+	}
+	if !strings.Contains(err.Error(), `restore branch "feat-a"`) {
+		t.Fatalf("Sync = %v, want the restore step named", err)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main — sync parked there for pruning", f.head)
+	}
+}
