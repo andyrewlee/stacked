@@ -995,6 +995,114 @@ func TestAbsorbUndoRecoveryPointer(t *testing.T) {
 	}
 }
 
+// TestAbsorbFailedUndoRecoveryPointer pins the mid-op checkpoint through the
+// journal: absorb amends feat-a, the cascade conflicts on feat-b, and the
+// RETAINED undo entry must already carry the amended commit pointer — the
+// pre-fix code annotated it only on success, so abort→undo orphaned the
+// staged edit namelessly. Text and JSON get fresh fixtures.
+func TestAbsorbFailedUndoRecoveryPointer(t *testing.T) {
+	for _, mode := range []string{"text", "json"} {
+		t.Run(mode, func(t *testing.T) {
+			asJSON := mode == "json"
+			newRepo(t)
+			mustInit(t)
+			// The adjacency fixture: feat-a owns line 1, feat-b edits line 2,
+			// so amending feat-a forces a genuine cascade conflict on feat-b.
+			write(t, "shared.txt", "A0\nB0\n")
+			mustRun(t, "git", "add", "shared.txt")
+			mustRun(t, "git", "commit", "-q", "-m", "seed")
+			mustCreate(t, "feat-a", "shared.txt", "A1\nB0\n", "a")
+			mustCreate(t, "feat-b", "shared.txt", "A1\nB1\n", "b")
+			tipsBefore := map[string]string{}
+			for _, b := range []string{"main", "feat-a", "feat-b"} {
+				tipsBefore[b] = mustRun(t, "git", "rev-parse", b)
+			}
+			write(t, "shared.txt", "A2\nB1\n")
+			mustRun(t, "git", "add", "shared.txt")
+
+			var absorbArgs []string
+			if asJSON {
+				absorbArgs = []string{"--json"}
+			}
+			err := runAbsorb(absorbArgs)
+			if !errors.Is(err, stack.ErrConflict) || exitCode(err) != 2 {
+				t.Fatalf("absorb = %v (exit %d), want a conflict (exit 2)", err, exitCode(err))
+			}
+			amended := mustRun(t, "git", "rev-parse", "feat-a")
+			if amended == tipsBefore["feat-a"] {
+				t.Fatal("feat-a unchanged; the amend should have landed before the conflict")
+			}
+
+			// The checkpoint survived CleanupUndoOnError: the retained absorb
+			// entry already names the commit holding the staged edit.
+			entry, ok, err := stack.PeekUndo()
+			if err != nil || !ok {
+				t.Fatalf("peek undo: %v (ok=%v)", err, ok)
+			}
+			if entry.Label != "absorb" {
+				t.Fatalf("entry label = %q, want absorb", entry.Label)
+			}
+			if entry.AbsorbedCommits["feat-a"] != amended {
+				t.Fatalf("absorbedCommits = %v, want feat-a -> %s", entry.AbsorbedCommits, amended)
+			}
+
+			if err := runAbort(nil); err != nil {
+				t.Fatalf("abort: %v", err)
+			}
+
+			// Both the preview and the applied undo name the amended commit.
+			dryArgs := []string{"--dry-run"}
+			undoArgs := []string{}
+			if asJSON {
+				dryArgs = append(dryArgs, "--json")
+				undoArgs = append(undoArgs, "--json")
+			}
+			var dryErr error
+			dry := captureStdout(t, func() { dryErr = runUndo(dryArgs) })
+			if dryErr != nil {
+				t.Fatalf("undo --dry-run: %v", dryErr)
+			}
+			var undoErr error
+			out := captureStdout(t, func() { undoErr = runUndo(undoArgs) })
+			if undoErr != nil {
+				t.Fatalf("undo: %v", undoErr)
+			}
+			if asJSON {
+				var dryPayload struct {
+					Notes []string `json:"notes"`
+				}
+				if err := json.Unmarshal([]byte(dry), &dryPayload); err != nil {
+					t.Fatalf("dry-run JSON does not decode: %v\n%s", err, dry)
+				}
+				if joined := strings.Join(dryPayload.Notes, "\n"); !strings.Contains(joined, amended) {
+					t.Fatalf("dry-run notes = %v, want %s", dryPayload.Notes, amended)
+				}
+				var undoPayload struct {
+					Notes []string `json:"notes"`
+				}
+				if err := json.Unmarshal([]byte(out), &undoPayload); err != nil {
+					t.Fatalf("undo JSON does not decode: %v\n%s", err, out)
+				}
+				if joined := strings.Join(undoPayload.Notes, "\n"); !strings.Contains(joined, amended) || !strings.Contains(joined, "cherry-pick") {
+					t.Fatalf("undo notes = %v, want %s and a cherry-pick pointer", undoPayload.Notes, amended)
+				}
+			} else {
+				if !strings.Contains(dry, amended) || !strings.Contains(dry, "cherry-pick") {
+					t.Fatalf("dry-run = %q, want the amended SHA and recovery hint", dry)
+				}
+				if !strings.Contains(out, amended) || !strings.Contains(out, "git cherry-pick "+amended) {
+					t.Fatalf("undo = %q, want the amended SHA and a cherry-pick command", out)
+				}
+			}
+			for b, tip := range tipsBefore {
+				if got := mustRun(t, "git", "rev-parse", b); got != tip {
+					t.Fatalf("%s = %s after undo, want restored %s", b, got, tip)
+				}
+			}
+		})
+	}
+}
+
 func TestUndoRestoresSnapshotWhenCurrentStateIsMalformed(t *testing.T) {
 	newRepo(t)
 	mustInit(t)

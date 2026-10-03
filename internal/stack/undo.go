@@ -212,14 +212,21 @@ func SetLastUndoCreatedWorktrees(paths map[string]string) error {
 
 // SetLastUndoAbsorbed records, on the latest undo entry, the absorb target →
 // amended-tip map so a later undo can tell the caller which commits still hold
-// the staged edits its ref-restore is about to orphan.
+// the staged edits its ref-restore is about to orphan. It is absorb's
+// durable-recovery checkpoint, called while the op's own journal entry is
+// active — an absent journal or a latest entry that is not an absorb means
+// the pointer would attach to the wrong operation (or nowhere), which must
+// surface as an error rather than a silent no-op claiming durability.
 func SetLastUndoAbsorbed(commits map[string]string) error {
 	entries, err := loadUndo()
 	if err != nil {
 		return err
 	}
 	if len(entries) == 0 {
-		return nil
+		return fmt.Errorf("cannot record absorb recovery commits: the undo journal is empty")
+	}
+	if entries[len(entries)-1].Label != "absorb" {
+		return fmt.Errorf("cannot record absorb recovery commits: latest undo entry is %q, not an absorb", entries[len(entries)-1].Label)
 	}
 	entries[len(entries)-1].AbsorbedCommits = commits
 	return writeUndo(entries)

@@ -3,6 +3,7 @@ package stack
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -334,6 +335,16 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 			return nil, fmt.Errorf("absorb into %q: %w", target, err)
 		}
 		newTips[target] = newTip
+		// Checkpoint the cumulative recovery map BEFORE the next amend or any
+		// reset below: a later failure — or an abort→undo — can still name the
+		// commits now holding the staged edits. The map is cloned because the
+		// callback may retain it; later amends must not rewrite an earlier
+		// snapshot. A checkpoint failure stops the op here, and the error
+		// still reports the SHAs that landed so they are recoverable even
+		// when the journal write was not.
+		if err := env.absorbCheckpoint(maps.Clone(newTips)); err != nil {
+			return nil, fmt.Errorf("recording absorb recovery commits: %w; %s", err, absorbedCommitsNote(newTips))
+		}
 	}
 	// From here every staged edit is committed at its target's tip; the
 	// resets below only drop copies.
@@ -389,6 +400,14 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 		commits := map[string]string{}
 		for _, a := range plan.Absorbed {
 			commits[a.Branch] = a.Commit
+		}
+		// Refresh the durable recovery map with the post-cascade tips before
+		// the epilogue save and HEAD restore: the cascade rewrote every
+		// target above the lowest, so the amend-time checkpoint is stale
+		// for them. A failed refresh keeps the earlier journal annotation —
+		// the error still reports the newer known commits.
+		if err := env.absorbCheckpoint(commits); err != nil {
+			return nil, fmt.Errorf("recording absorb recovery commits: %w; %s", err, absorbedCommitsNote(commits))
 		}
 		plan.Notes = append(plan.Notes, absorbedCommitsNote(commits))
 	}

@@ -40,30 +40,18 @@ func runAbsorb(args []string) error {
 		return emitAbsorb(o.asJSON, res)
 	}
 	if err := mutateState("absorb", o.asJSON, func(env stack.Env, s *stack.State) error {
+		// The journal entry exists (mutateState recorded it under this lock
+		// before invoking the closure), so the engine can checkpoint each
+		// landed amend — and the post-cascade tips — into it as it goes: a
+		// mid-op failure retains pointers to the commits holding the staged
+		// edits instead of leaving them namelessly orphaned in the reflog.
+		env.AbsorbCheckpoint = stack.SetLastUndoAbsorbed
 		r, err := stack.Absorb(env, s)
 		if err != nil {
 			return err
 		}
 		res = r
-		// Annotate the journal entry (recorded by mutateState, finalized on
-		// return) with the amended tips now holding the staged edits — a
-		// later `st undo` restores the pre-absorb refs and would otherwise
-		// leave those commits namelessly orphaned in the reflog. Not-applied
-		// plans keep DryRun true; their Commit fields are plan-time tips, not
-		// amendments.
-		if res.DryRun {
-			return nil
-		}
-		absorbed := map[string]string{}
-		for _, a := range res.Absorbed {
-			if a.Commit != "" {
-				absorbed[a.Branch] = a.Commit
-			}
-		}
-		if len(absorbed) == 0 {
-			return nil
-		}
-		return stack.SetLastUndoAbsorbed(absorbed)
+		return nil
 	}); err != nil {
 		return err
 	}
