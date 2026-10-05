@@ -83,11 +83,13 @@ func undoFlagSet() *flag.FlagSet { return newUndoFlags(&undoOpts{}) }
 type worktreeOpts struct {
 	asJSON bool
 	all    bool
+	dryRun bool
 }
 
 func newWorktreeFlags(o *worktreeOpts) *flag.FlagSet {
 	fs := newFlagSet("worktree", &o.asJSON)
 	fs.BoolVar(&o.all, "all", false, "materialize a worktree for every tracked branch that lacks one")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the worktrees and .worktreeinclude copies an add would create, without creating anything")
 	return withDefaults(fs, "worktree")
 }
 

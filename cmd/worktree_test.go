@@ -860,7 +860,7 @@ func TestReflinkCopyFallsBackWhenCpFails(t *testing.T) {
 // line always, the copied: line only when entries were copied.
 func TestEmitWorktreeTextOutput(t *testing.T) {
 	out := captureStdout(t, func() {
-		if err := emitWorktree(false, "feat-a", "/wt/feat-a", []string{"node_modules", ".env"}, "created worktree"); err != nil {
+		if err := emitWorktree(false, "feat-a", "/wt/feat-a", []string{"node_modules", ".env"}, "created worktree", false); err != nil {
 			t.Fatalf("emitWorktree: %v", err)
 		}
 	})
@@ -872,7 +872,7 @@ func TestEmitWorktreeTextOutput(t *testing.T) {
 	}
 
 	out = captureStdout(t, func() {
-		if err := emitWorktree(false, "feat-a", "/wt/feat-a", nil, "worktree already exists"); err != nil {
+		if err := emitWorktree(false, "feat-a", "/wt/feat-a", nil, "worktree already exists", false); err != nil {
 			t.Fatalf("emitWorktree: %v", err)
 		}
 	})
@@ -1340,5 +1340,199 @@ func TestWorktreePausedRebaseGates(t *testing.T) {
 	// --force bypasses the pause (the caller accepts the risk).
 	if err := runUndoApply(false, 1, true); err != nil {
 		t.Fatalf("runUndoApply --force blocked by a pause: %v", err)
+	}
+}
+
+// TestWorktreeAddAllSkipsPausedRebase pins the plan-038 fix: a branch paused
+// mid-rebase in a detached worktree is skipped by `worktree --all` — the same
+// reason rm --all emits — instead of dying on git's own refusal mid-loop.
+func TestWorktreeAddAllSkipsPausedRebase(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	// Pause feat-a in its own linked worktree: diverge main so the rebase
+	// conflicts, then start it inside the worktree — porcelain reports the
+	// worktree detached and head-name carries the branch.
+	mustCheckout(t, "main")
+	write(t, "a.txt", "diverged\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
+	resetProcCaches()
+
+	wt, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
+	}
+	resetProcCaches()
+
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("worktree --all: %v", err)
+		}
+	})
+	var got struct {
+		Created []struct {
+			Branch  string `json:"branch"`
+			Path    string `json:"path"`
+			Summary string `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+	}
+	decodeStrictJSON(t, "worktree --all paused", out, &got)
+	if got.Failed != nil {
+		t.Fatalf("paused branch landed in failed: %+v", got.Failed)
+	}
+	if len(got.Created) != 1 || got.Created[0].Branch != "feat-b" {
+		t.Fatalf("created = %+v, want only feat-b", got.Created)
+	}
+	var pausedSkip bool
+	for _, sk := range got.Skipped {
+		if sk.Branch == "feat-a" && sk.Reason == "a rebase is in progress there" {
+			pausedSkip = true
+		}
+	}
+	if !pausedSkip {
+		t.Fatalf("skipped = %+v, want feat-a with the rebase-in-progress reason", got.Skipped)
+	}
+
+	// The single-branch form refuses the same branch up front, naming its
+	// paused worktree, instead of leaking git's refusal.
+	err = runWorktree([]string{"feat-a", "--json"})
+	if err == nil || !strings.Contains(err.Error(), "rebase is in progress") || !strings.Contains(err.Error(), wt.Path) {
+		t.Fatalf("worktree feat-a on paused branch = %v, want the pause refusal", err)
+	}
+}
+
+// TestWorktreeAddDryRun pins the preview contract: --dry-run reports the path
+// and the .worktreeinclude set a real add would produce, marks the payload
+// dryRun, and creates nothing on disk.
+func TestWorktreeAddDryRun(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+
+	// A gitignored, manifest-listed file the copy would carry: .env exists in
+	// the source, is ignored, and is not tracked in feat-a's tree.
+	write(t, ".gitignore", ".env\n")
+	write(t, ".env", "SECRET=1\n")
+	write(t, ".worktreeinclude", ".env\n")
+	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
+	mustRun(t, "git", "commit", "-q", "-m", "manifest")
+	resetProcCaches()
+
+	// Single-branch preview.
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"feat-a", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("worktree feat-a --dry-run: %v", err)
+		}
+	})
+	var one struct {
+		Branch  string   `json:"branch"`
+		Path    string   `json:"path"`
+		Copied  []string `json:"copied"`
+		Summary string   `json:"summary"`
+		DryRun  bool     `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "worktree feat-a --dry-run", out, &one)
+	if !one.DryRun || one.Branch != "feat-a" || one.Path == "" ||
+		one.Summary != "would create worktree" {
+		t.Fatalf("dry-run payload = %+v, want the predicted create", one)
+	}
+	if len(one.Copied) != 1 || one.Copied[0] != ".env" {
+		t.Fatalf("predicted copied = %v, want [.env]", one.Copied)
+	}
+	if _, statErr := os.Stat(one.Path); !os.IsNotExist(statErr) {
+		t.Fatalf("dry-run created %q anyway (stat: %v)", one.Path, statErr)
+	}
+
+	// Bulk preview: same predictions, main-worktree skip, dryRun on the
+	// aggregate.
+	out = captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("worktree --all --dry-run: %v", err)
+		}
+	})
+	var all struct {
+		DryRun  bool `json:"dryRun"`
+		Created []struct {
+			Branch  string   `json:"branch"`
+			Path    string   `json:"path"`
+			Copied  []string `json:"copied"`
+			Summary string   `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	decodeStrictJSON(t, "worktree --all --dry-run", out, &all)
+	if !all.DryRun {
+		t.Fatalf("bulk dry-run payload missing dryRun: %s", out)
+	}
+	if len(all.Created) != 1 || all.Created[0].Branch != "feat-a" ||
+		all.Created[0].Summary != "would create worktree" {
+		t.Fatalf("dry-run created = %+v, want the feat-a prediction", all.Created)
+	}
+	// main is the trunk — untracked, so absent from the row set entirely.
+	if len(all.Skipped) != 0 {
+		t.Fatalf("dry-run skipped = %+v, want none (trunk is untracked)", all.Skipped)
+	}
+	if _, statErr := os.Stat(all.Created[0].Path); !os.IsNotExist(statErr) {
+		t.Fatalf("bulk dry-run created %q anyway (stat: %v)", all.Created[0].Path, statErr)
+	}
+
+	// A branch that already owns a worktree previews the idempotent outcome.
+	if err := runWorktree([]string{"feat-a"}); err != nil {
+		t.Fatalf("real worktree feat-a: %v", err)
+	}
+	out = captureStdout(t, func() {
+		if err := runWorktree([]string{"feat-a", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("worktree feat-a --dry-run (existing): %v", err)
+		}
+	})
+	var again struct {
+		Branch  string `json:"branch"`
+		Path    string `json:"path"`
+		Summary string `json:"summary"`
+		DryRun  bool   `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "worktree feat-a --dry-run again", out, &again)
+	if again.Summary != "worktree already exists" || !again.DryRun {
+		t.Fatalf("existing-branch dry-run = %+v, want already-exists", again)
+	}
+}
+
+// TestWorktreeDryRunRejectsNonAddForms pins the flag's scope: --dry-run
+// previews an add; the read-only and remove forms reject it rather than
+// silently implying a preview they do not implement.
+func TestWorktreeDryRunRejectsNonAddForms(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	for _, args := range [][]string{
+		{"ls", "--dry-run"},
+		{"rm", "feat-a", "--dry-run"},
+		{"rm", "--all", "--dry-run"},
+	} {
+		if err := runWorktree(args); err == nil || !strings.Contains(err.Error(), "--dry-run") {
+			t.Fatalf("runWorktree(%v) = %v, want a --dry-run rejection", args, err)
+		}
 	}
 }

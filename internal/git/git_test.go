@@ -3159,3 +3159,39 @@ func TestCheckIgnoredNativeKeys(t *testing.T) {
 		t.Fatal("tracked.txt must not be reported ignored")
 	}
 }
+
+// TestLsTreeZ pins the rev-side tracked-path probe --dry-run previews use:
+// the set a fresh `git worktree add <branch>` would materialize, NUL-parsed.
+func TestLsTreeZ(t *testing.T) {
+	newRepo(t)
+	if err := os.MkdirAll(filepath.Join("nested", "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join("nested", "dir", "file.txt"), "x\n")
+	writeFile(t, "space name.txt", "y\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "tree")
+	mustGit(t, "branch", "feat")
+	// An untracked file must NOT appear — ls-tree reads the commit's tree.
+	writeFile(t, "untracked.txt", "z\n")
+
+	paths, err := LsTreeZ("feat")
+	if err != nil {
+		t.Fatalf("LsTreeZ: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range paths {
+		got[p] = true
+	}
+	for _, want := range []string{"base.txt", "nested/dir/file.txt", "space name.txt"} {
+		if !got[want] {
+			t.Fatalf("LsTreeZ missing %q: %v", want, paths)
+		}
+	}
+	if got["untracked.txt"] {
+		t.Fatalf("LsTreeZ included an untracked path: %v", paths)
+	}
+	if _, err := LsTreeZ("refs/heads/nonexistent"); err == nil {
+		t.Fatal("LsTreeZ on a missing ref did not error")
+	}
+}
