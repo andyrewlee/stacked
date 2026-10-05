@@ -3,6 +3,8 @@ package cmd
 import (
 	"flag"
 	"fmt"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // Shared remote-name policy for the commands that read a remote's tracking
@@ -46,5 +48,5 @@ func resolveTrunkRef(p *cachedPort, remote, trunk string) (ref string, remoteRes
 			return remoteRef, true
 		}
 	}
-	return "refs/heads/" + trunk, false
+	return git.LocalBranchNameRef(trunk), false
 }

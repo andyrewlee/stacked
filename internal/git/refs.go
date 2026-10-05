@@ -15,7 +15,7 @@ import (
 
 // BranchExists reports whether a local branch with the given name exists.
 func BranchExists(name string) bool {
-	return ok("show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	return ok("show-ref", "--verify", "--quiet", LocalBranchNameRef(name))
 }
 
 // Tips returns the tip SHA of every local branch, keyed by branch name, in a
@@ -225,7 +225,7 @@ func scopedBranchRefs(names []string) (unique, refs []string, err error) {
 		}
 		seen[name] = true
 		unique = append(unique, name)
-		refs = append(refs, localBranchNameRef(name))
+		refs = append(refs, LocalBranchNameRef(name))
 	}
 	return unique, refs, nil
 }
@@ -381,12 +381,15 @@ func localBranchRef(ref string) string {
 		return ref
 	}
 	if BranchExists(ref) {
-		return "refs/heads/" + ref
+		return LocalBranchNameRef(ref)
 	}
 	return ref
 }
 
-func localBranchNameRef(name string) string {
+// LocalBranchNameRef returns name unconditionally qualified as a local
+// branch ref — the non-probing variant of localBranchRef for callers that
+// already know the argument is a branch name, not a SHA or full ref.
+func LocalBranchNameRef(name string) string {
 	return "refs/heads/" + name
 }
 
@@ -627,7 +630,7 @@ func CommitSubjects(base, branch string) ([]string, error) {
 	if err := validRefArg("branch", branch); err != nil {
 		return nil, err
 	}
-	out, err := Run("log", "--format=%s", localBranchRef(base)+".."+localBranchNameRef(branch))
+	out, err := Run("log", "--format=%s", localBranchRef(base)+".."+LocalBranchNameRef(branch))
 	if err != nil {
 		return nil, err
 	}

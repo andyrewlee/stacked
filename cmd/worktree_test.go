@@ -198,7 +198,7 @@ func TestGitIgnoredSet(t *testing.T) {
 	mustRun(t, "git", "add", ".gitignore", "tracked.txt")
 	mustRun(t, "git", "commit", "-q", "-m", "ignore rules")
 
-	got, err := gitIgnoredSet(root, []string{"node_modules", "dist", "with space.txt", "tracked.txt", "nonexistent"})
+	got, err := git.CheckIgnored(root, []string{"node_modules", "dist", "with space.txt", "tracked.txt", "nonexistent"})
 	if err != nil {
 		t.Fatalf("git.CheckIgnored: %v", err)
 	}
@@ -213,18 +213,18 @@ func TestGitIgnoredSet(t *testing.T) {
 	}
 
 	// Nothing ignored: exit status 1 must be an empty set, not an error.
-	empty, err := gitIgnoredSet(root, []string{"tracked.txt", "nonexistent"})
+	empty, err := git.CheckIgnored(root, []string{"tracked.txt", "nonexistent"})
 	if err != nil {
-		t.Fatalf("gitIgnoredSet (none ignored): %v", err)
+		t.Fatalf("git.CheckIgnored (none ignored): %v", err)
 	}
 	if len(empty) != 0 {
 		t.Fatalf("ignored = %v, want empty", empty)
 	}
 
 	// No entries: no spawn, empty set.
-	none, err := gitIgnoredSet(root, nil)
+	none, err := git.CheckIgnored(root, nil)
 	if err != nil || len(none) != 0 {
-		t.Fatalf("gitIgnoredSet(nil) = %v, %v; want empty, nil", none, err)
+		t.Fatalf("git.CheckIgnored(nil) = %v, %v; want empty, nil", none, err)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestGitIgnoredSetPoisonedBatchClassifiesSiblings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := gitIgnoredSet(root, []string{"ignored.txt", "escape/inner.txt"})
+	got, err := git.CheckIgnored(root, []string{"ignored.txt", "escape/inner.txt"})
 	if err != nil {
 		t.Fatalf("git.CheckIgnored: %v", err)
 	}

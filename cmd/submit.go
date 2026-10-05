@@ -34,16 +34,6 @@ type submitResult struct {
 	Failed string `json:"failed,omitempty"`
 }
 
-// prHint is kept as an alias so existing tests and payloads read the engine's
-// exported type without churn.
-type prHint = stack.PRHint
-
-// remoteToHTTPS forwards to the engine's converter (kept so cmd tests that
-// pin the conversion keep compiling against their original name).
-func remoteToHTTPS(raw string) (webURL, host string) {
-	return stack.RemoteToHTTPS(raw)
-}
-
 // runSubmit pushes branches to the configured remote using --force-with-lease:
 // with --all, every tracked branch in the forest in topological order; without
 // it, every branch on the current stack — from the bottom branch (just above

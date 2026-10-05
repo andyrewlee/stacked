@@ -434,7 +434,7 @@ func AmendTipWithPatch(branch string, patch []byte) (string, error) {
 	if err := validRefArg("branch", branch); err != nil {
 		return "", err
 	}
-	ref := localBranchNameRef(branch)
+	ref := LocalBranchNameRef(branch)
 	// One log call reads everything: %H is the tip (replacing RevParse), %P
 	// the space-separated parents (rev-list --parents preserved merge tips —
 	// commit-tree -p per parent — though stack tips are single-parent in

@@ -155,7 +155,7 @@ func CheckBranchName(name string) error {
 	if name == "" {
 		return fmt.Errorf("branch name is empty")
 	}
-	if !ok("check-ref-format", "refs/heads/"+name) {
+	if !ok("check-ref-format", LocalBranchNameRef(name)) {
 		return fmt.Errorf("%q is not a valid branch name", name)
 	}
 	return nil

@@ -34,6 +34,11 @@ var (
 	ErrConflict = errors.New("rebase conflict — resolve the conflicts, stage them with git add, then run: st continue")
 )
 
+// UndoRebaseGateMsg is the refusal both undo paths emit while a rebase is
+// paused — the engine's planner and the cmd layer's fail-fast check share it
+// so the wording cannot drift across the boundary.
+const UndoRebaseGateMsg = "cannot undo while a rebase is in progress; run st abort or resolve conflicts and run st continue"
+
 // ConflictError reports a rebase that stopped on a conflict, naming the branch
 // being rebased and the parent it was moving onto. It Unwraps to ErrConflict, so
 // errors.Is(err, ErrConflict) — and the exit-2 / "conflict" mappings — still
@@ -276,14 +281,4 @@ func cloneState(s *State) *State {
 // Descendants(trunk) walks in the same sorted, parents-first order.
 func restackAll(env Env, s *State) ([]string, error) {
 	return s.restackUpstack(env, s.Trunk)
-}
-
-// sortedBranchNames returns all tracked branch names in deterministic order.
-func sortedBranchNames(s *State) []string {
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

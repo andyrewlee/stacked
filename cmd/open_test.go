@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // stubOpen replaces the browser spawn with a recorder and returns it.
@@ -130,7 +132,7 @@ func TestOpenJSONNoSpawn(t *testing.T) {
 	if got.Remote != "origin" || got.DryRun {
 		t.Fatalf("payload = %+v", got)
 	}
-	want := []prHint{{Head: "feat-a", Base: "main", CompareURL: "https://github.com/owner/repo/compare/main...feat-a"}}
+	want := []stack.PRHint{{Head: "feat-a", Base: "main", CompareURL: "https://github.com/owner/repo/compare/main...feat-a"}}
 	if !reflect.DeepEqual(got.PRHints, want) {
 		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
 	}

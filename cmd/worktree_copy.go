@@ -61,7 +61,7 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	// decision order below (absent -> not ignored -> containment) is unchanged.
 	// Computed BEFORE the nested drop: only a directory the loop will actually
 	// copy (a gitignored one) may suppress its descendants.
-	ignored, err := gitIgnoredSet(srcRoot, entries)
+	ignored, err := git.CheckIgnored(srcRoot, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -104,18 +104,6 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 		copied = append(copied, rel)
 	}
 	return copied, nil
-}
-
-// gitIgnoredSet returns which of rels (relative to root) are gitignored, in
-// one `git check-ignore -z --stdin` spawn. Entries travel NUL-separated both
-// ways (-z sidesteps core.quotePath quoting). Exit status 1 means "none
-// ignored" and is not an error. A fatal exit (128 — e.g. one entry reaches
-// beyond a symlinked directory) poisons the whole batch, so it falls back to
-// per-entry probes, preserving the old per-path semantics: a path git cannot
-// classify counts as not ignored (the copy loop then skips it). The batch +
-// fallback semantics live in the port (git.CheckIgnored).
-func gitIgnoredSet(root string, rels []string) (map[string]bool, error) {
-	return git.CheckIgnored(root, rels)
 }
 
 // gitTrackedPaths returns the destination worktree's tracked paths as a

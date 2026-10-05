@@ -116,7 +116,7 @@ func runUndoApply(asJSON bool, n int, force bool) error {
 	if inProgress, err := git.RebaseInProgress(); err != nil {
 		return err
 	} else if inProgress {
-		return fmt.Errorf("cannot undo while a rebase is in progress; run st abort or resolve conflicts and run st continue")
+		return errors.New(stack.UndoRebaseGateMsg)
 	}
 
 	entries, err := stack.ListUndo()

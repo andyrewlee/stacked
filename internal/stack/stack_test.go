@@ -248,7 +248,7 @@ func TestDriftAgainstMatchesNeedsRestack(t *testing.T) {
 		t.Fatal(err)
 	}
 	drift := s.DriftAgainst(tips)
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		want, err := s.NeedsRestack(f, name)
 		if err != nil {
 			t.Fatalf("NeedsRestack(%s): %v", name, err)

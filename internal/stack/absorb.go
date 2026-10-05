@@ -113,7 +113,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 		return nil, "", fmt.Errorf("walk %s..%s: %w", s.Trunk, cur, err)
 	}
 
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, "", fmt.Errorf("read branch tips: %w", err)
 	}

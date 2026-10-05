@@ -1002,10 +1002,10 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 	})
 	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed", "prHints")
 	type submitDryRunJSON struct {
-		Remote  string   `json:"remote"`
-		DryRun  bool     `json:"dryRun"`
-		Pushed  []string `json:"pushed"`
-		PRHints []prHint `json:"prHints"`
+		Remote  string         `json:"remote"`
+		DryRun  bool           `json:"dryRun"`
+		Pushed  []string       `json:"pushed"`
+		PRHints []stack.PRHint `json:"prHints"`
 	}
 	var got submitDryRunJSON
 	decodeStrictJSON(t, "submit --dry-run --json", out, &got)
@@ -1018,7 +1018,7 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 	if want := []string{"feat-a", "feat-b"}; !reflect.DeepEqual(got.Pushed, want) {
 		t.Fatalf("dry-run pushed = %v, want %v", got.Pushed, want)
 	}
-	wantHints := []prHint{{Head: "feat-a", Base: "main"}, {Head: "feat-b", Base: "feat-a"}}
+	wantHints := []stack.PRHint{{Head: "feat-a", Base: "main"}, {Head: "feat-b", Base: "feat-a"}}
 	if !reflect.DeepEqual(got.PRHints, wantHints) {
 		t.Fatalf("dry-run prHints = %+v, want %+v", got.PRHints, wantHints)
 	}
@@ -1087,7 +1087,7 @@ func TestSubmitPRHintsGitHubJSON(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit pr hints", out, &got)
-	want := []prHint{
+	want := []stack.PRHint{
 		{
 			Head:       "feat/slash",
 			Base:       "main",
@@ -1121,7 +1121,7 @@ func TestSubmitPRHintsGitLabJSON(t *testing.T) {
 	if got.RepoURL != "https://gitlab.com/owner/repo" {
 		t.Fatalf("repoURL = %q, want https://gitlab.com/owner/repo", got.RepoURL)
 	}
-	want := []prHint{
+	want := []stack.PRHint{
 		{
 			Head:       "feat/slash",
 			Base:       "main",
@@ -1140,7 +1140,7 @@ func TestSubmitPRHintsGitLabJSON(t *testing.T) {
 
 // TestSubmitPRHintsGitLabMixedCaseHostJSON pins prCompareURL's lowercased host
 // matching: a mixed-case remote host must still take the gitlab /-/compare/
-// path shape (remoteToHTTPS preserves the host's case in the URL prefix).
+// path shape (stack.RemoteToHTTPS preserves the host's case in the URL prefix).
 func TestSubmitPRHintsGitLabMixedCaseHostJSON(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -1154,7 +1154,7 @@ func TestSubmitPRHintsGitLabMixedCaseHostJSON(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit mixed-case gitlab pr hints", out, &got)
-	want := []prHint{
+	want := []stack.PRHint{
 		{
 			Head:       "feat-a",
 			Base:       "main",
@@ -1181,7 +1181,7 @@ func TestSubmitPRHintsUnknownRemoteJSON(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit unknown remote pr hints", out, &got)
-	want := []prHint{{Head: "feat-a", Base: "main"}}
+	want := []stack.PRHint{{Head: "feat-a", Base: "main"}}
 	if !reflect.DeepEqual(got.PRHints, want) {
 		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
 	}
@@ -1377,7 +1377,7 @@ func TestSubmitRejectsPositionalArgs(t *testing.T) {
 }
 
 func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
-	webURL, host := remoteToHTTPS("https://TOKEN@example.com/owner/repo.git?access_token=SECRET#frag")
+	webURL, host := stack.RemoteToHTTPS("https://TOKEN@example.com/owner/repo.git?access_token=SECRET#frag")
 	if webURL != "https://example.com/owner/repo" || host != "example.com" {
 		t.Fatalf("credential URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
 	}
@@ -1385,7 +1385,7 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 		t.Fatalf("credential leaked in converted remote: %q %q", webURL, host)
 	}
 
-	webURL, host = remoteToHTTPS("git@example.com:owner/repo.git?token=SECRET#frag")
+	webURL, host = stack.RemoteToHTTPS("git@example.com:owner/repo.git?token=SECRET#frag")
 	if webURL != "https://example.com/owner/repo" || host != "example.com" {
 		t.Fatalf("scp-like URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
 	}
@@ -1393,7 +1393,7 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 		t.Fatalf("scp-like credential leaked in converted remote: %q %q", webURL, host)
 	}
 
-	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com/owner/repo.git?token=SECRET#frag")
+	webURL, host = stack.RemoteToHTTPS("ssh://user:SECRET@example.com/owner/repo.git?token=SECRET#frag")
 	if webURL != "https://example.com/owner/repo" || host != "example.com" {
 		t.Fatalf("credential SSH URL converted to (%q, %q), want sanitized example.com URL", webURL, host)
 	}
@@ -1401,12 +1401,12 @@ func TestRemoteToHTTPSStripsCredentials(t *testing.T) {
 		t.Fatalf("SSH credential leaked in converted remote: %q %q", webURL, host)
 	}
 
-	webURL, host = remoteToHTTPS("ssh://git@[2001:db8::1]/owner/repo.git")
+	webURL, host = stack.RemoteToHTTPS("ssh://git@[2001:db8::1]/owner/repo.git")
 	if webURL != "https://[2001:db8::1]/owner/repo" || host != "2001:db8::1" {
 		t.Fatalf("IPv6 SSH URL converted to (%q, %q), want bracketed web URL", webURL, host)
 	}
 
-	webURL, host = remoteToHTTPS("ssh://user:SECRET@example.com:2222/owner/repo.git")
+	webURL, host = stack.RemoteToHTTPS("ssh://user:SECRET@example.com:2222/owner/repo.git")
 	if webURL != "https://example.com:2222/owner/repo" || host != "example.com" {
 		t.Fatalf("credential SSH URL with port converted to (%q, %q), want sanitized example.com:2222 URL", webURL, host)
 	}
@@ -2323,7 +2323,7 @@ func TestSubmitPRHintsSelfHostedGitLabJSON(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit self-hosted gitlab pr hints", out, &got)
-	want := []prHint{{
+	want := []stack.PRHint{{
 		Head:       "feat-a",
 		Base:       "main",
 		CompareURL: "https://gitlab.internal.example.com/owner/repo/-/compare/main...feat-a",
@@ -2348,7 +2348,7 @@ func TestSubmitPRHintsGitHubEnterpriseJSON(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit ghe pr hints", out, &got)
-	want := []prHint{{
+	want := []stack.PRHint{{
 		Head:       "feat-a",
 		Base:       "main",
 		CompareURL: "https://github.example.com/owner/repo/compare/main...feat-a",
@@ -2373,7 +2373,7 @@ func TestSubmitPRHintsLookalikeHostStaysUnknown(t *testing.T) {
 	})
 	var got submitResult
 	decodeStrictJSON(t, "submit lookalike host pr hints", out, &got)
-	want := []prHint{{Head: "feat-a", Base: "main"}}
+	want := []stack.PRHint{{Head: "feat-a", Base: "main"}}
 	if !reflect.DeepEqual(got.PRHints, want) {
 		t.Fatalf("prHints = %+v, want no compare URL: %+v", got.PRHints, want)
 	}

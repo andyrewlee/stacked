@@ -205,18 +205,6 @@ func trackedAndTrunk(s *stack.State) []string {
 	return names
 }
 
-// trackedBranches returns every tracked branch, sorted — the domain of
-// commands that act only on stack members (delete, untrack): the trunk is
-// never among them.
-func trackedBranches(s *stack.State) []string {
-	names := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // minusNames drops every name in excl, preserving order.
 func minusNames(names []string, excl map[string]bool) []string {
 	kept := names[:0]

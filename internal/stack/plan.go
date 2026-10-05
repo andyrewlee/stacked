@@ -36,7 +36,7 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -84,7 +84,7 @@ func SquashPlan(env Env, s *State, message string) (*OpResult, error) {
 	if len(subjects) <= 1 {
 		return &OpResult{Summary: fmt.Sprintf("%s already has a single commit; nothing to squash", cur), Branch: cur, DryRun: true}, nil
 	}
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -130,7 +130,7 @@ func OntoPlan(env Env, s *State, target string) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -194,7 +194,7 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 			return nil, fmt.Errorf("cannot delete current branch %q because its parent %q is checked out in another worktree %q", name, parent, owner.Path)
 		}
 	}
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
