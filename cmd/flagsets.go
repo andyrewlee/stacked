@@ -36,6 +36,7 @@ type createOpts struct {
 	message  string
 	all      bool
 	worktree bool
+	dryRun   bool
 }
 
 func newCreateFlags(o *createOpts) *flag.FlagSet {
@@ -45,6 +46,7 @@ func newCreateFlags(o *createOpts) *flag.FlagSet {
 	fs.BoolVar(&o.all, "a", false, "stage all changes before committing")
 	fs.BoolVar(&o.all, "all", false, "stage all changes before committing")
 	fs.BoolVar(&o.worktree, "worktree", false, "create the branch in its own worktree instead of switching to it")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the branch (and, with --worktree, the worktree path and copied files) without creating anything")
 	return withDefaults(fs, "create")
 }
 
@@ -100,6 +102,7 @@ type modifyOpts struct {
 	message string
 	all     bool
 	commit  bool
+	dryRun  bool
 }
 
 func newModifyFlags(o *modifyOpts) *flag.FlagSet {
@@ -111,10 +114,40 @@ func newModifyFlags(o *modifyOpts) *flag.FlagSet {
 	fs.BoolVar(&o.all, "a", true, "stage all tracked changes before amending/committing")
 	fs.BoolVar(&o.all, "all", true, "stage all tracked changes before amending/committing")
 	fs.BoolVar(&o.commit, "commit", false, "create a new commit instead of amending the tip")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the amend/commit and its upstack restack without changing anything")
 	return withDefaults(fs, "modify")
 }
 
 func modifyFlagSet() *flag.FlagSet { return newModifyFlags(&modifyOpts{}) }
+
+// untrack and rename take positional branch names plus --dry-run, so they get
+// declared flag sets like the flag-rich commands rather than the --json-only
+// fallback help introspection would otherwise show.
+type untrackOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newUntrackFlags(o *untrackOpts) *flag.FlagSet {
+	fs := newFlagSet("untrack", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the untrack and its child re-parenting without changing anything")
+	return withDefaults(fs, "untrack")
+}
+
+func untrackFlagSet() *flag.FlagSet { return newUntrackFlags(&untrackOpts{}) }
+
+type renameOpts struct {
+	asJSON bool
+	dryRun bool
+}
+
+func newRenameFlags(o *renameOpts) *flag.FlagSet {
+	fs := newFlagSet("rename", &o.asJSON)
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the rename and its parent-pointer updates without changing anything")
+	return withDefaults(fs, "rename")
+}
+
+func renameFlagSet() *flag.FlagSet { return newRenameFlags(&renameOpts{}) }
 
 type deleteOpts struct {
 	asJSON bool

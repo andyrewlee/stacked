@@ -757,3 +757,306 @@ func TestRestackPlanMatchesActual(t *testing.T) {
 		})
 	}
 }
+
+func TestModifyPlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "b", "c")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := ModifyPlan(env, s, "", true, false)
+	if err != nil {
+		t.Fatalf("ModifyPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("ModifyPlan should be marked DryRun")
+	}
+	if preview.Branch != "a" || preview.Summary != "would amend a" {
+		t.Fatalf("ModifyPlan result = %+v, want branch a / 'would amend a'", preview)
+	}
+	if got := preview.Restacked; !reflect.DeepEqual(got, []string{"b", "c"}) {
+		t.Fatalf("ModifyPlan Restacked = %v, want [b c]", got)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Modify(env2, s2, "", true, false)
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestModifyPlanCommitReportsIntent(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	before := capturePreviewState(t, f, s)
+	preview, err := ModifyPlan(env, s, "wip", true, true)
+	if err != nil {
+		t.Fatalf("ModifyPlan --commit: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if preview.Summary != "would commit on a" {
+		t.Fatalf("ModifyPlan --commit summary = %q", preview.Summary)
+	}
+	// The future commit's SHA is unknowable, but the upstack cascade is still
+	// predicted honestly through the moved-tip machinery.
+	if got := preview.Restacked; !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("ModifyPlan --commit Restacked = %v, want [b]", got)
+	}
+}
+
+func TestModifyPlanSharesRefusals(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ModifyPlan(env, s, "", true, false); err == nil {
+		t.Fatal("ModifyPlan on the trunk should refuse")
+	}
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ModifyPlan(env, s, "", true, true); err == nil || !strings.Contains(err.Error(), "--commit requires a commit message") {
+		t.Fatalf("ModifyPlan --commit without -m err = %v, want the message refusal", err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ModifyPlan(env, s, "", true, false); err == nil || !strings.Contains(err.Error(), "not tracked") {
+		t.Fatalf("ModifyPlan on untracked err = %v, want the not-tracked refusal", err)
+	}
+}
+
+func TestUntrackPlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "a", "d")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := UntrackPlan(env, s, "")
+	if err != nil {
+		t.Fatalf("UntrackPlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("UntrackPlan should be marked DryRun")
+	}
+	if preview.Branch != "a" {
+		t.Fatalf("UntrackPlan Branch = %q, want a", preview.Branch)
+	}
+	if len(preview.Notes) != 2 {
+		t.Fatalf("UntrackPlan Notes = %v, want one per re-parented child", preview.Notes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := UntrackBranch(env2, s2, "")
+	if err != nil {
+		t.Fatalf("UntrackBranch: %v", err)
+	}
+	if preview.Branch != actual.Branch {
+		t.Fatalf("Branch preview=%q actual=%q", preview.Branch, actual.Branch)
+	}
+	if s2.IsTracked("a") {
+		t.Fatal("actual untrack should drop a from the stack")
+	}
+	b, _ := s2.Get("b")
+	if b.Parent != "main" {
+		t.Fatalf("actual untrack left b's parent = %q, want main", b.Parent)
+	}
+}
+
+func TestUntrackPlanSharesRefusals(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UntrackPlan(env, s, ""); err == nil || !strings.Contains(err.Error(), "cannot untrack the trunk") {
+		t.Fatalf("UntrackPlan on trunk err = %v, want the trunk refusal", err)
+	}
+	if _, err := UntrackPlan(env, s, "scratch"); err == nil || !strings.Contains(err.Error(), "not tracked") {
+		t.Fatalf("UntrackPlan on untracked err = %v, want the not-tracked refusal", err)
+	}
+}
+
+func TestRenamePlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		mkBranch(t, env, s, f, "a", "b")
+		mkBranch(t, env, s, f, "main", "other")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := RenamePlan(env, s, "", "a2")
+	if err != nil {
+		t.Fatalf("RenamePlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("RenamePlan should be marked DryRun")
+	}
+	if preview.Branch != "a2" || preview.Summary != "would rename a -> a2" {
+		t.Fatalf("RenamePlan result = %+v, want branch a2 / 'would rename a -> a2'", preview)
+	}
+	wantNotes := []string{"child b would re-parent onto a2"}
+	if !reflect.DeepEqual(preview.Notes, wantNotes) {
+		t.Fatalf("RenamePlan Notes = %v, want %v", preview.Notes, wantNotes)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Rename(env2, s2, "", "a2")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if preview.Branch != actual.Branch {
+		t.Fatalf("Branch preview=%q actual=%q", preview.Branch, actual.Branch)
+	}
+	b, _ := s2.Get("b")
+	if b.Parent != "a2" {
+		t.Fatalf("actual rename left b's parent = %q, want a2", b.Parent)
+	}
+}
+
+func TestRenamePlanSharesRefusals(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := RenamePlan(env, s, "", "a"); err == nil {
+		t.Fatal("RenamePlan to the same name should refuse")
+	}
+	if _, err := RenamePlan(env, s, "", "main"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("RenamePlan onto existing err = %v, want the exists refusal", err)
+	}
+	if _, err := RenamePlan(env, s, "scratch", "b"); err == nil || !strings.Contains(err.Error(), "not the trunk or a tracked branch") {
+		t.Fatalf("RenamePlan on untracked err = %v, want the untracked refusal", err)
+	}
+}
+
+func TestRenamePlanTrunkNamesTheTrunkMove(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := RenamePlan(env, s, "", "trunk")
+	if err != nil {
+		t.Fatalf("RenamePlan trunk: %v", err)
+	}
+	if preview.Branch != "trunk" || preview.Summary != "would rename main -> trunk" {
+		t.Fatalf("RenamePlan trunk result = %+v", preview)
+	}
+	if len(preview.Notes) != 2 {
+		t.Fatalf("RenamePlan trunk Notes = %v, want the trunk note plus the child note", preview.Notes)
+	}
+}
+
+func TestCreatePlanMatchesActualAndDoesNotMutate(t *testing.T) {
+	setup := func(t *testing.T) (*fakeGit, *State, Env) {
+		t.Helper()
+		f, s, env := newEnvState()
+		mkBranch(t, env, s, f, "main", "a")
+		if err := f.Checkout("a"); err != nil {
+			t.Fatal(err)
+		}
+		return f, s, env
+	}
+
+	f, s, env := setup(t)
+	before := capturePreviewState(t, f, s)
+	preview, err := CreatePlan(env, s, "b", "", false)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("CreatePlan should be marked DryRun")
+	}
+	if preview.Branch != "b" || preview.Summary != "would create b on top of a" {
+		t.Fatalf("CreatePlan result = %+v, want branch b / 'would create b on top of a'", preview)
+	}
+
+	_, s2, env2 := setup(t)
+	actual, err := Create(env2, s2, "b", "", false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertPlanResultFields(t, preview, actual)
+}
+
+func TestCreatePlanSharesRefusals(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := CreatePlan(env, s, "a", "", false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("CreatePlan on existing name err = %v, want the exists refusal", err)
+	}
+	if _, err := CreatePlan(env, s, "b", "", true); err == nil || !strings.Contains(err.Error(), "-a requires a commit message") {
+		t.Fatalf("CreatePlan -a without -m err = %v, want the -a refusal", err)
+	}
+	if _, err := CreatePlan(env, s, "b", "msg", false); err == nil || !strings.Contains(err.Error(), "no staged changes") {
+		t.Fatalf("CreatePlan -m with nothing staged err = %v, want the staged refusal", err)
+	}
+	f.staged = true
+	if _, err := CreatePlan(env, s, "b", "", false); err == nil || !strings.Contains(err.Error(), "staged changes present") {
+		t.Fatalf("CreatePlan with staged changes and no -m err = %v, want the -m refusal", err)
+	}
+	if _, err := CreatePlan(env, s, "b", "msg", false); err != nil {
+		t.Fatalf("CreatePlan with staged changes and -m: %v", err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.CreateBranch("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreatePlan(env, s, "b", "", false); err == nil || !strings.Contains(err.Error(), "not the trunk or a tracked branch") {
+		t.Fatalf("CreatePlan on untracked parent err = %v, want the parent refusal", err)
+	}
+}

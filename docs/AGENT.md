@@ -85,8 +85,13 @@ message.
   fetching) and reports them in `deleted`; it never moves HEAD, so it refuses
   when the current branch itself is merged ("check out another branch or run
   st sync"). Preview-capable commands (`restack`, `sync`,
-  `onto`, `fold`, `squash`, `delete`, `prune`) return the same result shape with
-  `"dryRun": true` under `--dry-run`. In a multi-worktree repo, `restack`/`sync`
+  `onto`, `fold`, `squash`, `delete`, `prune`, `create`, `modify`, `untrack`,
+  `rename`) return the same result shape with `"dryRun": true` under
+  `--dry-run`, computed by a read-only planner — no lock, no undo entry, no
+  mutation. `modify --dry-run` previews the amend (or `--commit`) plus its
+  upstack `restacked` cascade; `untrack --dry-run` and `rename --dry-run` name
+  each re-parenting child in `notes`; `create --dry-run` reports the same
+  refusals the real create would. In a multi-worktree repo, `restack`/`sync`
   rebase a dependent branch that lives in another worktree *inside that worktree*;
   a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
   feat-a: its worktree is dirty (…)"`) rather than clobbered. `continue` resumes an interrupted restack,
@@ -129,7 +134,11 @@ message.
   (`copied` is `omitempty`). `switched` is true only when the `st shell install`
   shim is active and the command wrote `$ST_CD_FILE`; without the shim, text mode
   prints a `cd` hint instead. `--worktree` cannot be combined with `-m`/`-a`;
-  commit inside the created worktree afterward.
+  commit inside the created worktree afterward. `create --worktree --dry-run`
+  returns the same payload plus `"dryRun": true` — the predicted `worktree`
+  path and `copied` set (the `.worktreeinclude` selection a real run would
+  copy, collision refusals included) — without creating branch, worktree, or
+  copies and without writing `$ST_CD_FILE`.
 - **`log --json`** — a recursive tree rooted at the trunk:
   ```json
   { "name": "main", "tip": "…", "current": false, "needsRestack": false,

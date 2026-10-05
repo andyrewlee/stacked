@@ -8,6 +8,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`create`, `modify`, `untrack`, and `rename` take `--dry-run`.** Each
+  answers the same result shape as the mutating command plus `"dryRun": true`,
+  computed by a read-only planner — no lock, no undo entry, no mutation.
+  `modify --dry-run` previews the amend (or `--commit`) plus its upstack
+  cascade; `untrack --dry-run` and `rename --dry-run` name each re-parented
+  child in `notes`; `create --worktree --dry-run` predicts the worktree path
+  and `.worktreeinclude` copies against the parent's tree.
 - New `st commits [<branch>] [--json]` lists the commits between a branch's
   recorded stack base (`parentSHA`) and its live tip — `{branch, parentSHA,
   commits: [{sha, subject}]}` — so agents can answer "what's in this branch"

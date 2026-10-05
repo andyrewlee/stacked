@@ -9,11 +9,12 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "rename",
-		Aliases: []string{"mv"},
-		Summary: "Rename a branch and update the stack metadata",
-		Usage:   "st rename [old] <new> [--json]",
-		Run:     runRename,
+		Name:       "rename",
+		Aliases:    []string{"mv"},
+		Summary:    "Rename a branch and update the stack metadata",
+		Usage:      "st rename [old] <new> [--dry-run] [--json]",
+		Run:        runRename,
+		NewFlagSet: renameFlagSet,
 		// rename's first positional is the branch to rename — trunk or tracked;
 		// the second is the new name, which has no candidates.
 		Completion: func(cc *completionCtx) []string {
@@ -26,8 +27,8 @@ func init() {
 }
 
 func runRename(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("rename", &asJSON)
+	var o renameOpts
+	fs := newRenameFlags(&o)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
@@ -43,8 +44,13 @@ func runRename(args []string) error {
 	if err := git.CheckBranchName(newName); err != nil {
 		return err
 	}
+	if o.dryRun {
+		return preview(o.asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.RenamePlan(env, s, oldName, newName)
+		})
+	}
 
-	return mutate("rename", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+	return mutate("rename", o.asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Rename(env, s, oldName, newName)
 	})
 }
