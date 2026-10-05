@@ -202,7 +202,14 @@ func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (material
 	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
 		return materializedWorktree{}, checkedOutInMainErr(branch, main.Path)
 	}
+	return previewWorktreeShape(repo, root, branch, branch)
+}
 
+// previewWorktreeShape predicts the canonical path and .worktreeinclude copies
+// for a fresh worktree of branch whose checkout would materialize treeRef's
+// tree (treeRef is branch itself for an existing branch, the parent for a
+// create --worktree preview — the new branch is created at its tip).
+func previewWorktreeShape(repo, root, branch, treeRef string) (materializedWorktree, error) {
 	path, err := stack.WorktreePath(repo, branch)
 	if err != nil {
 		return materializedWorktree{}, err
@@ -213,8 +220,8 @@ func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (material
 	}
 	if len(candidates) > 0 {
 		// The destination does not exist yet; its tracked set is exactly the
-		// branch's tree — what git worktree add would materialize.
-		tracked, trackedSorted, err := gitTreePaths(branch)
+		// tree git worktree add would materialize.
+		tracked, trackedSorted, err := gitTreePaths(treeRef)
 		if err != nil {
 			return materializedWorktree{}, err
 		}

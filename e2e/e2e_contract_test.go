@@ -788,3 +788,117 @@ func TestDebugSpawnTraceKeepsStdoutClean(t *testing.T) {
 		t.Fatalf("ST_DEBUG=0 wrote stderr: %q", off.stderr)
 	}
 }
+
+// TestDryRunParityOnLifecycleCommands drives `st modify|untrack|rename|create
+// --dry-run` against a real repo and pins the shared contract: the same result
+// shape as the mutating command plus "dryRun": true, and nothing — refs,
+// HEAD, or the recorded stack — changes.
+func TestDryRunParityOnLifecycleCommands(t *testing.T) {
+	t.Parallel()
+
+	t.Run("modify", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "a.txt", "a\n", "a")
+		r.create("feat-b", "b.txt", "b\n", "b")
+		r.stOK("checkout", "feat-a")
+		tip, head := r.rev("feat-a"), r.currentBranch()
+		count := r.git("rev-list", "--count", "feat-a")
+
+		res := r.stOK("modify", "--dry-run", "--json")
+		var got struct {
+			Summary   string   `json:"summary"`
+			Branch    string   `json:"branch"`
+			Restacked []string `json:"restacked"`
+			DryRun    bool     `json:"dryRun"`
+		}
+		if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+			t.Fatalf("modify --dry-run --json not parseable: %v\n%s", err, res.stdout)
+		}
+		if !got.DryRun || got.Branch != "feat-a" {
+			t.Fatalf("modify --dry-run payload = %+v", got)
+		}
+		if len(got.Restacked) != 1 || got.Restacked[0] != "feat-b" {
+			t.Fatalf("modify --dry-run restacked = %v, want [feat-b]", got.Restacked)
+		}
+		if r.rev("feat-a") != tip || r.currentBranch() != head {
+			t.Fatal("modify --dry-run moved a ref or HEAD")
+		}
+		if n := r.git("rev-list", "--count", "feat-a"); n != count {
+			t.Fatalf("modify --dry-run created a commit: %s -> %s", count, n)
+		}
+	})
+
+	t.Run("untrack", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "a.txt", "a\n", "a")
+		r.create("feat-b", "b.txt", "b\n", "b")
+		r.stOK("checkout", "feat-a")
+
+		res := r.stOK("untrack", "--dry-run", "--json")
+		var got struct {
+			Branch string   `json:"branch"`
+			Notes  []string `json:"notes"`
+			DryRun bool     `json:"dryRun"`
+		}
+		if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+			t.Fatalf("untrack --dry-run --json not parseable: %v\n%s", err, res.stdout)
+		}
+		if !got.DryRun || got.Branch != "feat-a" {
+			t.Fatalf("untrack --dry-run payload = %+v", got)
+		}
+		if len(got.Notes) != 1 || !strings.Contains(got.Notes[0], "feat-b") {
+			t.Fatalf("untrack --dry-run notes = %v, want feat-b's re-parenting", got.Notes)
+		}
+		// feat-a must still be tracked: a real untrack would re-parent feat-b.
+		if res := r.st("untrack"); res.exitCode != 0 {
+			t.Fatalf("untrack for real after the dry run failed: %s", res.stderr)
+		}
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "a.txt", "a\n", "a")
+
+		res := r.stOK("rename", "feat-a", "feat-renamed", "--dry-run", "--json")
+		var got struct {
+			Branch string `json:"branch"`
+			DryRun bool   `json:"dryRun"`
+		}
+		if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+			t.Fatalf("rename --dry-run --json not parseable: %v\n%s", err, res.stdout)
+		}
+		if !got.DryRun || got.Branch != "feat-renamed" {
+			t.Fatalf("rename --dry-run payload = %+v", got)
+		}
+		if !r.branchExists("feat-a") || r.branchExists("feat-renamed") {
+			t.Fatal("rename --dry-run moved the ref")
+		}
+	})
+
+	t.Run("create", func(t *testing.T) {
+		r := newRepo(t)
+		r.initStack()
+		r.create("feat-a", "a.txt", "a\n", "a")
+
+		res := r.stOK("create", "feat-b", "--dry-run", "--json")
+		var got struct {
+			Branch string `json:"branch"`
+			DryRun bool   `json:"dryRun"`
+		}
+		if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+			t.Fatalf("create --dry-run --json not parseable: %v\n%s", err, res.stdout)
+		}
+		if !got.DryRun || got.Branch != "feat-b" {
+			t.Fatalf("create --dry-run payload = %+v", got)
+		}
+		if r.branchExists("feat-b") {
+			t.Fatal("create --dry-run created the branch")
+		}
+		if r.currentBranch() != "feat-a" {
+			t.Fatalf("create --dry-run moved HEAD to %q", r.currentBranch())
+		}
+	})
+}

@@ -8,10 +8,11 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "untrack",
-		Summary: "Stop tracking a branch (re-parents its children)",
-		Usage:   "st untrack [name] [--json]",
-		Run:     runUntrack,
+		Name:       "untrack",
+		Summary:    "Stop tracking a branch (re-parents its children)",
+		Usage:      "st untrack [name] [--dry-run] [--json]",
+		Run:        runUntrack,
+		NewFlagSet: untrackFlagSet,
 		// untrack's optional positional is a tracked branch — the engine
 		// refuses the trunk (bare untrack targets the current branch).
 		Completion: func(cc *completionCtx) []string {
@@ -24,8 +25,8 @@ func init() {
 }
 
 func runUntrack(args []string) error {
-	var asJSON bool
-	fs := newFlagSet("untrack", &asJSON)
+	var o untrackOpts
+	fs := newUntrackFlags(&o)
 	if err := parseArgs(fs, args); err != nil {
 		return err
 	}
@@ -38,8 +39,13 @@ func runUntrack(args []string) error {
 	if len(rest) == 1 {
 		name = rest[0]
 	}
+	if o.dryRun {
+		return preview(o.asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.UntrackPlan(env, s, name)
+		})
+	}
 
-	return mutate("untrack", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+	return mutate("untrack", o.asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.UntrackBranch(env, s, name)
 	})
 }

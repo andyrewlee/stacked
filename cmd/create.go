@@ -15,7 +15,7 @@ func init() {
 		Name:       "create",
 		Aliases:    []string{"c"},
 		Summary:    "Create a new branch stacked on the current branch",
-		Usage:      "st create <name> [-m <msg>] [-a|--all] [--worktree] [--json]",
+		Usage:      "st create <name> [-m <msg>] [-a|--all] [--worktree] [--dry-run] [--json]",
 		Run:        runCreate,
 		NewFlagSet: createFlagSet,
 	})
@@ -41,11 +41,61 @@ func runCreate(args []string) error {
 		if message != "" || all {
 			return errors.New(createWorktreeCommitFlagErr)
 		}
+		if o.dryRun {
+			return previewCreateWorktree(name, asJSON)
+		}
 		return runCreateWorktree(name, asJSON)
+	}
+	if o.dryRun {
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.CreatePlan(env, s, name, message, all)
+		})
 	}
 
 	return mutate("create", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Create(env, s, name, message, all)
+	})
+}
+
+// previewCreateWorktree answers `create --worktree --dry-run` without locking,
+// creating, or copying: CreatePlan carries the op's refusals (existing name,
+// untracked parent) and previewWorktreeShape predicts the path and the
+// .worktreeinclude set the materialization would copy — against the parent's
+// tree, since the new branch is created at the parent's tip.
+func previewCreateWorktree(name string, asJSON bool) error {
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	env := stackEnv(s, asJSON)
+	res, err := stack.CreatePlan(env, s, name, "", false)
+	if err != nil {
+		return err
+	}
+	parent, err := env.Git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	repo, root, err := repoIdentifier()
+	if err != nil {
+		return err
+	}
+	created, err := previewWorktreeShape(repo, root, name, parent)
+	if err != nil {
+		return err
+	}
+	payload := struct {
+		Branch   string   `json:"branch"`
+		Parent   string   `json:"parent"`
+		Worktree string   `json:"worktree"`
+		Copied   []string `json:"copied,omitempty"`
+		Switched bool     `json:"switched"`
+		Summary  string   `json:"summary"`
+		DryRun   bool     `json:"dryRun"`
+	}{name, parent, created.Path, created.Copied, false, res.Summary, true}
+	return emit(asJSON, payload, func() {
+		out("%s\n", sanitizeForTerminal(res.Summary))
+		out("would create worktree for %s at %s\n", sanitizeForTerminal(name), sanitizeForTerminal(created.Path))
 	})
 }
 

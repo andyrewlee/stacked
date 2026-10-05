@@ -2584,3 +2584,211 @@ func TestSubmitPRHintsLookalikeHostStaysUnknown(t *testing.T) {
 		t.Fatalf("prHints = %+v, want no compare URL: %+v", got.PRHints, want)
 	}
 }
+
+// --- dry-run parity (modify / untrack / rename / create) --------------------
+
+// TestModifyDryRunJSON pins the no-mutation contract: the result reports the
+// would-be amend plus its upstack cascade, while neither HEAD, the tip, nor
+// the recorded state moves.
+func TestModifyDryRunJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+	tip := mustRun(t, "git", "rev-parse", "feat-a")
+
+	type dryRunJSON struct {
+		Summary   string   `json:"summary"`
+		Branch    string   `json:"branch"`
+		Restacked []string `json:"restacked"`
+		Notes     []string `json:"notes"`
+		DryRun    bool     `json:"dryRun"`
+	}
+	out := captureStdout(t, func() {
+		if err := runModify([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("modify --dry-run --json: %v", err)
+		}
+	})
+	var got dryRunJSON
+	decodeStrictJSON(t, "modify --dry-run --json", out, &got)
+	if !got.DryRun || got.Branch != "feat-a" || got.Summary != "would amend feat-a" {
+		t.Fatalf("modify --dry-run payload = %+v", got)
+	}
+	if want := []string{"feat-b"}; !reflect.DeepEqual(got.Restacked, want) {
+		t.Fatalf("modify --dry-run restacked = %v, want %v", got.Restacked, want)
+	}
+	if after := mustRun(t, "git", "rev-parse", "feat-a"); after != tip {
+		t.Fatalf("modify --dry-run moved feat-a: %s -> %s", tip, after)
+	}
+}
+
+func TestModifyDryRunCommitIsHonest(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	before := mustRun(t, "git", "rev-list", "--count", "feat-a")
+
+	out := captureStdout(t, func() {
+		if err := runModify([]string{"--commit", "-m", "wip", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("modify --commit --dry-run --json: %v", err)
+		}
+	})
+	var got struct {
+		Summary string `json:"summary"`
+		Branch  string `json:"branch"`
+		DryRun  bool   `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "modify --commit --dry-run --json", out, &got)
+	if got.Summary != "would commit on feat-a" || got.Branch != "feat-a" || !got.DryRun {
+		t.Fatalf("modify --commit --dry-run payload = %+v", got)
+	}
+	if after := mustRun(t, "git", "rev-list", "--count", "feat-a"); after != before {
+		t.Fatalf("modify --commit --dry-run changed feat-a's history: %s -> %s commits", before, after)
+	}
+}
+
+func TestUntrackDryRunJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+
+	out := captureStdout(t, func() {
+		if err := runUntrack([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("untrack --dry-run --json: %v", err)
+		}
+	})
+	var got struct {
+		Summary string   `json:"summary"`
+		Branch  string   `json:"branch"`
+		Notes   []string `json:"notes"`
+		DryRun  bool     `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "untrack --dry-run --json", out, &got)
+	if !got.DryRun || got.Branch != "feat-a" {
+		t.Fatalf("untrack --dry-run payload = %+v", got)
+	}
+	wantNotes := []string{"child feat-b would re-parent onto main"}
+	if !reflect.DeepEqual(got.Notes, wantNotes) {
+		t.Fatalf("untrack --dry-run notes = %v, want %v", got.Notes, wantNotes)
+	}
+	if !stateT(t).IsTracked("feat-a") {
+		t.Fatal("untrack --dry-run dropped feat-a from state")
+	}
+}
+
+func TestRenameDryRunJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "feat-a")
+
+	out := captureStdout(t, func() {
+		if err := runRename([]string{"feat-a", "feat-renamed", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("rename --dry-run --json: %v", err)
+		}
+	})
+	var got struct {
+		Summary string   `json:"summary"`
+		Branch  string   `json:"branch"`
+		Notes   []string `json:"notes"`
+		DryRun  bool     `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "rename --dry-run --json", out, &got)
+	if !got.DryRun || got.Branch != "feat-renamed" || got.Summary != "would rename feat-a -> feat-renamed" {
+		t.Fatalf("rename --dry-run payload = %+v", got)
+	}
+	wantNotes := []string{"child feat-b would re-parent onto feat-renamed"}
+	if !reflect.DeepEqual(got.Notes, wantNotes) {
+		t.Fatalf("rename --dry-run notes = %v, want %v", got.Notes, wantNotes)
+	}
+	mustRun(t, "git", "rev-parse", "--verify", "feat-a")
+	if !stateT(t).IsTracked("feat-a") || stateT(t).IsTracked("feat-renamed") {
+		t.Fatal("rename --dry-run changed the recorded stack")
+	}
+}
+
+func TestCreateDryRunJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-b", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("create --dry-run --json: %v", err)
+		}
+	})
+	var got struct {
+		Summary string `json:"summary"`
+		Branch  string `json:"branch"`
+		DryRun  bool   `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "create --dry-run --json", out, &got)
+	if !got.DryRun || got.Branch != "feat-b" || got.Summary != "would create feat-b on top of feat-a" {
+		t.Fatalf("create --dry-run payload = %+v", got)
+	}
+	if err := exec.Command("git", "rev-parse", "--verify", "-q", "feat-b").Run(); err == nil {
+		t.Fatal("create --dry-run created feat-b")
+	}
+	if stateT(t).IsTracked("feat-b") {
+		t.Fatal("create --dry-run tracked feat-b")
+	}
+}
+
+// TestCreateWorktreeDryRunJSON pins the predicted worktree path + copied set
+// against the PARENT's tree (the new branch is created at its tip) and the
+// fact that nothing is created on disk.
+func TestCreateWorktreeDryRunJSON(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+
+	write(t, ".gitignore", "secret.env\n")
+	write(t, "secret.env", "TOKEN=1\n")
+	write(t, ".worktreeinclude", "secret.env\n")
+	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
+	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
+
+	out := captureStdout(t, func() {
+		if err := runCreate([]string{"feat-x", "--worktree", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("create feat-x --worktree --dry-run --json: %v", err)
+		}
+	})
+	var got struct {
+		Branch   string   `json:"branch"`
+		Parent   string   `json:"parent"`
+		Worktree string   `json:"worktree"`
+		Copied   []string `json:"copied"`
+		Switched bool     `json:"switched"`
+		Summary  string   `json:"summary"`
+		DryRun   bool     `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "create --worktree --dry-run --json", out, &got)
+	if !got.DryRun || got.Branch != "feat-x" || got.Parent != "main" {
+		t.Fatalf("create --worktree --dry-run payload = %+v", got)
+	}
+	if got.Switched {
+		t.Fatal("dry-run reports switched = true")
+	}
+	if got.Summary != "would create feat-x on top of main" {
+		t.Fatalf("create --worktree --dry-run summary = %q", got.Summary)
+	}
+	if want := []string{"secret.env"}; !reflect.DeepEqual(got.Copied, want) {
+		t.Fatalf("create --worktree --dry-run copied = %v, want %v", got.Copied, want)
+	}
+	if got.Worktree == "" {
+		t.Fatal("create --worktree --dry-run predicted no worktree path")
+	}
+	if _, err := os.Stat(got.Worktree); !os.IsNotExist(err) {
+		t.Fatalf("worktree path %q exists after a dry run", got.Worktree)
+	}
+	if err := exec.Command("git", "rev-parse", "--verify", "-q", "feat-x").Run(); err == nil {
+		t.Fatal("create --worktree --dry-run created feat-x")
+	}
+	if stateT(t).IsTracked("feat-x") {
+		t.Fatal("create --worktree --dry-run tracked feat-x")
+	}
+}

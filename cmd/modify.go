@@ -7,7 +7,7 @@ func init() {
 		Name:       "modify",
 		Aliases:    []string{"amend", "m"},
 		Summary:    "Amend (or add) a commit on the current branch and restack everything above",
-		Usage:      "st modify [-m <msg>] [-a|--all] [--commit] [--json]",
+		Usage:      "st modify [-m <msg>] [-a|--all] [--commit] [--dry-run] [--json]",
 		Run:        runModify,
 		NewFlagSet: modifyFlagSet,
 	})
@@ -23,6 +23,11 @@ func runModify(args []string) error {
 		return err
 	}
 	asJSON, message, all, commit := o.asJSON, o.message, o.all, o.commit
+	if o.dryRun {
+		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			return stack.ModifyPlan(env, s, message, all, commit)
+		})
+	}
 
 	return mutate("modify", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
 		return stack.Modify(env, s, message, all, commit)

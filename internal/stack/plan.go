@@ -1,6 +1,9 @@
 package stack
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // FoldPlan previews folding the current branch into its parent.
 func FoldPlan(env Env, s *State) (*OpResult, error) {
@@ -385,6 +388,156 @@ func planAfterTipChange(env Env, s *State, changed string, tips map[string]strin
 		}
 	}
 	return acc.preview(), nil
+}
+
+// ModifyPlan previews Modify — the amend/commit gates and the upstack cascade
+// the real operation would run — without staging, committing, or moving refs.
+// With commit the future SHA is unknowable, so descendants are still reported
+// through planAfterTipChange, which treats the tip as moved regardless.
+func ModifyPlan(env Env, s *State, message string, all, commit bool) (*OpResult, error) {
+	g := env.Git
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	if cur == s.Trunk {
+		return nil, fmt.Errorf("cannot modify the trunk branch %q", cur)
+	}
+	if !s.IsTracked(cur) {
+		return nil, ErrNotTracked(cur)
+	}
+	if len(s.Descendants(cur)) > 0 {
+		unstaged, err := g.HasUnstagedChanges()
+		if err != nil {
+			return nil, fmt.Errorf("checking unstaged changes: %w", err)
+		}
+		if unstaged {
+			return nil, ErrDirty
+		}
+	}
+	var action string
+	switch {
+	case commit:
+		if message == "" {
+			return nil, errors.New("--commit requires a commit message (-m <msg>)")
+		}
+		action = "would commit on " + cur
+	case message != "":
+		action = "would amend " + cur + " with new message"
+	default:
+		action = "would amend " + cur
+	}
+	tips, err := g.TipsFor(s.TipNames())
+	if err != nil {
+		return nil, fmt.Errorf("read branch tips: %w", err)
+	}
+	preview, err := planAfterTipChange(env, s, cur, tips, false)
+	if err != nil {
+		return nil, err
+	}
+	return &OpResult{Summary: action, Branch: cur, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
+}
+
+// UntrackPlan previews UntrackBranch — the refusals and each child's new
+// parent — without touching state or refs.
+func UntrackPlan(env Env, s *State, name string) (*OpResult, error) {
+	g := env.Git
+	if name == "" {
+		cur, err := g.CurrentBranch()
+		if err != nil {
+			return nil, err
+		}
+		name = cur
+	}
+	if name == s.Trunk {
+		return nil, fmt.Errorf("cannot untrack the trunk %q", name)
+	}
+	b, err := s.tracked(name)
+	if err != nil {
+		return nil, err
+	}
+	children := s.Children(name)
+	var notes []string
+	for _, child := range children {
+		notes = append(notes, fmt.Sprintf("child %s would re-parent onto %s", child.Name, b.Parent))
+	}
+	return &OpResult{
+		Summary: fmt.Sprintf("would untrack %s (re-parenting children onto %s)", name, b.Parent),
+		Branch:  name,
+		Notes:   notes,
+		DryRun:  true,
+	}, nil
+}
+
+// RenamePlan previews Rename — the refusals, the rename itself, and every
+// child whose parent pointer would move — without renaming anything.
+func RenamePlan(env Env, s *State, oldName, newName string) (*OpResult, error) {
+	g := env.Git
+	if oldName == "" {
+		cur, err := g.CurrentBranch()
+		if err != nil {
+			return nil, err
+		}
+		oldName = cur
+	}
+	if oldName == newName {
+		return nil, errors.New("new name is the same as the old name")
+	}
+	if g.BranchExists(newName) {
+		return nil, fmt.Errorf("branch %q already exists", newName)
+	}
+	isTrunk := oldName == s.Trunk
+	if !isTrunk && !s.IsTracked(oldName) {
+		return nil, fmt.Errorf("%q is not the trunk or a tracked branch", oldName)
+	}
+	var notes []string
+	if isTrunk {
+		notes = append(notes, fmt.Sprintf("trunk becomes %s", newName))
+	}
+	for _, child := range s.Children(oldName) {
+		notes = append(notes, fmt.Sprintf("child %s would re-parent onto %s", child.Name, newName))
+	}
+	return &OpResult{
+		Summary: fmt.Sprintf("would rename %s -> %s", oldName, newName),
+		Branch:  newName,
+		Notes:   notes,
+		DryRun:  true,
+	}, nil
+}
+
+// CreatePlan previews Create's refusals and outcome — the name collision, the
+// parent choice, and the staged/message pairing — without creating the branch,
+// staging, committing, or tracking. (-a alone cannot run preview-stage checks
+// because staging is itself the mutation being previewed; the message/staged
+// pairing is only honest when the caller did not ask to stage first.)
+func CreatePlan(env Env, s *State, name, message string, all bool) (*OpResult, error) {
+	g := env.Git
+	if g.BranchExists(name) {
+		return nil, fmt.Errorf("branch %q already exists", name)
+	}
+	cur, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	if cur != s.Trunk && !s.IsTracked(cur) {
+		return nil, fmt.Errorf("current branch %q is not the trunk or a tracked branch", cur)
+	}
+	if all && message == "" {
+		return nil, errors.New("-a requires a commit message (-m <msg>)")
+	}
+	if !all {
+		staged, err := g.HasStagedChanges()
+		if err != nil {
+			return nil, fmt.Errorf("checking staged changes: %w", err)
+		}
+		if message == "" && staged {
+			return nil, errors.New("staged changes present; provide a commit message with -m")
+		}
+		if message != "" && !staged {
+			return nil, errors.New("no staged changes to commit; stage changes or pass -a")
+		}
+	}
+	return &OpResult{Summary: fmt.Sprintf("would create %s on top of %s", name, cur), Branch: name, DryRun: true}, nil
 }
 
 // appendRestackPlans previews the same child-by-child restack order Delete uses,
