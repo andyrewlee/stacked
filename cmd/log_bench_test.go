@@ -11,7 +11,6 @@ import (
 // count grow. Baseline (pre-fix) materialized every commit reachable from the
 // rendered tips via `git rev-list --parents`; the target answers each distinct
 // (childTip, parentTip) ancestry question with a bounded merge-base probe.
-// Before/after numbers live in plans/010-log-benchmark-results.md.
 func BenchmarkLogHistory(b *testing.B) {
 	for _, commits := range []int{1000, 20000} {
 		for _, branches := range []int{0, 1, 10, 50} {
