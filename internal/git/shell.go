@@ -59,6 +59,10 @@ func (Shell) CurrentBranch() (string, error) { return CurrentBranch() }
 func (Shell) CommitSubjects(base, br string) ([]string, error) {
 	return CommitSubjects(base, br)
 }
+
+func (Shell) CommitList(base, br string) ([]CommitInfo, error) {
+	return CommitList(base, br)
+}
 func (Shell) HasStagedChanges() (bool, error) { return HasStagedChanges() }
 func (Shell) HasUnstagedChanges() (bool, error) {
 	return HasUnstagedChanges()

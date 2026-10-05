@@ -62,6 +62,10 @@ type Git interface {
 	IsAncestor(ancestor, descendant string) (bool, error)
 	CurrentBranch() (string, error)
 	CommitSubjects(base, branch string) ([]string, error)
+	// CommitList returns the commits in base..branch as {SHA, subject} pairs,
+	// newest first — the ordered list CommitSubjects + CommitRange can't
+	// reconstruct (subjects carry no SHAs; the range is unordered).
+	CommitList(base, branch string) ([]git.CommitInfo, error)
 	HasStagedChanges() (bool, error)
 	HasUnstagedChanges() (bool, error)
 	IsClean() (bool, error)

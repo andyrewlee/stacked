@@ -1228,6 +1228,31 @@ func (f *fakeGit) RebaseAbort() error {
 	return nil
 }
 
+// CommitList mirrors `git log base..branch --format=%H%x09%s` over the fake's
+// parent chains: the same excluded-set walk CommitRange models, but returning
+// the ordered newest-first {sha, subject} pairs.
+func (f *fakeGit) CommitList(base, branch string) ([]git.CommitInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.fail("CommitList"); err != nil {
+		return nil, err
+	}
+	b := f.resolve(base)
+	to := f.resolve(branch)
+	if to == "" || b == "" {
+		return nil, fmt.Errorf("unknown revision in range %q..%q", base, branch)
+	}
+	excluded := map[string]bool{}
+	for cur := b; cur != ""; cur = f.commits[cur].parent {
+		excluded[cur] = true
+	}
+	var out []git.CommitInfo
+	for cur := to; cur != "" && !excluded[cur]; cur = f.commits[cur].parent {
+		out = append(out, git.CommitInfo{SHA: cur, Subject: f.commits[cur].subject})
+	}
+	return out, nil
+}
+
 // CommitRange mirrors `rev-list include ^exclude` over the fake's linear
 // parent chains: walk from include, stopping at anything reachable from
 // exclude.

@@ -144,6 +144,7 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st create <name> [-m|--message <msg>] [-a|--all] [--worktree]` | `c` | Create a new branch stacked on the current branch. |
 | `st log [--json]` | `ls` | Show the stack as a tree (trunk at the bottom); `--json` for scripting. |
 | `st status [--json]` | `stat` | Show the current branch, its parent/children, and restack state. |
+| `st commits [<branch>] [--json]` | | List the commits in a branch's recorded stack range (base..tip). |
 | `st checkout [name]` | `co` | Check out a tracked branch, or list branches when no name is given. |
 | `st up [n]` | `u` | Move up the stack to a child branch. |
 | `st down [n]` | `d` | Move down the stack toward trunk. |
@@ -215,6 +216,13 @@ Prints the current branch's role (trunk / tracked / untracked), its parent and
 children, whether it needs a restack, and whether the working tree is clean. In a
 multi-worktree repo it also prints `worktree path:` for the current branch
 (`worktree` in `--json`).
+
+#### `st commits [<branch>]`
+Lists the commits in a branch's stack range — `sha subject` per line, newest
+first — from its recorded base (`parentSHA`, the model's claim about where the
+branch sits) to its live tip; the default `<branch>` is the current one.
+`--json` emits `{ "branch", "parentSHA", "commits": [{ "sha", "subject" }] }`.
+The trunk is refused (it has no stack base — it *is* the base).
 
 #### `st checkout [name]` (`co`)
 Checks out a tracked branch (or the trunk). With no argument, lists the trunk and
