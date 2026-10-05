@@ -69,7 +69,7 @@ func submitCurrent(env Env, s *State) (*SubmitPlanResult, error) {
 		return &SubmitPlanResult{Reason: "at trunk; nothing to submit"}, nil
 	}
 	if !s.IsTracked(cur) {
-		return nil, fmt.Errorf("branch %q is not tracked by stacked", cur)
+		return nil, ErrNotTracked(cur)
 	}
 
 	// Ancestors gives the parents nearest-first up to and including the trunk;

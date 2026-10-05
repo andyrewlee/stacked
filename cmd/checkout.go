@@ -61,7 +61,7 @@ func runCheckout(args []string) error {
 
 	name := rest[0]
 	if name != s.Trunk && !s.IsTracked(name) {
-		return fmt.Errorf("%q is not a tracked branch", name)
+		return stack.ErrNotTracked(name)
 	}
 	dest, err := teleportCheckout(name)
 	if err != nil {

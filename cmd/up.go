@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"fmt"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
@@ -34,7 +34,7 @@ func runUp(args []string) error {
 	}
 	defer release()
 	if cur != state.Trunk && !state.IsTracked(cur) {
-		return fmt.Errorf("branch %q is not tracked by stacked", cur)
+		return stack.ErrNotTracked(cur)
 	}
 
 	start := cur

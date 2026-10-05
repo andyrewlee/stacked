@@ -130,7 +130,7 @@ func worktreeAdd(branch string, asJSON bool) error {
 		return err
 	}
 	if branch != s.Trunk && !s.IsTracked(branch) {
-		return fmt.Errorf("%q is not a tracked branch", branch)
+		return stack.ErrNotTracked(branch)
 	}
 
 	created, err := materializeWorktree(branch)

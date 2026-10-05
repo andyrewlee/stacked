@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
@@ -32,7 +34,7 @@ func runTop(args []string) error {
 	}
 	defer release()
 	if cur != s.Trunk && !s.IsTracked(cur) {
-		return fmt.Errorf("branch %q is not tracked by stacked", cur)
+		return stack.ErrNotTracked(cur)
 	}
 
 	// The walk is unbounded over corrupted metadata: guard the cycle the

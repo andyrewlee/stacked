@@ -128,13 +128,20 @@ func requireClean(g Git) error {
 	return nil
 }
 
+// ErrNotTracked returns the canonical "branch %q is not tracked" refusal —
+// the single phrasing everywhere the condition surfaces, in the engine and
+// across the cmd boundary.
+func ErrNotTracked(name string) error {
+	return fmt.Errorf("branch %q is not tracked", name)
+}
+
 // tracked returns the tracked branch named name, or the canonical
-// "branch %q is not tracked" error. It is the single source of that message for
+// ErrNotTracked refusal. It is the single source of that message for
 // the operations that act on an existing tracked branch.
 func (s *State) tracked(name string) (*Branch, error) {
 	b, ok := s.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("branch %q is not tracked", name)
+		return nil, ErrNotTracked(name)
 	}
 	return b, nil
 }

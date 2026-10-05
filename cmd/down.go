@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"fmt"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
@@ -42,7 +42,7 @@ func runDown(args []string) error {
 	for i := 0; i < n; i++ {
 		b, ok := s.Get(cur)
 		if !ok {
-			return fmt.Errorf("branch %q is not tracked by stacked", cur)
+			return stack.ErrNotTracked(cur)
 		}
 		cur = b.Parent
 		if cur == s.Trunk {
