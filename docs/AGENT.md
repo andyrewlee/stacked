@@ -413,10 +413,13 @@ One stack, N agents, one worktree per branch:
   reports the build.
 - `st help`, `st help <command>`, and `st version` accept `--json` and emit the
   same information as a machine-readable payload — the command list as
-  `{ "commands": [ { "name", "summary", "usage", "aliases", "flags" }, … ] }`.
+  `{ "commands": [ { "name", "summary", "usage", "aliases", "flags", "subVerbs" }, … ] }`.
   Each `flags` entry is `{ "name", "type": "bool"|"string", "default", "summary" }`
   and lists *declared* flags, so `-m`, `--message`, and `--json` each appear
   separately; positionals remain described only by the prose `usage`.
+  `subVerbs` (`omitempty`) lists the literal sub-verbs a command accepts —
+  `worktree`'s `ls`/`rm`, `shell`'s `install`, `completion`'s shells — so the
+  sub-verb surface is data, not something to regex out of `usage`.
 - `st version --json` emits `{ "version", "commit", "built", "go" }` —
   `version` is the release version (an ldflags stamp wins, then the module
   version a `go install` recorded, then the compiled-in default); `commit` is
