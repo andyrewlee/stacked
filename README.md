@@ -87,7 +87,9 @@ binary on your `PATH`.
 
 Building from source requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git 2.31+** is
 recommended for native common-dir path resolution, while older supported Git
-versions use a fallback. The full gate (`make ci`) additionally needs
+versions use a fallback. On **Git <2.26** the default rebase backend drops
+commits that started empty (`git commit --allow-empty`) during a restack
+cascade; Git 2.26+ preserves them. The full gate (`make ci`) additionally needs
 **golangci-lint v2** — an external binary, never a module dependency:
 `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
 

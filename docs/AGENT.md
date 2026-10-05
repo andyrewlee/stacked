@@ -12,6 +12,11 @@ Local stack operations do not read from stdin or open an interactive editor.
 on a conflict, `st` returns control to you (exit code 2) rather than blocking —
 resolve the files, `git add` them, and run `st continue` (or `st abort`).
 
+Version note: on Git <2.26 the default rebase backend drops commits that
+started empty (`git commit --allow-empty`) during a restack cascade; Git 2.26+
+preserves them. If a stack relies on intentionally empty commits, drive `st`
+on Git 2.26+.
+
 Remote Git operations use your configured Git transport. `st sync` may fetch and
 `st submit` may push, so credentials, SSH agents, and host prompts behave like
 the corresponding `git fetch`/`git push` commands in your environment.
