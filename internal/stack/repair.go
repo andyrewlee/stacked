@@ -69,7 +69,7 @@ func (s *State) Inconsistencies(tips map[string]string, rebaseInProgress bool) [
 	if s.PendingReparent != nil && !rebaseInProgress {
 		ps = append(ps, Problem{Kind: StalePendingReparent, Branch: s.PendingReparent.Branch, Detail: s.PendingReparent.Parent})
 	}
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		ps = append(ps, s.branchProblems(tips, name)...)
 	}
 	return ps
@@ -97,7 +97,7 @@ func Repair(env Env, s *State) (*OpResult, error) {
 	}
 
 	var fixes []string
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		b, ok := s.Get(name)
 		if !ok {
 			continue // removed during an earlier fix

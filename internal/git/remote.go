@@ -31,7 +31,7 @@ func (RemoteShell) FastForward(trunk, remote, ownerDir string, checkedOutHere bo
 			return "", fmt.Errorf("checkout trunk %q: %w", trunk, err)
 		}
 	}
-	localTrunk := "refs/heads/" + trunk
+	localTrunk := LocalBranchNameRef(trunk)
 	upstream := "refs/remotes/" + remote + "/" + trunk
 	upToDate, err := IsAncestor(upstream, localTrunk)
 	if err != nil {
@@ -140,7 +140,7 @@ func PushBranches(remote string, branches []string, force bool) (*PushResult, er
 	}
 	args = append(args, remote)
 	for _, branch := range branches {
-		refspec := "refs/heads/" + branch + ":refs/heads/" + branch
+		refspec := LocalBranchNameRef(branch) + ":" + LocalBranchNameRef(branch)
 		args = append(args, refspec)
 	}
 	out, err := run(args...)
@@ -166,7 +166,7 @@ func PushBranches(remote string, branches []string, force bool) (*PushResult, er
 func parsePushPorcelain(out string, branches []string, res *PushResult) {
 	want := make(map[string]string, len(branches))
 	for _, b := range branches {
-		want["refs/heads/"+b] = b
+		want[LocalBranchNameRef(b)] = b
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if len(line) < 3 || line[1] != '\t' {

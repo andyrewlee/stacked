@@ -138,7 +138,7 @@ type foldOpts struct {
 func newFoldFlags(o *foldOpts) *flag.FlagSet {
 	fs := newFlagSet("fold", &o.asJSON)
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be folded/restacked without changing anything")
-	return fs
+	return withDefaults(fs, "fold")
 }
 
 func foldFlagSet() *flag.FlagSet { return newFoldFlags(&foldOpts{}) }
@@ -185,7 +185,7 @@ func newSubmitFlags(o *submitOpts) *flag.FlagSet {
 	fs.BoolVar(&o.all, "all", false, "push every tracked branch, not just the current stack path")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to push to")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed without pushing")
-	return fs
+	return withDefaults(fs, "submit")
 }
 
 func submitFlagSet() *flag.FlagSet { return newSubmitFlags(&submitOpts{}) }
@@ -202,7 +202,7 @@ func newOpenFlags(o *openOpts) *flag.FlagSet {
 	fs.BoolVar(&o.all, "all", false, "open every tracked branch's compare URL, not just the current branch's")
 	fs.StringVar(&o.remote, "remote", "origin", "remote whose URL the compare links derive from")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print the compare URLs without opening them")
-	return fs
+	return withDefaults(fs, "open")
 }
 
 func openFlagSet() *flag.FlagSet { return newOpenFlags(&openOpts{}) }
@@ -221,7 +221,7 @@ func newSyncFlags(o *syncOpts) *flag.FlagSet {
 	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against the local trunk")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
-	return fs
+	return withDefaults(fs, "sync")
 }
 
 func syncFlagSet() *flag.FlagSet { return newSyncFlags(&syncOpts{}) }
@@ -236,7 +236,7 @@ func newPruneFlags(o *pruneOpts) *flag.FlagSet {
 	fs := newFlagSet("prune", &o.asJSON)
 	fs.StringVar(&o.remote, "remote", "", "measure merged branches against <name>/<trunk> instead of the local trunk")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "list the merged branches that would be deleted")
-	return fs
+	return withDefaults(fs, "prune")
 }
 
 func pruneFlagSet() *flag.FlagSet { return newPruneFlags(&pruneOpts{}) }
@@ -251,7 +251,7 @@ func newRestackFlags(o *restackOpts) *flag.FlagSet {
 	fs := newFlagSet("restack", &o.asJSON)
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be restacked without changing anything")
 	fs.BoolVar(&o.all, "all", false, "restack every tracked branch, not just the current one and its upstack")
-	return fs
+	return withDefaults(fs, "restack")
 }
 
 func restackFlagSet() *flag.FlagSet { return newRestackFlags(&restackOpts{}) }
@@ -264,7 +264,7 @@ type ontoOpts struct {
 func newOntoFlags(o *ontoOpts) *flag.FlagSet {
 	fs := newFlagSet("onto", &o.asJSON)
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be moved/restacked without changing anything")
-	return fs
+	return withDefaults(fs, "onto")
 }
 
 func ontoFlagSet() *flag.FlagSet { return newOntoFlags(&ontoOpts{}) }
@@ -280,7 +280,7 @@ func newSquashFlags(o *squashOpts) *flag.FlagSet {
 	fs.StringVar(&o.message, "m", "", "commit message for the squashed commit")
 	fs.StringVar(&o.message, "message", "", "commit message for the squashed commit")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be squashed/restacked without changing anything")
-	return fs
+	return withDefaults(fs, "squash")
 }
 
 func squashFlagSet() *flag.FlagSet { return newSquashFlags(&squashOpts{}) }

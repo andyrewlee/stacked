@@ -34,7 +34,7 @@ func assertUndoRestored(t *testing.T, f *fakeGit, s *State, entry *UndoEntry) {
 		t.Fatalf("trunk = %q after undo, want %q", s.Trunk, want.Trunk)
 	}
 	if len(s.Branches) != len(want.Branches) {
-		t.Fatalf("tracked = %v after undo, want %v", sortedBranchNames(s), sortedBranchNames(&want))
+		t.Fatalf("tracked = %v after undo, want %v", s.BranchNames(), want.BranchNames())
 	}
 	for name, wantBranch := range want.Branches {
 		got, ok := s.Get(name)

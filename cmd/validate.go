@@ -37,7 +37,7 @@ func runValidate(args []string) error {
 	var problems, warnings []string
 
 	// One exact scoped read answers every branch-exists and drift question.
-	tips, err := git.TipsFor(validateTipNames(s))
+	tips, err := git.TipsFor(s.TipNames())
 	if err != nil {
 		return err
 	}
@@ -108,19 +108,6 @@ func runValidate(args []string) error {
 		return fmt.Errorf("validate found %d problem(s)", len(problems))
 	}
 	return nil
-}
-
-func validateTipNames(s *stack.State) []string {
-	names := make([]string, 0, len(s.Branches)+1)
-	names = append(names, s.Trunk)
-	tracked := make([]string, 0, len(s.Branches))
-	for name := range s.Branches {
-		if name != s.Trunk {
-			tracked = append(tracked, name)
-		}
-	}
-	sort.Strings(tracked)
-	return append(names, tracked...)
 }
 
 // formatProblem renders an engine Problem as validate's human-readable line.

@@ -18,7 +18,7 @@ func init() {
 			if cc.flagName != "" || len(cc.positionals) != 0 {
 				return nil
 			}
-			return trackedBranches(cc.s)
+			return cc.s.BranchNames()
 		},
 	})
 }

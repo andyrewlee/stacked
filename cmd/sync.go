@@ -44,7 +44,7 @@ func runSync(args []string) error {
 			// apply path uses — so the preview cannot predict a remote-only
 			// prune the real run will not do. An ordinary dry run still uses
 			// the already-fetched remote tip when one exists.
-			basis := "refs/heads/" + s.Trunk
+			basis := git.LocalBranchNameRef(s.Trunk)
 			if !noFetch {
 				basis, _ = resolveTrunkRef(p, remote, s.Trunk)
 			}

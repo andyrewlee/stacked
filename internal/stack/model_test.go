@@ -34,7 +34,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 	nameSeq := 0
 
 	for step := 0; step < steps; step++ {
-		tracked := sortedBranchNames(s)
+		tracked := s.BranchNames()
 		// Occasionally corrupt the metadata behind the engine's back and Repair
 		// it: Repair is otherwise invisible to this model, yet restoring exactly
 		// these invariants is its whole job.
@@ -355,7 +355,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 // starts single-tree-coherent. On the single-tree path it does nothing.
 func maybeReconcileWithWorktrees(t *testing.T, rng *rand.Rand, f *fakeGit, s *State, env Env, step int) {
 	t.Helper()
-	tracked := sortedBranchNames(s)
+	tracked := s.BranchNames()
 	if len(tracked) == 0 || rng.Intn(3) != 0 {
 		return // ~2/3 of steps stay purely single-tree
 	}
@@ -391,7 +391,7 @@ func maybeReconcileWithWorktrees(t *testing.T, rng *rand.Rand, f *fakeGit, s *St
 	// exercised before.
 	if rng.Intn(4) == 0 {
 		victim := ""
-		for _, name := range sortedBranchNames(s) {
+		for _, name := range s.BranchNames() {
 			if owned[name] && !dirty[name] {
 				victim = name
 				break
@@ -446,7 +446,7 @@ func checkWorktreeInvariants(t *testing.T, f *fakeGit, s *State, step int, owned
 		skipped[name] = true
 	}
 
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		b := s.Branches[name]
 		// (i) topology invariants hold regardless of where the branch lives.
 		if !f.BranchExists(name) {
@@ -619,7 +619,7 @@ func mustCheckout(t *testing.T, f *fakeGit, name string) {
 
 func checkInvariants(t *testing.T, f *fakeGit, s *State, step int) {
 	t.Helper()
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		b := s.Branches[name]
 		if !f.BranchExists(name) {
 			t.Fatalf("step %d: tracked branch %q has no git branch", step, name)

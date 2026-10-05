@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -36,7 +37,7 @@ func runPrune(args []string) error {
 		return err
 	}
 
-	trunkRef := "refs/heads/" + s.Trunk
+	trunkRef := git.LocalBranchNameRef(s.Trunk)
 	p := newGitPort()
 	if explicitRemote(fs) {
 		if err := requireRemote(p, remote); err != nil {

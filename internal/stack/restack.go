@@ -7,7 +7,7 @@ import (
 )
 
 func branchTipRef(name string) string {
-	return "refs/heads/" + name
+	return git.LocalBranchNameRef(name)
 }
 
 // NeedsRestack reports whether the named branch is out of date relative to its
@@ -49,7 +49,7 @@ func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bo
 }
 
 func requireStateTips(s *State, tips map[string]string) error {
-	for _, name := range stateTipNames(s) {
+	for _, name := range s.TipNames() {
 		if err := requireBranchTip(tips, name); err != nil {
 			return err
 		}
@@ -198,7 +198,7 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
-	tips, err := env.Git.TipsFor(stateTipNames(s))
+	tips, err := env.Git.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -227,7 +227,7 @@ func RestackAllPlan(env Env, s *State) (*OpResult, error) {
 	if err := requireClean(env.Git); err != nil {
 		return nil, err
 	}
-	tips, err := env.Git.TipsFor(stateTipNames(s))
+	tips, err := env.Git.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}

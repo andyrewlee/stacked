@@ -4,6 +4,8 @@ import (
 	"flag"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 // FuzzParseArgs fuzzes parseArgs against a flag set that mirrors the
@@ -169,7 +171,7 @@ type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }
 
-// FuzzRemoteToHTTPS fuzzes remoteToHTTPS with arbitrary input strings. It asserts
+// FuzzRemoteToHTTPS fuzzes stack.RemoteToHTTPS with arbitrary input strings. It asserts
 // the function never panics and that any non-empty web URL it returns always
 // starts with "http".
 func FuzzRemoteToHTTPS(f *testing.F) {
@@ -187,9 +189,9 @@ func FuzzRemoteToHTTPS(f *testing.F) {
 	f.Add("git@host:")
 
 	f.Fuzz(func(t *testing.T, raw string) {
-		webURL, host := remoteToHTTPS(raw)
+		webURL, host := stack.RemoteToHTTPS(raw)
 		if webURL != "" && !strings.HasPrefix(webURL, "http") {
-			t.Fatalf("remoteToHTTPS(%q) returned non-empty webURL %q that does not start with http", raw, webURL)
+			t.Fatalf("stack.RemoteToHTTPS(%q) returned non-empty webURL %q that does not start with http", raw, webURL)
 		}
 		_ = host // informational second return; exercised for coverage
 	})

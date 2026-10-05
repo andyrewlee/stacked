@@ -158,7 +158,7 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 	// both consumers surface it (Undo returns fatal; the preview emits
 	// fatalCode and renders nothing else).
 	if probes.rebaseInProgress {
-		return p.stop(fmt.Errorf("cannot undo while a rebase is in progress; run st abort or resolve conflicts and run st continue"), "rebase_in_progress"), nil
+		return p.stop(errors.New(UndoRebaseGateMsg), "rebase_in_progress"), nil
 	}
 	if s != nil && s.Version > stateSchemaVersion {
 		return p.stop(fmt.Errorf("current state: %w (schema v%d; this st understands v%d) — upgrade st or check for a downgrade", ErrStateTooNew, s.Version, stateSchemaVersion), "state_too_new"), nil

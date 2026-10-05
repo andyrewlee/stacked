@@ -110,7 +110,21 @@ func (s *State) IsTracked(name string) bool {
 	return ok
 }
 
-func stateTipNames(s *State) []string {
+// BranchNames returns every tracked branch name, sorted — the deterministic
+// enumeration loops and completion policies share.
+func (s *State) BranchNames() []string {
+	names := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TipNames returns the trunk first, then every other tracked branch sorted —
+// the tip-probe order: consumers such as TipsFor want the trunk's tip
+// unconditionally plus every tracked tip.
+func (s *State) TipNames() []string {
 	names := make([]string, 0, len(s.Branches)+1)
 	names = append(names, s.Trunk)
 	tracked := make([]string, 0, len(s.Branches))

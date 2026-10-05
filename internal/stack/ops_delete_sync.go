@@ -221,7 +221,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	tips, err := g.TipsFor(stateTipNames(s))
+	tips, err := g.TipsFor(s.TipNames())
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
@@ -437,7 +437,7 @@ func pruneTargets(env Env, s *State, trunkRef string) (candidates []string, rele
 // every prune preview and apply path.
 func pruneMergedNames(env Env, s *State, trunkRef string) ([]string, error) {
 	g := env.Git
-	names := sortedBranchNames(s)
+	names := s.BranchNames()
 	tips, err := g.TipsFor(names)
 	if err != nil {
 		return nil, fmt.Errorf("read tracked branch tips: %w", err)
@@ -545,7 +545,7 @@ func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
 	// and fold the results back in sorted-name order, so the merged map and
 	// the first error are exactly what a serial pass would produce.
 	unmerged := make([]string, 0, len(s.Branches))
-	for _, name := range sortedBranchNames(s) {
+	for _, name := range s.BranchNames() {
 		if !merged[name] {
 			unmerged = append(unmerged, name)
 		}

@@ -314,7 +314,7 @@ func tipAncestors(s *stack.State, tips map[string]string) (map[ancestorPair]bool
 			continue
 		}
 		seen[pair] = true
-		probes = append(probes, probe{pair: pair, branchRef: "refs/heads/" + b.Name, parentRef: "refs/heads/" + b.Parent})
+		probes = append(probes, probe{pair: pair, branchRef: git.LocalBranchNameRef(b.Name), parentRef: git.LocalBranchNameRef(b.Parent)})
 	}
 	sort.Slice(probes, func(i, j int) bool {
 		if probes[i].pair.tip != probes[j].pair.tip {

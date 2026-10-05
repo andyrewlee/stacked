@@ -232,7 +232,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 			return perr
 		}
 		if pausedWT, isPaused := paused[branch]; isPaused {
-			return fmt.Errorf("cannot remove worktree %q: a rebase is in progress there; finish or abort it first", pausedWT.Path)
+			return fmt.Errorf(wtRebaseInProgressErr, pausedWT.Path)
 		}
 		// Distinguish the case where it is the
 		// branch checked out in the main worktree (which is NOT a removable linked
@@ -255,7 +255,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	if inProgress, err := git.RebaseInProgressIn(wt.Path); err != nil {
 		return fmt.Errorf("checking worktree %q for a paused rebase: %w", wt.Path, err)
 	} else if inProgress {
-		return fmt.Errorf("cannot remove worktree %q: a rebase is in progress there; finish or abort it first", wt.Path)
+		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
 	}
 	removeErr := git.WorktreeRemove(wt.Path, false)
 	resetProcCaches()
@@ -270,6 +270,18 @@ func worktreeRemove(branch string, asJSON bool) error {
 		out("removed worktree %s (%s)\n", sanitizeForTerminal(branch), sanitizeForTerminal(wt.Path))
 	})
 }
+
+// The bulk worktree ops' skip reasons are the documented `skipped[].reason`
+// contract (docs/AGENT.md) — data for agents, not phrasing to tweak ad hoc.
+const (
+	wtSkipCheckedOutMain   = "checked out in the main worktree"
+	wtSkipRebaseInProgress = "a rebase is in progress there"
+	wtSkipInsideIt         = "you are inside it"
+	wtSkipDirty            = "worktree has uncommitted changes"
+	// wtRebaseInProgressErr is the single-rm refusal sharing the skip reason's
+	// wording so `rm` and `rm --all` tell the same story.
+	wtRebaseInProgressErr = "cannot remove worktree %q: a rebase is in progress there; finish or abort it first"
+)
 
 // worktreeRemoveAllResult is the aggregate JSON contract of `st worktree rm
 // --all`, mirroring worktreeAllResult: what was removed, what was skipped and
@@ -384,13 +396,13 @@ func worktreeRemoveAll(asJSON bool) error {
 	p := newGitPort()
 	for _, name := range names {
 		if name == mainBranch {
-			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipCheckedOutMain})
 			continue
 		}
 		wt, ok := stack.LinkedOwnerOf(wts, name)
 		if !ok {
 			if _, isPaused := paused[name]; isPaused {
-				result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "a rebase is in progress there"})
+				result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipRebaseInProgress})
 			}
 			continue // no worktree to remove
 		}
@@ -401,7 +413,7 @@ func worktreeRemoveAll(asJSON bool) error {
 			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
 			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
 		} else if within {
-			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "you are inside it"})
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipInsideIt})
 			continue
 		}
 		v := verdicts[wt.Path]
@@ -409,7 +421,7 @@ func worktreeRemoveAll(asJSON bool) error {
 			result.Failed = &worktreeAllFailure{Branch: name, Error: v.rebaseErr.Error()}
 			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), v.rebaseErr)
 		} else if v.paused {
-			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "a rebase is in progress there"})
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipRebaseInProgress})
 			continue
 		}
 		if v.clErr != nil {
@@ -419,7 +431,7 @@ func worktreeRemoveAll(asJSON bool) error {
 		if !v.clean {
 			// Dirty is a SKIP, decided up front — never classified by parsing
 			// git's refusal, and never a hard failure.
-			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "worktree has uncommitted changes"})
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipDirty})
 			continue
 		}
 		removeErr := git.WorktreeRemove(wt.Path, false)
@@ -549,7 +561,7 @@ func worktreeAddAll(asJSON bool) error {
 	result := worktreeAllResult{Created: []worktreeAllEntry{}}
 	for _, name := range names {
 		if name == mainBranch {
-			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "checked out in the main worktree"})
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipCheckedOutMain})
 			continue
 		}
 		created, err := materializeWorktreeAt(repo, root, name)
