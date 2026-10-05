@@ -85,8 +85,13 @@ type fakeGit struct {
 	// makes AmendTipWithPatch fail like a patch that does not apply to the
 	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
 	// calls ("" = the current worktree) so tests can pin the absorb sequence.
-	stagedPatch   []byte
-	applyErr      error
+	stagedPatch []byte
+	applyErr    error
+
+	// looseOff disables the loose-ref fast path — modeling a layout where no
+	// loose ref file is readable (packed/mirror layouts), so every
+	// LooseBranchTip call misses and the caller falls back to RevParse.
+	looseOff      bool
 	resetHardDirs []string
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
@@ -447,20 +452,52 @@ func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][
 // AmendTipWithPatch models the temp-index amend: the branch's tip is replaced
 // by a new commit with the same parent and subject (patch content is not
 // modeled — real application is proven by the git-level and e2e tests).
-func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
+func (f *fakeGit) AmendTipWithPatch(branch string, patch []byte) (string, error) {
+	newTip, oldTip, err := f.BuildAmendedTip(branch, patch)
+	if err != nil {
+		return "", err
+	}
+	if err := f.LandAmendedTip(branch, oldTip, newTip); err != nil {
+		return "", err
+	}
+	return newTip, nil
+}
+
+// BuildAmendedTip models the side-effect-free half: the new commit object is
+// minted (like commit-tree leaves objects in the odb) but no ref moves.
+// LandAmendedTip's old-tip check is the CAS.
+func (f *fakeGit) BuildAmendedTip(branch string, _ []byte) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls["BuildAmendedTip"]++
 	if f.applyErr != nil {
-		return "", f.applyErr
+		return "", "", f.applyErr
 	}
 	tip, ok := f.branches[branch]
 	if !ok {
-		return "", fmt.Errorf("no such branch %q", branch)
+		return "", "", fmt.Errorf("no such branch %q", branch)
 	}
 	old := f.commits[tip]
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject, content: old.content}
-	f.branches[branch] = id
+	return id, tip, nil
+}
+
+func (f *fakeGit) LandAmendedTip(branch, oldTip, newTip string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["LandAmendedTip"]++
+	tip, ok := f.branches[branch]
+	if !ok {
+		return fmt.Errorf("no such branch %q", branch)
+	}
+	if tip != oldTip {
+		return fmt.Errorf("branch %q moved since the amend was built", branch)
+	}
+	if _, ok := f.commits[newTip]; !ok {
+		return fmt.Errorf("no such commit %q", newTip)
+	}
+	f.branches[branch] = newTip
 	// Amending the checked-out branch moves HEAD under the staged copy —
 	// the edits are now part of the tip commit, so the index reads clean
 	// (the same self-resolution the engine relies on by skipping
@@ -469,7 +506,21 @@ func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
 	if branch == f.head {
 		f.staged = false
 	}
-	return id, nil
+	return nil
+}
+
+// LooseBranchTip mirrors the in-process loose-ref read: every fake ref
+// lands loose (like real git) unless the test disabled the fast path
+// entirely via looseOff.
+func (f *fakeGit) LooseBranchTip(name string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["LooseBranchTip"]++
+	if f.looseOff {
+		return "", false
+	}
+	tip, ok := f.branches[name]
+	return tip, ok
 }
 
 // ResetHardIn records the call; for the current worktree ("") it clears the

@@ -1023,6 +1023,103 @@ func TestConformanceAmendTipWithPatch(t *testing.T) {
 	})
 }
 
+// BuildAmendedTip + LandAmendedTip split the amend across the mutation
+// boundary: the build computes a new tip and reports the tip it read, moving
+// nothing; the land is a compare-and-swap on that read — a branch that moved
+// in between must refuse rather than be clobbered.
+func TestConformanceAmendTipBuildLand(t *testing.T) {
+	runConformance(t, func(d *confDriver) {
+		if err := d.g.CreateBranch("a"); err != nil {
+			d.t.Fatalf("CreateBranch: %v", err)
+		}
+		if err := d.g.Checkout("a"); err != nil {
+			d.t.Fatalf("checkout a: %v", err)
+		}
+		d.commit("a1")
+		aTip := d.tip("a")
+
+		var patch []byte
+		if d.fake != nil {
+			patch = []byte("content not modeled")
+		} else {
+			confWrite(d.t, "base.txt", "base\nextra line\n")
+			patch = []byte(confGit(d.t, "diff"))
+			confGit(d.t, "checkout", "--", "base.txt")
+		}
+
+		newTip, oldTip, err := d.g.BuildAmendedTip("a", patch)
+		if err != nil {
+			d.t.Fatalf("BuildAmendedTip: %v", err)
+		}
+		if oldTip != aTip {
+			d.t.Fatalf("oldTip = %q, want the tip the build read %q", oldTip, aTip)
+		}
+		if newTip == "" || newTip == aTip {
+			d.t.Fatalf("newTip = %q, want a fresh SHA", newTip)
+		}
+		if got := d.tip("a"); got != aTip {
+			d.t.Fatalf("a's tip = %s after build — the build must not move a ref", got)
+		}
+
+		// Moving the branch between build and land fails the CAS; the live
+		// ref keeps the interloper's tip.
+		d.commit("a2")
+		moved := d.tip("a")
+		if err := d.g.LandAmendedTip("a", oldTip, newTip); err == nil {
+			d.t.Fatal("land with a stale oldTip succeeded — the CAS is gone")
+		}
+		if got := d.tip("a"); got != moved {
+			d.t.Fatalf("a's tip = %s after a refused land, want untouched %s", got, moved)
+		}
+
+		newTip2, oldTip2, err := d.g.BuildAmendedTip("a", patch)
+		if err != nil {
+			d.t.Fatalf("BuildAmendedTip (retry): %v", err)
+		}
+		if oldTip2 != moved {
+			d.t.Fatalf("rebuilt oldTip = %q, want the moved tip %q", oldTip2, moved)
+		}
+		if err := d.g.LandAmendedTip("a", oldTip2, newTip2); err != nil {
+			d.t.Fatalf("LandAmendedTip: %v", err)
+		}
+		if got := d.tip("a"); got != newTip2 {
+			d.t.Fatalf("a's tip = %s, want the landed %s", got, newTip2)
+		}
+	})
+}
+
+// LooseBranchTip reads the tip straight from the loose ref file: present
+// after any ref write (a branch is always loose post-write), missing in a
+// packed-only layout — where the RevParse fallback still resolves.
+func TestConformanceLooseBranchTip(t *testing.T) {
+	runConformance(t, func(d *confDriver) {
+		if err := d.g.CreateBranch("a"); err != nil {
+			d.t.Fatalf("CreateBranch: %v", err)
+		}
+		want := d.tip("a")
+		got, ok := d.g.LooseBranchTip("a")
+		if !ok || got != want {
+			d.t.Fatalf("LooseBranchTip = (%q, %v), want (%q, true) — a written ref is loose", got, ok, want)
+		}
+		if _, ok := d.g.LooseBranchTip("ghost"); ok {
+			d.t.Fatal("LooseBranchTip answered a nonexistent branch")
+		}
+		if d.fake != nil {
+			d.fake.looseOff = true
+		} else {
+			// --prune removes the loose files pack-refs just wrote, leaving a
+			// packed-only layout (the default in modern git, but explicit).
+			confGit(d.t, "pack-refs", "--all", "--prune")
+		}
+		if _, ok := d.g.LooseBranchTip("a"); ok {
+			d.t.Fatal("LooseBranchTip answered a packed-only ref — miss must degrade to RevParse")
+		}
+		if got := d.tip("a"); got != want {
+			d.t.Fatalf("RevParse fallback = %q, want %q", got, want)
+		}
+	})
+}
+
 // Remote is the second port in git.go: the fake arm is the scripted
 // fakeRemote, the shell arm git.RemoteShell over a local bare remote.
 func TestConformanceRemote(t *testing.T) {
@@ -1125,13 +1222,14 @@ func TestConformanceRemote(t *testing.T) {
 func TestConformancePortCoverageGuard(t *testing.T) {
 	covered := map[string]bool{
 		"Add": true, "AmendMessage": true, "AmendNoEdit": true, "AmendTipWithPatch": true,
+		"BuildAmendedTip": true, "LandAmendedTip": true,
 		"BlamePorcelain": true, "BranchExists": true, "ChangesContainedIn": true,
 		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitRange": true,
 		"CommitSubjects": true, "CreateBranch": true, "CreateBranchAt": true,
 		"CurrentBranch": true, "DeleteBranches": true, "DiffCachedHunks": true,
 		"DiffCachedPatchesFor": true, "ForceBranch": true, "HasStagedChanges": true,
 		"HasUnstagedChanges": true, "IsAncestor": true, "IsClean": true,
-		"IsCleanIn": true, "MergeBase": true, "MergedInto": true,
+		"IsCleanIn": true, "LooseBranchTip": true, "MergeBase": true, "MergedInto": true,
 		"RebaseAbort": true, "RebaseAbortIn": true, "RebaseContinue": true,
 		"RebaseHeadName": true, "RebaseHeadNameIn": true, "RebaseInProgress": true,
 		"RebaseInProgressIn": true, "RebaseOnto": true, "RebaseOntoIn": true,

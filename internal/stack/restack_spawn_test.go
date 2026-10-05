@@ -121,8 +121,12 @@ func TestRestackLeafSkipsPostRebaseRevParse(t *testing.T) {
 	}
 	// Exactly one post-rebase tip refresh: anchor (has children). The leaves'
 	// refreshes are skipped, and the cascade's Tips() seed plus the map cover
-	// every parent lookup, so no other RevParse fires.
-	if spy.revParseCalls != 1 {
-		t.Fatalf("revParseCalls = %d, want 1 (anchor only)", spy.revParseCalls)
+	// every parent lookup, so no other tip read fires. The one refresh reads
+	// the loose ref the rebase just wrote — no RevParse spawn at all.
+	if spy.revParseCalls != 0 {
+		t.Fatalf("revParseCalls = %d, want 0 (the loose-ref fast path answers)", spy.revParseCalls)
+	}
+	if f.calls["LooseBranchTip"] != 1 {
+		t.Fatalf("LooseBranchTip calls = %d, want 1 (anchor only)", f.calls["LooseBranchTip"])
 	}
 }

@@ -182,6 +182,11 @@ func isSingleAbsolutePath(path string) bool {
 // (or an init that lands mid-process) must be re-asked.
 var gitDirMemo sync.Map // cwd -> string
 
+// gitCommonDirMemo memoizes cwd-keyed common-dir resolutions for the same
+// reason gitDirMemo does: the common dir is stable for a command's life, and
+// stackedDir + the loose-ref fast path resolve it per call.
+var gitCommonDirMemo sync.Map // cwd -> string
+
 // worktreeGitDirMemo memoizes a worktree path's resolved git dir for the same
 // reason: RebaseInProgressIn/RebaseHeadNameIn each resolved it per call, and
 // PausedRebaseOwners asks both questions of the same worktree. Entries are
@@ -191,10 +196,11 @@ var gitDirMemo sync.Map // cwd -> string
 // memos on every worktree mutation regardless.
 var worktreeGitDirMemo sync.Map // worktree dir -> string
 
-// ForgetDirMemos drops both git-dir memos; cmd calls it wherever a worktree
+// ForgetDirMemos drops all git-dir memos; cmd calls it wherever a worktree
 // move or removal could invalidate a remembered path mapping.
 func ForgetDirMemos() {
 	gitDirMemo = sync.Map{}
+	gitCommonDirMemo = sync.Map{}
 	worktreeGitDirMemo = sync.Map{}
 }
 
@@ -269,21 +275,29 @@ func RepoRoot() (string, error) {
 // directory. For a linked worktree this is the shared git dir of the main
 // worktree, so stack metadata is shared across all worktrees of a repository.
 func GitCommonDir() (string, error) {
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		if v, ok := gitCommonDirMemo.Load(cwd); ok {
+			return v.(string), nil
+		}
+	}
 	dir, err := Run("rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err == nil && isSingleAbsolutePath(dir) {
-		return dir, nil
-	}
-	// Fall back for git < 2.31 (no --path-format): resolve a possibly
-	// relative --git-common-dir from the current working directory.
-	dir, err = Run("rev-parse", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(dir) {
-		dir, err = absPathFromGitOutput(dir)
+	if err != nil || !isSingleAbsolutePath(dir) {
+		// Fall back for git < 2.31 (no --path-format): resolve a possibly
+		// relative --git-common-dir from the current working directory.
+		dir, err = Run("rev-parse", "--git-common-dir")
 		if err != nil {
 			return "", err
 		}
+		if !filepath.IsAbs(dir) {
+			dir, err = absPathFromGitOutput(dir)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if cwdErr == nil {
+		gitCommonDirMemo.Store(cwd, dir)
 	}
 	return dir, nil
 }

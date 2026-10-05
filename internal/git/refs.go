@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -391,6 +393,34 @@ func localBranchRef(ref string) string {
 // already know the argument is a branch name, not a SHA or full ref.
 func LocalBranchNameRef(name string) string {
 	return "refs/heads/" + name
+}
+
+// LooseBranchTip reads a branch's tip straight from its loose ref file
+// (<commonDir>/refs/heads/<name>) — the shape every ref write leaves behind,
+// so the answer is in-process where RevParse would spawn. A loose file is
+// authoritative when present (it wins over any packed entry), so the read is
+// exact, not a hint. ok=false means no usable loose file exists — packed-only
+// layouts, a symref's "ref: …" payload, or an unreadable file — and the
+// caller falls back to RevParse.
+func LooseBranchTip(name string) (sha string, ok bool) {
+	// ".." can never appear in a refname; refuse it anyway so a corrupt name
+	// cannot escape refs/heads/ onto an arbitrary file read.
+	if strings.Contains(name, "..") {
+		return "", false
+	}
+	dir, err := GitCommonDir()
+	if err != nil {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "refs", "heads", filepath.FromSlash(name)))
+	if err != nil {
+		return "", false
+	}
+	tip := strings.TrimSpace(string(data))
+	if !IsHex40(tip) {
+		return "", false
+	}
+	return tip, true
 }
 
 // MergeBase returns the best common ancestor commit of the two given refs.

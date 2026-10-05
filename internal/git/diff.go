@@ -430,9 +430,32 @@ func formatHunkHeader(oldStart, oldN, newStart, newN int) string {
 // date, message, and parents), and the branch ref is moved with a
 // compare-and-swap on the old tip. On any failure — including "patch does not
 // apply to that tree" — the repository is untouched. Returns the new tip SHA.
+//
+// The two halves are also exposed separately: BuildAmendedTip is everything
+// up to the ref move (side-effect-free — its throwaway GIT_INDEX_FILE keeps
+// concurrent builds isolated), and LandAmendedTip is the compare-and-swap.
+// A multi-target absorb fans the builds out and lands serially so its
+// per-target recovery checkpoints still name only landed amends.
 func AmendTipWithPatch(branch string, patch []byte) (string, error) {
-	if err := validRefArg("branch", branch); err != nil {
+	newTip, oldTip, err := BuildAmendedTip(branch, patch)
+	if err != nil {
 		return "", err
+	}
+	if err := LandAmendedTip(branch, oldTip, newTip); err != nil {
+		return "", err
+	}
+	return newTip, nil
+}
+
+// BuildAmendedTip computes the amended commit AmendTipWithPatch would land:
+// the tip's metadata, the patch applied to the tip's tree in a throwaway
+// index, and commit-tree preserving author/date/message/parents. It writes
+// objects only — never a ref, the real index, or a worktree — so builds for
+// different branches run safely in parallel. Returns (new tip, the tip it
+// was built on) for LandAmendedTip's compare-and-swap.
+func BuildAmendedTip(branch string, patch []byte) (newTip, oldTip string, err error) {
+	if err := validRefArg("branch", branch); err != nil {
+		return "", "", err
 	}
 	ref := LocalBranchNameRef(branch)
 	// One log call reads everything: %H is the tip (replacing RevParse), %P
@@ -441,37 +464,37 @@ func AmendTipWithPatch(branch string, patch []byte) (string, error) {
 	// practice), then author name/email/date and the raw message for reuse.
 	metaOut, err := run("log", "-1", "--format=%H%x00%P%x00%an%x00%ae%x00%aD%x00%B", ref)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	meta := strings.SplitN(metaOut, "\x00", 6)
 	if len(meta) != 6 {
-		return "", fmt.Errorf("unexpected commit metadata for %s", ref)
+		return "", "", fmt.Errorf("unexpected commit metadata for %s", ref)
 	}
 	tip := meta[0]
 	parents := strings.Fields(meta[1])
 	if len(parents) == 0 {
-		return "", fmt.Errorf("branch %q's tip is a root commit; cannot amend it via absorb", branch)
+		return "", "", fmt.Errorf("branch %q's tip is a root commit; cannot amend it via absorb", branch)
 	}
 
 	tmp, err := os.CreateTemp("", "st-absorb-index-")
 	if err != nil {
-		return "", fmt.Errorf("creating temporary index: %w", err)
+		return "", "", fmt.Errorf("creating temporary index: %w", err)
 	}
 	indexFile := tmp.Name()
 	_ = tmp.Close()
 	defer os.Remove(indexFile)
 	indexEnv := []string{"GIT_INDEX_FILE=" + indexFile}
 	if _, err := runWith(indexEnv, nil, "read-tree", tip); err != nil {
-		return "", err
+		return "", "", err
 	}
 	// --unidiff-zero matches DiffCachedPatch's -U0 capture; the hunk's own
 	// pre-image lines (which attribution proved live in this tree) anchor it.
 	if _, err := runWith(indexEnv, patch, "apply", "--cached", "--unidiff-zero", "-"); err != nil {
-		return "", fmt.Errorf("staged patch does not apply cleanly to the tip of %q: %w", branch, err)
+		return "", "", fmt.Errorf("staged patch does not apply cleanly to the tip of %q: %w", branch, err)
 	}
 	treeOut, err := runWith(indexEnv, nil, "write-tree")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	commitEnv := []string{
 		"GIT_AUTHOR_NAME=" + meta[2],
@@ -484,15 +507,24 @@ func AmendTipWithPatch(branch string, patch []byte) (string, error) {
 	}
 	newTipOut, err := runWith(commitEnv, []byte(meta[5]), commitArgs...)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	newTip := strings.TrimSpace(newTipOut)
-	// Compare-and-swap on the old tip: a concurrent move of the branch fails
-	// the whole amend instead of being clobbered.
-	if _, err := run("update-ref", ref, newTip, tip); err != nil {
-		return "", err
+	newTip = strings.TrimSpace(newTipOut)
+	return newTip, tip, nil
+}
+
+// LandAmendedTip moves branch's ref to newTip, compare-and-swapped on oldTip
+// — the value BuildAmendedTip read — so a branch that moved since its build
+// fails instead of being clobbered. It is the only mutating half of
+// AmendTipWithPatch.
+func LandAmendedTip(branch, oldTip, newTip string) error {
+	if err := validRefArg("branch", branch); err != nil {
+		return err
 	}
-	return newTip, nil
+	if _, err := run("update-ref", LocalBranchNameRef(branch), newTip, oldTip); err != nil {
+		return err
+	}
+	return nil
 }
 
 // BlameLine is one line's provenance from `git blame --line-porcelain`:
