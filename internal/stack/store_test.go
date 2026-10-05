@@ -21,7 +21,8 @@ func initGitRepo(t *testing.T) string {
 	dir := t.TempDir()
 
 	cmds := [][]string{
-		{"init", "-b", "main"},
+		{"init"},
+		{"symbolic-ref", "HEAD", "refs/heads/main"},
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "Test"},
 	}

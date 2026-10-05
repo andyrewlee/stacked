@@ -4,7 +4,8 @@ package stack
 // make test-fast's authority rests on fakeGit modeling git faithfully; nothing
 // else asserts the two implementations agree on a shared scenario. Each test
 // here seeds an equivalent repository shape on both (newFakeGit's seeded
-// main == `git init -b main` + one commit), drives the same port calls, and
+// main == `git init` + `symbolic-ref HEAD refs/heads/main` + one commit),
+// drives the same port calls, and
 // asserts RELATIONAL outcomes — which refs exist, whether tips moved, what
 // ancestry holds — never literal SHAs or paths. A fake divergence is a fake
 // bug to fix in fakegit_test.go; a shell divergence is a production bug to
@@ -44,7 +45,8 @@ func runConformance(t *testing.T, fn func(d *confDriver)) {
 	t.Run("shell", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Chdir(dir)
-		confGit(t, "init", "-q", "-b", "main")
+		confGit(t, "init", "-q")
+		confGit(t, "symbolic-ref", "HEAD", "refs/heads/main")
 		confGit(t, "config", "user.email", "test@example.com")
 		confGit(t, "config", "user.name", "test")
 		confWrite(t, "base.txt", "base\n")

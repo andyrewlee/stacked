@@ -746,7 +746,7 @@ func TestSyncFromLinkedWorktree(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -805,7 +805,7 @@ func TestSyncFromMergedLinkedWorktreeKeepsWorktree(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 

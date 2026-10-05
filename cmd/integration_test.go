@@ -87,7 +87,8 @@ func newRepo(t *testing.T) {
 	// commands against different temp repos in one process, so drop any cached
 	// list (from a prior repo) before this repo's commands run.
 	resetProcCaches()
-	mustRun(t, "git", "init", "-q", "-b", "main")
+	mustRun(t, "git", "init", "-q")
+	mustRun(t, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 	mustRun(t, "git", "config", "user.email", "test@example.com")
 	mustRun(t, "git", "config", "user.name", "test")
 	write(t, "base.txt", "base\n")

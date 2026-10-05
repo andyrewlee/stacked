@@ -270,7 +270,8 @@ func TestErrorOutputEscapesControlBytes(t *testing.T) {
 			t.Fatalf("mkdir %q: %v", dir, err)
 		}
 	}
-	r.git("init", "-q", "-b", "main")
+	r.git("init", "-q")
+	r.git("symbolic-ref", "HEAD", "refs/heads/main")
 	r.writeFile("base.txt", "base\n")
 	r.git("add", "-A")
 	r.git("commit", "-q", "-m", "init")
@@ -436,7 +437,7 @@ func TestSubmitRealPushSetsUpstream(t *testing.T) {
 
 	// Create a bare remote and wire it as origin.
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -475,7 +476,7 @@ func TestSubmitNonPrefixPartialPush(t *testing.T) {
 	r.initStack()
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -586,7 +587,7 @@ func TestSubmitInvalidRefCleanError(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 

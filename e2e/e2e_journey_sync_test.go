@@ -19,7 +19,7 @@ func TestSyncPrunesMerged(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -66,7 +66,7 @@ func TestSyncPrunesSquashMerged(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -129,7 +129,7 @@ func TestSyncPreservesUncontainedRename(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 
@@ -219,7 +219,7 @@ func TestSyncNoFetchPreservesRemoteMergedAncestor(t *testing.T) {
 	build := func(t *testing.T) (*repo, string, string) {
 		r := newRepo(t)
 		bare := filepath.Join(t.TempDir(), "remote.git")
-		r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+		r.initBare(bare)
 		r.git("remote", "add", "origin", bare)
 		r.git("push", "-q", "-u", "origin", "main")
 
@@ -371,7 +371,7 @@ func TestSyncFlagArms(t *testing.T) {
 	r := newRepo(t)
 
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", "-b", "main", bare)
+	r.initBare(bare)
 	r.git("remote", "add", "origin", bare)
 	r.git("push", "-q", "-u", "origin", "main")
 

@@ -175,7 +175,8 @@ func newRepo(t *testing.T) *repo {
 	if err := os.MkdirAll(r.home, 0o755); err != nil {
 		t.Fatalf("mkdir home: %v", err)
 	}
-	r.git("init", "-q", "-b", "main")
+	r.git("init", "-q")
+	r.git("symbolic-ref", "HEAD", "refs/heads/main")
 	r.writeFile("base.txt", "base\n")
 	r.git("add", "-A")
 	r.git("commit", "-q", "-m", "init")
@@ -267,6 +268,14 @@ func (r *repo) gitIn(dir string, args ...string) string {
 		r.t.Fatalf("git -C %s %v failed: %v\n%s", dir, args, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// initBare creates a bare remote repo whose HEAD is on main, using the
+// init + symbolic-ref form that works below git 2.28 (init -b's floor).
+func (r *repo) initBare(bare string) {
+	r.t.Helper()
+	r.gitIn(filepath.Dir(bare), "init", "-q", "--bare", bare)
+	r.git("--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main")
 }
 
 func (r *repo) writeFile(name, content string) {
