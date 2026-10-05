@@ -2,8 +2,11 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // undoPreviewMutators is every Git port method that must not run during an
@@ -11,7 +14,7 @@ import (
 // guard increments it), so the assertion is: the preview made zero of them.
 var undoPreviewMutators = []string{
 	"Checkout", "CheckoutDetach", "CreateBranch", "CreateBranchAt",
-	"DeleteBranch", "ForceBranch", "UpdateRef", "UpdateRefs",
+	"DeleteBranch", "DeleteBranches", "ForceBranch", "UpdateRef", "UpdateRefs",
 	"ResetSoft", "Commit", "AmendNoEdit", "AmendMessage", "Add",
 	"RenameBranch", "RebaseOnto", "RebaseOntoIn", "RebaseAbort",
 	"RebaseAbortIn", "RebaseContinue", "WorktreeRemove",
@@ -515,6 +518,87 @@ func TestUndoPreviewSharedProbes(t *testing.T) {
 	for _, m := range []string{"Tips", "CurrentBranch", "RebaseInProgress"} {
 		if got := f.calls[m] - callsBefore[m]; got != 0 {
 			t.Fatalf("preview with shared probes re-probed %s %d time(s)", m, got)
+		}
+	}
+}
+
+// commitRangeBarrierGit proves the preview's per-ref rev-list probes overlap:
+// every CommitRange call parks until `need` of them are in flight at once,
+// then releases them together. A serial loop leaves each call parked for the
+// full timeout, so a regression fails loudly instead of hanging the suite.
+type commitRangeBarrierGit struct {
+	Git
+	need     int64
+	arrived  atomic.Int64
+	released atomic.Bool
+	release  chan struct{}
+}
+
+func (g *commitRangeBarrierGit) CommitRange(exclude, include string) (map[string]bool, error) {
+	if g.arrived.Add(1) == g.need {
+		g.released.Store(true)
+		close(g.release)
+	}
+	select {
+	case <-g.release:
+	case <-time.After(2 * time.Second):
+	}
+	return g.Git.CommitRange(exclude, include)
+}
+
+// The preview computes commitsLostFromRef with one rev-list per recorded ref;
+// those spawns are independent, so they must fan out (ParallelProbes) rather
+// than serialize.
+func TestUndoPreviewFansOutCommitRange(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	mkBranch(t, env, s, f, "feat-b", "feat-c")
+	mustCheckout(t, f, "main")
+	entry := mustSnapshot(t, s, f, "restack")
+
+	want := int64(len(entry.Refs))
+	if want < 2 {
+		t.Fatalf("fixture produced %d recorded refs, need at least 2 for the fan-out pin", want)
+	}
+	barrier := &commitRangeBarrierGit{Git: f, need: want, release: make(chan struct{})}
+	env.Git = barrier
+
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	if !barrier.released.Load() {
+		t.Fatalf("only %d of %d CommitRange probes were ever in flight — the fan-out regressed to serial", barrier.arrived.Load(), want)
+	}
+	if got := int64(len(res.WouldRestore)); got != want {
+		t.Fatalf("wouldRestore = %d entries, want %d", got, want)
+	}
+}
+
+// A rev-list that fails for one ref degrades that ref's commitsLostFromRef to
+// "unknown" — the same degrade a missing live ref gets — without failing the
+// preview or the other refs.
+func TestUndoPreviewCommitRangeErrorDegradesToUnknown(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	entry := mustSnapshot(t, s, f, "restack")
+
+	f.failErr["CommitRange"] = errors.New("rev-list died")
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	if len(res.WouldRestore) == 0 {
+		t.Fatal("wouldRestore is empty")
+	}
+	for _, r := range res.WouldRestore {
+		if r.CommitsLostFromRef != "unknown" {
+			t.Fatalf("wouldRestore[%s].commitsLostFromRef = %v, want unknown", r.Branch, r.CommitsLostFromRef)
+		}
+		if r.From == zeroSHA {
+			t.Fatalf("wouldRestore[%s].from = zero, want the live tip", r.Branch)
 		}
 	}
 }

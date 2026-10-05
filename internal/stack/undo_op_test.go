@@ -1383,3 +1383,40 @@ func TestUndoRefusesPausedDoomedBranch(t *testing.T) {
 		t.Fatal("doomed branch deleted despite the pause refusal")
 	}
 }
+
+// Undo deletes every branch the undone op created in ONE `git branch -D`
+// batch — the per-branch gates (worktree removal, moving HEAD off a doomed
+// current) keep their serial order, only the delete itself is deferred. HEAD
+// sits on the deepest doomed branch here so the checkout-prep path also runs.
+func TestUndoDeletesDoomedInOneBatch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "keep")
+	mustCheckout(t, f, "keep")
+	entry := mustSnapshot(t, s, f, "create")
+
+	// The op creates a doomed chain; HEAD lands on the deepest link.
+	mkBranch(t, env, s, f, "keep", "doomed-a")
+	mkBranch(t, env, s, f, "doomed-a", "doomed-b")
+	mkBranch(t, env, s, f, "doomed-b", "doomed-c")
+
+	before := f.callsSnapshot()
+	res, err := Undo(env, s, entry, false)
+	if err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if got := f.calls["DeleteBranches"] - before["DeleteBranches"]; got != 1 {
+		t.Fatalf("DeleteBranches calls = %d, want 1 batched delete", got)
+	}
+	if got := f.calls["DeleteBranch"] - before["DeleteBranch"]; got != 0 {
+		t.Fatalf("DeleteBranch calls = %d, want 0 serial deletes", got)
+	}
+	for _, name := range []string{"doomed-a", "doomed-b", "doomed-c"} {
+		if f.BranchExists(name) {
+			t.Fatalf("branch %q survived undo", name)
+		}
+	}
+	assertUndoRestored(t, f, s, entry)
+	if res.Summary == "" {
+		t.Fatal("undo returned no summary")
+	}
+}

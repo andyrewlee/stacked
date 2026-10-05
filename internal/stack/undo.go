@@ -139,7 +139,10 @@ func validateUndoEntry(e *UndoEntry) error {
 	return nil
 }
 
-func writeUndo(entries []UndoEntry) error {
+// writeUndo is the journal's single write funnel — a var so tests can count
+// the writes a finalize path performs (the coalescing contract is "one
+// journal write", which only a funnel-wide count can pin).
+var writeUndo = func(entries []UndoEntry) error {
 	path, err := undoPath()
 	if err != nil {
 		return err
@@ -333,13 +336,32 @@ func absorbedCommitsNote(commits map[string]string) string {
 	return fmt.Sprintf("the staged edits live in commit(s) %s — undo restores the branch refs, not those commits; recover with `git cherry-pick %s`", strings.Join(pairs, ", "), strings.Join(shas, " "))
 }
 
-// SetLastUndoPostRefs records, on the latest undo entry, the post-operation
-// branch tips undo's compare-and-swap restore verifies live refs against.
-func SetLastUndoPostRefs(tips map[string]string) error {
-	return mutateLastUndo(nil, func(e *UndoEntry) error {
-		e.PostRefs = tips
+// finalizeEntry applies the post-op annotations — the branches the operation
+// created and the post-op tips — to the newest journal entry and trims the
+// log, in ONE load-mutate-write. It replaces the three separate journal
+// round-trips FinalizeUndo used to pay: those annotations are bookkeeping,
+// not crash boundaries (RecordUndo's pre-op write is the real boundary —
+// every journal write is atomic, so the merged write can't expose a torn
+// intermediate state).
+func finalizeEntry(created []string, postRefs map[string]string) error {
+	entries, err := loadUndo()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
 		return nil
-	})
+	}
+	last := &entries[len(entries)-1]
+	if len(created) > 0 {
+		last.CreatedBranches = created
+	}
+	if len(postRefs) > 0 {
+		last.PostRefs = postRefs
+	}
+	if len(entries) > maxUndoEntries {
+		entries = entries[len(entries)-maxUndoEntries:]
+	}
+	return writeUndo(entries)
 }
 
 // FinalizeUndo completes the undo protocol after a successful mutation: the
@@ -347,18 +369,13 @@ func SetLastUndoPostRefs(tips map[string]string) error {
 // the post-operation tips those branches (and the ones the entry recorded)
 // now stand at, dropped when the operation turned out to be a no-op (state,
 // refs, and branch set all unchanged), and otherwise kept, trimming the
-// journal.
+// journal — all in one finalizeEntry write.
 func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	if entry == nil {
 		return trimUndo()
 	}
 	tips, tipsOK := readUndoTips(g)
 	created := createdBranchesSinceTips(entry, tips, tipsOK)
-	if len(created) > 0 {
-		if err := SetLastUndoCreatedBranches(created); err != nil {
-			return err
-		}
-	}
 	unchanged, err := sameState(s, entry.State)
 	if err != nil {
 		return err
@@ -373,11 +390,8 @@ func FinalizeUndo(g Git, s *State, entry *UndoEntry) error {
 	post := postRefsFor(entry, tips, tipsOK, created)
 	if len(post) > 0 {
 		entry.PostRefs = post
-		if err := SetLastUndoPostRefs(post); err != nil {
-			return err
-		}
 	}
-	return trimUndo()
+	return finalizeEntry(created, post)
 }
 
 // postRefsFor captures where the entry's recorded branches — and the branches
