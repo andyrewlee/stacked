@@ -461,6 +461,14 @@ func (f *fakeGit) AmendTipWithPatch(branch string, _ []byte) (string, error) {
 	id := f.newID()
 	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject, content: old.content}
 	f.branches[branch] = id
+	// Amending the checked-out branch moves HEAD under the staged copy —
+	// the edits are now part of the tip commit, so the index reads clean
+	// (the same self-resolution the engine relies on by skipping
+	// ResetHardIn when cur is the sole target). Amendments to other
+	// branches run on a temp index and touch no worktree state.
+	if branch == f.head {
+		f.staged = false
+	}
 	return id, nil
 }
 
@@ -472,12 +480,23 @@ func (f *fakeGit) ResetHardIn(dir, _ string) error {
 	if err := f.fail("ResetHardIn"); err != nil {
 		return err
 	}
+	if dir != "" && !f.knownWorktreeDir(dir) {
+		return fmt.Errorf("no worktree at %q", dir)
+	}
 	f.resetHardDirs = append(f.resetHardDirs, dir)
-	if dir == "" {
+	if dir == "" || dir == "." || (f.repoRoot != "" && dir == f.repoRoot) {
 		f.staged = false
 		f.clean = true
 		f.stagedHunks = nil
 		f.stagedPatch = nil
+		return nil
+	}
+	// `reset --hard` restores a linked worktree's tracked files — drop the
+	// dirty flag so IsCleanIn answers like real git afterward.
+	for branch, path := range f.linkedWorktrees {
+		if path == dir {
+			delete(f.dirtyWT, branch)
+		}
 	}
 	return nil
 }
@@ -531,15 +550,43 @@ func (f *fakeGit) markWorktreeDirty(branch string) {
 	f.dirtyWT[branch] = true
 }
 
+// knownWorktreeDir reports whether dir names a worktree git would accept for
+// -C: the main worktree's aliases ("." or the recorded repo root), a
+// registered linked worktree, or a paused linked worktree. "" is NOT a valid
+// -C dir — the shell's `*In` probes reject it ("worktree dir is empty");
+// ResetHardIn alone treats it as the caller's own worktree.
+func (f *fakeGit) knownWorktreeDir(dir string) bool {
+	if dir == "." || (f.repoRoot != "" && dir == f.repoRoot) {
+		return true
+	}
+	for _, path := range f.linkedWorktrees {
+		if path == dir {
+			return true
+		}
+	}
+	_, ok := f.pausedLinkedWorktrees[dir]
+	return ok
+}
+
 // RebaseOntoIn models an owner-driven rebase: it replays the branch's commits
 // like RebaseOnto but, crucially, does NOT move f.head — the rebase happens in
 // another worktree, leaving the main worktree's HEAD untouched. A branch armed
-// via conflictOn stalls just like RebaseOnto.
+// via conflictOn stalls just like RebaseOnto. git -C refuses a dir that is no
+// worktree, and refuses a branch owned by a DIFFERENT worktree than dir.
 func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.rebaseErr[branch]; err != nil {
 		return err
+	}
+	if !f.knownWorktreeDir(dir) {
+		return fmt.Errorf("no worktree at %q", dir)
+	}
+	if owner, ok := f.linkedWorktrees[branch]; ok && owner != dir {
+		return fmt.Errorf("cannot rebase branch %q checked out at %q", branch, owner)
+	}
+	if branch == f.head && dir != "" && dir != "." && (f.repoRoot == "" || dir != f.repoRoot) {
+		return fmt.Errorf("cannot rebase branch %q checked out in the main worktree", branch)
 	}
 	if f.conflictNext[branch] || f.conflictEvery[branch] {
 		f.rebaseActive = true
@@ -566,6 +613,9 @@ func (f *fakeGit) RebaseAbortIn(dir string) error {
 	if err := f.fail("RebaseAbortIn"); err != nil {
 		return err
 	}
+	if !f.knownWorktreeDir(dir) {
+		return fmt.Errorf("no worktree at %q", dir)
+	}
 	if f.rebaseAbortErr != nil {
 		return f.rebaseAbortErr
 	}
@@ -573,6 +623,13 @@ func (f *fakeGit) RebaseAbortIn(dir string) error {
 		return fmt.Errorf("no rebase in progress")
 	}
 	delete(f.rebaseInWT, dir)
+	delete(f.rebaseHeadInWT, dir)
+	if branch, ok := f.pausedLinkedWorktrees[dir]; ok {
+		// `rebase --abort` re-attaches the worktree's HEAD to its branch, so the
+		// worktree stops listing as detached and the branch is owned again.
+		delete(f.pausedLinkedWorktrees, dir)
+		f.linkedWorktrees[branch] = dir
+	}
 	if f.rebaseWT == dir {
 		f.rebaseActive, f.rebaseBranch, f.rebaseNewBase, f.rebaseOldBase, f.rebaseWT = false, "", "", "", ""
 	}
@@ -585,6 +642,9 @@ func (f *fakeGit) RebaseInProgressIn(dir string) (bool, error) {
 	if err := f.fail("RebaseInProgressIn"); err != nil {
 		return false, err
 	}
+	if !f.knownWorktreeDir(dir) {
+		return false, fmt.Errorf("no worktree at %q", dir)
+	}
 	return f.rebaseInWT[dir], nil
 }
 
@@ -593,6 +653,9 @@ func (f *fakeGit) RebaseHeadNameIn(dir string) (string, error) {
 	defer f.mu.Unlock()
 	if err := f.fail("RebaseHeadNameIn"); err != nil {
 		return "", err
+	}
+	if !f.knownWorktreeDir(dir) {
+		return "", fmt.Errorf("no worktree at %q", dir)
 	}
 	return f.rebaseHeadInWT[dir], nil
 }
@@ -614,7 +677,11 @@ func (f *fakeGit) IsCleanIn(dir string) (bool, error) {
 			return !f.dirtyWT[branch], nil
 		}
 	}
-	return true, nil
+	// A paused linked worktree may hold uncommitted rebase state — not clean.
+	if _, ok := f.pausedLinkedWorktrees[dir]; ok {
+		return false, nil
+	}
+	return false, fmt.Errorf("no worktree at %q", dir)
 }
 
 func (f *fakeGit) RepoRoot() (string, error) {
@@ -654,6 +721,9 @@ func (f *fakeGit) Checkout(name string) error {
 	defer f.mu.Unlock()
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
+	}
+	if dir, ok := f.linkedWorktrees[name]; ok {
+		return fmt.Errorf("branch %q is already checked out at %q", name, dir)
 	}
 	if err := f.checkoutErr[name]; err != nil {
 		return err
@@ -782,6 +852,9 @@ func (f *fakeGit) ForceBranch(name, ref string) error {
 	}
 	if name == f.head {
 		return fmt.Errorf("cannot force the current branch %q", name)
+	}
+	if dir, ok := f.linkedWorktrees[name]; ok {
+		return fmt.Errorf("cannot force branch %q checked out at %q", name, dir)
 	}
 	id := f.resolve(ref)
 	if id == "" {
@@ -1012,6 +1085,11 @@ func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
 	if err := f.rebaseErr[branch]; err != nil {
 		f.head = branch
 		return err
+	}
+	if dir, ok := f.linkedWorktrees[branch]; ok {
+		// git refuses to rebase a branch checked out in another worktree; the
+		// engine must route it through RebaseOntoIn(owner.Path) instead.
+		return fmt.Errorf("cannot rebase branch %q checked out at %q", branch, dir)
 	}
 	if f.conflictNext[branch] || f.conflictEvery[branch] {
 		f.rebaseActive = true
