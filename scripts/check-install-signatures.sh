@@ -130,10 +130,17 @@ build_installer() {
 			echo "FAIL: install.sh no longer has exactly one MINISIGN_PUBKEY assignment" >&2
 			exit 1
 		fi
-		# Substitute the ephemeral public key into the COPY only.
+		# Substitute the ephemeral public key into the COPY only — whatever the
+		# placeholder currently holds (empty before provisioning, the real key
+		# after) — then prove the substitution took effect: a silent no-op is
+		# exactly the failure this rehearsal exists to catch.
 		pub="$(grep '^RW' "$FIXT/pub.key")"
-		sed -i.bak "s|^MINISIGN_PUBKEY=\"\"|MINISIGN_PUBKEY=\"$pub\"|" "$FIXT/install.sh"
+		sed -i.bak "s|^MINISIGN_PUBKEY=\"[^\"]*\"|MINISIGN_PUBKEY=\"$pub\"|" "$FIXT/install.sh"
 		rm -f "$FIXT/install.sh.bak"
+		if ! grep -q "^MINISIGN_PUBKEY=\"$pub\"" "$FIXT/install.sh"; then
+			echo "FAIL: ephemeral key substitution did not take effect" >&2
+			exit 1
+		fi
 	fi
 }
 

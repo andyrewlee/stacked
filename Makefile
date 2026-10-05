@@ -22,7 +22,7 @@ GIT_MIN_VERSION := 2.17
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci ci-checks build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci ci-checks build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install check-hooks golden test test-fast e2e cover hooks clean release snapshot
 
 # THE gate: there is no remote CI — this Makefile is the whole pipeline.
 # The pin/tool checks run serially first (seconds each), then the read-only
@@ -34,7 +34,7 @@ GIT_MIN_VERSION := 2.17
 # check-install closes with the installer legs (install.sh syntax, goreleaser
 # schema/asset parity, the minisign decision matrix); its optional tools skip
 # loudly unless CI_STRICT=1.
-ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools check-shell
+ci: check-deps check-lint-version check-go-version check-git-version check-goreleaser-version check-tools check-shell check-hooks
 	$(MAKE) -j ci-checks
 	$(MAKE) build
 	$(MAKE) cover check-install
@@ -43,6 +43,17 @@ ci: check-deps check-lint-version check-go-version check-git-version check-gorel
 # above. Adding a leg here is only safe while it writes nothing — a leg that
 # produces an artifact belongs in the serial recipe.
 ci-checks: fmt-check vet vet-cross lint
+
+# The version stamp is git-describe output interpolated into double-quoted
+# recipes — a tag carrying the characters that are live inside "..." ($, `,
+# ", \) would execute or break the stamp at spawn time, and a recipe-side
+# case guard cannot stop it (the shell expands $(...) before the case
+# compares). The check therefore runs in make itself via findstring on the
+# expanded value — the string never reaches a shell. Refuse rather than
+# sanitize: tr-filtering would stamp a silently WRONG version.
+ifneq (,$(findstring $$,$(VERSION))$(findstring `,$(VERSION))$(findstring ",$(VERSION))$(findstring \,$(VERSION)))
+$(error refusing to stamp unsafe version "$(VERSION)" — tag/refnames may not contain $, backtick, double-quote, or backslash)
+endif
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/st
@@ -96,33 +107,22 @@ check-deps:
 
 # The lint version is pinned in three hand-synced places. Enforce agreement so
 # the Makefile and contributor docs cannot silently drift apart.
+# Doc-pin agreement checks all share scripts/check-pins.sh: (label, expected,
+# file + sed-extraction-regex per declaration). A new pin is a spec row, not a
+# new skeleton.
 check-lint-version:
-	@ok=1; \
-	for f in README.md CONTRIBUTING.md; do \
-		pins=$$(sed -nE 's/.*golangci-lint@((v[0-9]+\.[0-9]+\.[0-9]+)).*/\1/p' $$f); \
-		if [ "$$pins" != "$(GOLANGCI_VERSION)" ]; then \
-			echo "$$f pins golangci-lint '$${pins:-<none>}' (want $(GOLANGCI_VERSION) from Makefile)"; \
-			ok=0; \
-		fi; \
-	done; \
-	[ $$ok -eq 1 ] || exit 1; \
-	echo "lint pin: $(GOLANGCI_VERSION) consistent across Makefile, README, CONTRIBUTING"
+	@scripts/check-pins.sh "lint pin" "$(GOLANGCI_VERSION)" \
+		README.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+' 's/^.*@//' \
+		CONTRIBUTING.md 'golangci-lint@v[0-9]+\.[0-9]+\.[0-9]+' 's/^.*@//'
 
 # The Go pin lives in go.mod (source of truth) and the README/CONTRIBUTING
 # "Go 1.NN+" prose. Enforce agreement so a toolchain bump cannot silently leave
 # the docs behind (the same hazard check-lint-version guards for the lint pin).
 check-go-version:
 	@want=$$(sed -nE 's/^go ([0-9]+[.][0-9]+).*/\1/p' go.mod); \
-	ok=1; \
-	for f in README.md CONTRIBUTING.md; do \
-		pin=$$(sed -nE 's/.*Go ([0-9]+[.][0-9]+)[+].*/\1/p' $$f | head -1); \
-		if [ "$$pin" != "$$want" ]; then \
-			echo "$$f documents 'Go $${pin:-<none>}+' (want Go $$want+ from go.mod)"; \
-			ok=0; \
-		fi; \
-	done; \
-	[ $$ok -eq 1 ] || exit 1; \
-	echo "go pin: $$want consistent across go.mod, README, CONTRIBUTING"
+	scripts/check-pins.sh "go pin" "$$want" \
+		README.md 'Go [0-9]+\.[0-9]+\+' 's/^Go ([0-9.]+)\+$$/\1/' \
+		CONTRIBUTING.md 'Go [0-9]+\.[0-9]+\+' 's/^Go ([0-9.]+)\+$$/\1/'
 
 # The git floor ($(GIT_MIN_VERSION)) is the documented runtime requirement —
 # declared in three hand-synced places (this var, the README/CONTRIBUTING
@@ -141,21 +141,11 @@ check-git-version:
 		echo "git $$have is below the required floor $(GIT_MIN_VERSION)"; \
 		exit 1; \
 	fi; \
-	agree=1; \
-	for f in README.md CONTRIBUTING.md; do \
-		pin=$$(grep -oE 'Git [0-9]+\.[0-9]+\+' $$f | head -1 | sed -nE 's/Git ([0-9.]+)\+/\1/p'); \
-		if [ "$$pin" != "$(GIT_MIN_VERSION)" ]; then \
-			echo "$$f documents 'Git $${pin:-<none>}+' (want Git $(GIT_MIN_VERSION)+ from Makefile)"; \
-			agree=0; \
-		fi; \
-	done; \
-	code=$$(sed -nE 's/.*MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}.*/\1.\2/p' internal/git/git.go | head -1); \
-	if [ "$$code" != "$(GIT_MIN_VERSION)" ]; then \
-		echo "internal/git MinVersion is '$${code:-<none>}' (want $(GIT_MIN_VERSION) from Makefile)"; \
-		agree=0; \
-	fi; \
-	[ $$agree -eq 1 ] || exit 1; \
-	echo "git floor: $$have >= $(GIT_MIN_VERSION); pin agrees across Makefile, README, CONTRIBUTING, internal/git"
+	echo "git floor: $$have >= $(GIT_MIN_VERSION)"; \
+	scripts/check-pins.sh "git floor pin" "$(GIT_MIN_VERSION)" \
+		README.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
+		CONTRIBUTING.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
+		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}$$/\1.\2/'
 
 # The GoReleaser pin lives in GORELEASER_VERSION (Makefile) — it is the version
 # release tooling installs. Its major must match the .goreleaser.yaml config
@@ -168,6 +158,8 @@ check-goreleaser-version:
 		echo ".goreleaser.yaml declares config version '$${cfg:-<none>}' but Makefile pins goreleaser $(GORELEASER_VERSION)"; \
 		exit 1; \
 	fi; \
+	scripts/check-pins.sh "goreleaser pin" "$(GORELEASER_VERSION)" \
+		CONTRIBUTING.md 'goreleaser/v2@v[0-9]+\.[0-9]+\.[0-9]+' 's/^.*@//' || exit 1; \
 	if command -v goreleaser >/dev/null 2>&1; then \
 		have=$$(goreleaser --version 2>&1 | sed -nE 's/^GitVersion:[[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1); \
 		if [ "v$$have" != "$(GORELEASER_VERSION)" ]; then \
@@ -208,11 +200,11 @@ check-tools:
 # work. Findings are fixed or annotated inline — never globally disabled.
 check-shell:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh install.sh scripts/check-release-ready.sh && \
+		shellcheck -s sh install.sh scripts/check-release-ready.sh scripts/check-pins.sh && \
 		shellcheck -x scripts/check-install-assets.sh \
 			scripts/check-install-signatures.sh scripts/cover.sh \
 			.githooks/pre-commit .githooks/pre-push && \
-		echo "shellcheck: 7 scripts clean"; \
+		echo "shellcheck: 8 scripts clean"; \
 	elif [ "$${CI_STRICT:-0}" = "1" ]; then \
 		echo "shellcheck required for the shell leg (CI_STRICT=1)"; exit 1; \
 	else echo "skip: shellcheck not installed (set CI_STRICT=1 to require)"; fi
@@ -293,6 +285,26 @@ hooks:
 	git config core.hooksPath .githooks
 	chmod +x .githooks/*
 
+# Verify the hooks are actually installed — `make hooks` runs once and a fresh
+# clone or `git config --unset` silently removes the only gate. Warn by
+# default (a contributor may deliberately opt out); HOOKS_REQUIRED=1 — used by
+# `make release` — fails, because an unprotected tag push must not publish.
+check-hooks:
+	@got=$$(git config core.hooksPath || true); \
+	if [ "$$got" != ".githooks" ]; then \
+		msg="core.hooksPath='$$got' — the make ci gate is absent (run 'make hooks')"; \
+		if [ "$${HOOKS_REQUIRED:-0}" = "1" ]; then echo "$$msg" >&2; exit 1; \
+		else echo "warn: $$msg"; fi; \
+	else \
+		for h in .githooks/pre-commit .githooks/pre-push; do \
+			if [ ! -x "$$h" ]; then \
+				if [ "$${HOOKS_REQUIRED:-0}" = "1" ]; then echo "$$h not executable" >&2; exit 1; \
+				else echo "warn: $$h not executable (chmod +x)"; fi; \
+			fi; \
+		done; \
+		echo "hooks: installed (.githooks, executable)"; \
+	fi
+
 clean:
 	rm -f $(BINARY) cover.out
 	rm -rf dist
@@ -318,10 +330,16 @@ check-release-ready:
 	@sh scripts/check-release-ready.sh
 
 # Cut a release from the current git tag with GoReleaser (needs GITHUB_TOKEN).
-# The pinned-toolchain and strict installer legs gate the publish path too:
-# an unpinned goreleaser or an asset/signature contract the installer rejects
-# must be caught before `goreleaser release` runs, not mid-publish.
-release: check-release-version check-release-ready check-goreleaser-version check-install
+# The publish path runs the full gate first — `make release` is the single
+# publish entrypoint, so it enforces what `make ci` proves locally: the whole
+# suite, then the STRICT installer legs (goreleaser/minisign/shellcheck
+# required, not skipped) and the hooks check (an unprotected tag push must
+# not publish). An unpinned toolchain or an asset/signature contract the
+# installer rejects is caught before `goreleaser release` runs, not mid-publish.
+release: check-release-version check-goreleaser-version
+	$(MAKE) ci
+	CI_STRICT=1 $(MAKE) check-install check-shell check-release-ready
+	HOOKS_REQUIRED=1 $(MAKE) check-hooks
 	goreleaser release --clean
 
 # Build release artifacts locally without publishing (dry run). Snapshots use
