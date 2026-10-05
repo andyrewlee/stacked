@@ -14,13 +14,43 @@ import (
 	"strings"
 )
 
+// gitEnvBlocked names the inherited environment variables that redirect which
+// repository, index, or object store a spawned git resolves. Git exports these
+// inside hooks and `rebase exec`, and users occasionally export GIT_DIR —
+// honoring them would make st operate on a different repo than the cwd's, so
+// gitEnv strips them (st's own overrides arrive via runWith's extraEnv, which
+// is appended after this list and therefore unaffected).
+var gitEnvBlocked = map[string]bool{
+	"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
+	"GIT_INDEX_FILE":       true,
+	"GIT_OBJECT_DIRECTORY": true, "GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+	"GIT_NAMESPACE":           true,
+	"GIT_SHALLOW_FILE":        true,
+	"GIT_CEILING_DIRECTORIES": true, "GIT_DISCOVERY_ACROSS_FILESYSTEM": true,
+	"GIT_PREFIX": true, "GIT_QUARANTINE_PATH": true,
+	"GIT_CONFIG_PARAMETERS": true, "GIT_CONFIG_COUNT": true,
+	"GIT_LITERAL_PATHSPECS": true, "GIT_GLOB_PATHSPECS": true,
+	"GIT_NOGLOB_PATHSPECS": true, "GIT_ICASE_PATHSPECS": true,
+	"GIT_EXEC_PATH": true,
+}
+
 // gitEnv returns the environment for git invocations whose output is parsed:
-// the current environment with the locale pinned to C, so git's messages and
-// formatting never vary with the user's LANG/LC_* settings. Interactive
-// invocations (RunInteractive, RebaseContinue) keep the inherited environment —
-// their output goes to the user and is never parsed.
+// the current environment — minus the repo-routing variables in gitEnvBlocked —
+// with the locale pinned to C, so git's messages and formatting never vary with
+// the user's LANG/LC_* settings. Interactive invocations (RunInteractive,
+// RebaseContinue) take the same env: user-intent variables pass through, and
+// the scrubbed set only ever misdirects the spawn.
 func gitEnv() []string {
-	return append(os.Environ(), "LC_ALL=C")
+	inherited := os.Environ()
+	env := make([]string, 0, len(inherited)+1)
+	for _, e := range inherited {
+		k, _, _ := strings.Cut(e, "=")
+		if gitEnvBlocked[k] || strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, e)
+	}
+	return append(env, "LC_ALL=C")
 }
 
 // run executes "git args..." and returns the combined stdout/stderr output. On

@@ -3013,3 +3013,70 @@ func TestRequireMinVersion(t *testing.T) {
 		t.Fatalf("RequireMinVersion: %v", err)
 	}
 }
+
+// TestGitEnvScrubsRepoRouting pins the security property: variables git exports
+// inside hooks (or a user exports by hand) must never redirect a spawned git
+// to another repository, index, or object store. User-intent variables — ssh,
+// identity, config-file pins — survive untouched.
+func TestGitEnvScrubsRepoRouting(t *testing.T) {
+	blocked := []string{
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"GIT_NAMESPACE", "GIT_SHALLOW_FILE", "GIT_CEILING_DIRECTORIES",
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_PREFIX", "GIT_QUARANTINE_PATH",
+		"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+		"GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+		"GIT_LITERAL_PATHSPECS", "GIT_EXEC_PATH",
+	}
+	for _, k := range blocked {
+		t.Setenv(k, "/tmp/not-a-repo")
+	}
+	kept := []string{
+		"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_AUTHOR_NAME",
+		"GIT_COMMITTER_NAME", "GIT_SSH_COMMAND", "GIT_EDITOR", "GIT_PAGER",
+	}
+	for _, k := range kept {
+		t.Setenv(k, "user-value")
+	}
+
+	env := gitEnv()
+	have := map[string]string{}
+	lcAll := 0
+	for _, e := range env {
+		k, v, _ := strings.Cut(e, "=")
+		have[k] = v
+		if k == "LC_ALL" {
+			lcAll++
+		}
+	}
+	for _, k := range blocked {
+		if _, ok := have[k]; ok {
+			t.Errorf("%s survived gitEnv — a spawned git could be routed to another repo", k)
+		}
+	}
+	for _, k := range kept {
+		if have[k] != "user-value" {
+			t.Errorf("%s = %q, want the inherited value to survive", k, have[k])
+		}
+	}
+	if lcAll != 1 || have["LC_ALL"] != "C" {
+		t.Fatalf("LC_ALL entries = %d, value %q — want exactly one LC_ALL=C", lcAll, have["LC_ALL"])
+	}
+}
+
+// TestGitEnvExtraEnvOverrides pins the mechanism that keeps the scrub safe:
+// runWith appends extraEnv AFTER the filtered base, so plumbing that needs a
+// blocked name (absorb's GIT_INDEX_FILE temp index) re-adds it itself and wins.
+func TestGitEnvExtraEnvOverrides(t *testing.T) {
+	t.Setenv("GIT_INDEX_FILE", "/tmp/ambient-index")
+	env := append(gitEnv(), "GIT_INDEX_FILE=/tmp/absorb-temp-index")
+	var last string
+	for _, e := range env {
+		if k, _, _ := strings.Cut(e, "="); k == "GIT_INDEX_FILE" {
+			last = e
+		}
+	}
+	if last != "GIT_INDEX_FILE=/tmp/absorb-temp-index" {
+		t.Fatalf("last GIT_INDEX_FILE entry = %q — extraEnv must win over a blocked inherited value", last)
+	}
+}
