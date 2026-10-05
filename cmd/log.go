@@ -156,9 +156,13 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 
 // logNode is the JSON shape of a branch in the stack tree.
 type logNode struct {
-	Name         string     `json:"name"`
-	Parent       string     `json:"parent,omitempty"`
-	ParentSHA    string     `json:"parentSHA,omitempty"`
+	Name      string `json:"name"`
+	Parent    string `json:"parent,omitempty"`
+	ParentSHA string `json:"parentSHA,omitempty"`
+	// Tip is the branch's LIVE tip SHA from the same TipsFor batch the render
+	// already ran — absent when the ref is gone, which is itself the drift
+	// signal an orchestrator polls for.
+	Tip          string     `json:"tip,omitempty"`
 	Current      bool       `json:"current"`
 	NeedsRestack bool       `json:"needsRestack"`
 	TopCommit    string     `json:"topCommit,omitempty"`
@@ -195,7 +199,7 @@ func printLogJSON(s *stack.State, d *logData) error {
 			return nil
 		}
 		visited[name] = true
-		node := &logNode{Name: name, Parent: parent, Current: name == d.cur, Children: []*logNode{}}
+		node := &logNode{Name: name, Parent: parent, Tip: d.tips[name], Current: name == d.cur, Children: []*logNode{}}
 		if b, ok := s.Get(name); ok {
 			node.ParentSHA = b.ParentSHA
 			node.NeedsRestack = d.drift[name]
