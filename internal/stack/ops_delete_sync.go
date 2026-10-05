@@ -239,7 +239,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
-		candidates, err := pruneTargets(env, s, trunkRef)
+		candidates, _, err := pruneTargets(env, s, trunkRef)
 		if err != nil {
 			return nil, err
 		}
@@ -272,11 +272,11 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 // PruneMergedAgainst is PruneMerged against an arbitrary basis ref — the local
 // trunk, or a fetched remote-tracking ref (st prune --remote, sync --dry-run).
 func PruneMergedAgainst(env Env, s *State, trunkRef string) ([]string, error) {
-	candidates, err := pruneTargets(env, s, trunkRef)
+	candidates, releases, err := pruneTargets(env, s, trunkRef)
 	if err != nil {
 		return nil, err
 	}
-	return applyPrune(env, s, candidates)
+	return applyPrune(env, s, candidates, releases)
 }
 
 // Prune is the standalone `st prune`: delete every tracked branch already
@@ -292,11 +292,11 @@ func Prune(env Env, s *State, trunkRef string) (*OpResult, error) {
 	if err := refusePruneCurrent(env, names); err != nil {
 		return nil, err
 	}
-	candidates, err := gatePruneCandidates(env, s, names)
+	candidates, releases, err := gatePruneCandidates(env, s, names)
 	if err != nil {
 		return nil, err
 	}
-	deleted, err := applyPrune(env, s, candidates)
+	deleted, err := applyPrune(env, s, candidates, releases)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func PrunePlan(env Env, s *State, trunkRef string) (*OpResult, error) {
 	if err := refusePruneCurrent(env, names); err != nil {
 		return nil, err
 	}
-	candidates, err := gatePruneCandidates(env, s, names)
+	candidates, _, err := gatePruneCandidates(env, s, names)
 	if err != nil {
 		return nil, err
 	}
@@ -339,27 +339,95 @@ func refusePruneCurrent(env Env, names []string) error {
 }
 
 // gatePruneCandidates applies the worktree-release check to each merged name —
-// the same check applyPrune's releaseOwnedWorktree performs — so a preview and
-// an apply share identical eligibility, and a dirty owner fails BEFORE any
-// branch is deleted instead of mid-loop.
-func gatePruneCandidates(env Env, s *State, names []string) ([]string, error) {
-	var candidates []string
+// the same check applyPrune performs at release time — so a preview and an
+// apply share identical eligibility, and a dirty owner fails BEFORE any
+// branch is deleted instead of mid-loop. It also returns the computed release
+// plan (name → worktree path, "" when nothing is released) so the apply can
+// remove worktrees without re-probing — the gate's verdict is authoritative
+// within one locked command.
+func gatePruneCandidates(env Env, s *State, names []string) (candidates []string, releases map[string]string, err error) {
+	g := env.Git
+	wts, err := g.Worktrees()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !IsMultiWorktree(wts) {
+		return names, nil, nil
+	}
+	main, _ := MainWorktree(wts)
+	// Pass 1 collects the refusals that need no cleanliness answer and the
+	// linked owners that do. CurrentBranch/RepoRoot are read lazily once —
+	// the serial version paid them per candidate.
+	var cur, root string
+	var curSet, rootSet bool
+	var rootErr error
+	early := map[string]error{}
+	linked := map[string]git.Worktree{}
+	var cleanPaths []string
 	for _, name := range names {
-		if _, err := s.ownedWorktreeReleaseTarget(env, name); err != nil {
-			return nil, err
+		owner, ok := OwnerOf(wts, name)
+		if !ok {
+			continue
 		}
+		if owner.Path == main.Path {
+			if !curSet {
+				cur, _ = g.CurrentBranch()
+				curSet = true
+			}
+			if name != cur {
+				early[name] = fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", name, owner.Path)
+			}
+			continue
+		}
+		if !rootSet {
+			root, rootErr = g.RepoRoot()
+			rootSet = true
+		}
+		if rootErr != nil {
+			early[name] = fmt.Errorf("locating the current worktree root: %w", rootErr)
+			continue
+		}
+		if sameWorktreePath(root, owner.Path) {
+			early[name] = fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, name)
+			continue
+		}
+		linked[name] = owner
+		cleanPaths = append(cleanPaths, owner.Path)
+	}
+	// One parallel batch answers every linked owner's cleanliness; pass 2 then
+	// evaluates each candidate in name order — early refusals first, then the
+	// clean verdict — exactly the order the serial per-name checks ran in.
+	verdicts := probeWorktrees(g, cleanPaths, false)
+	releases = map[string]string{}
+	for _, name := range names {
+		if e := early[name]; e != nil {
+			return nil, nil, e
+		}
+		owner, ok := linked[name]
+		if !ok {
+			candidates = append(candidates, name)
+			continue
+		}
+		v := verdicts[owner.Path]
+		if v.cleanErr != nil {
+			return nil, nil, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, name, v.cleanErr)
+		}
+		if !v.clean {
+			return nil, nil, fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", name, owner.Path, name)
+		}
+		releases[name] = owner.Path
 		candidates = append(candidates, name)
 	}
-	return candidates, nil
+	return candidates, releases, nil
 }
 
 // pruneTargets returns the deletable merged set in sorted order for the sync
 // path (HEAD already moved off any prunable branch): pruneMergedNames plus the
-// release gate.
-func pruneTargets(env Env, s *State, trunkRef string) ([]string, error) {
+// release gate and its release plan.
+func pruneTargets(env Env, s *State, trunkRef string) (candidates []string, releases map[string]string, err error) {
 	names, err := pruneMergedNames(env, s, trunkRef)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return gatePruneCandidates(env, s, names)
 }
@@ -392,17 +460,21 @@ func pruneMergedNames(env Env, s *State, trunkRef string) ([]string, error) {
 	return candidates, nil
 }
 
-// applyPrune deletes each candidate: releases its owned worktree (a dirty one
-// errors, leaving everything pruned so far intact), drops the git branch,
-// untracks it, and checkpoints. Callers pass the gatePruneCandidates result.
-func applyPrune(env Env, s *State, candidates []string) ([]string, error) {
+// applyPrune deletes each candidate: releases its owned worktree (the gate's
+// release plan says which — re-probing would pay a second round of `git -C`
+// status checks for an answer computed moments ago under the same lock), drops
+// the git branch, untracks it, and checkpoints. Callers pass the
+// gatePruneCandidates result.
+func applyPrune(env Env, s *State, candidates []string, releases map[string]string) ([]string, error) {
 	g := env.Git
 	var deleted []string
 	// Release phase: every owned worktree is torn down before any deletion —
 	// a dirty owner aborts the whole prune with zero branches gone.
 	for _, name := range candidates {
-		if err := s.releaseOwnedWorktree(env, name); err != nil {
-			return deleted, err
+		if path := releases[name]; path != "" {
+			if err := g.WorktreeRemove(path, false); err != nil {
+				return deleted, fmt.Errorf("removing worktree %q for %q: %w", path, name, err)
+			}
 		}
 	}
 	// Delete phase: ONE `git branch -D` for the whole set. git deletes what it

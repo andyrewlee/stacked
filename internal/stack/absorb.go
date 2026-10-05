@@ -294,16 +294,29 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 		if err != nil {
 			return nil, err
 		}
+		var ownerPaths []string
+		owners := map[string]git.Worktree{}
 		for _, target := range foreignTargets {
 			owner, elsewhere := ownerElsewhereFrom(wts, target, cur)
 			if !elsewhere {
 				continue
 			}
-			clean, err := g.IsCleanIn(owner.Path)
-			if err != nil {
-				return nil, fmt.Errorf("checking worktree %s: %w", owner.Path, err)
+			ownerPaths = append(ownerPaths, owner.Path)
+			owners[target] = owner
+		}
+		// One parallel batch answers every target's cleanliness check instead
+		// of a serial `git -C` spawn per foreign owner.
+		verdicts := probeWorktrees(g, ownerPaths, false)
+		for _, target := range foreignTargets {
+			owner, ok := owners[target]
+			if !ok {
+				continue
 			}
-			if !clean {
+			v := verdicts[owner.Path]
+			if v.cleanErr != nil {
+				return nil, fmt.Errorf("checking worktree %s: %w", owner.Path, v.cleanErr)
+			}
+			if !v.clean {
 				plan.Summary = "not applied: a target's worktree is dirty; " + plan.Summary
 				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q is checked out in %s with uncommitted changes; commit or stash there first", target, owner.Path))
 				return plan, nil

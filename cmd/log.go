@@ -117,6 +117,30 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		return map[string]worktreeInfo{}, nil
 	}
 	main, _ := stack.MainWorktree(wts)
+	var paths []string
+	for _, wt := range wts {
+		if wt.Path == main.Path || wt.Branch == "" || !rendered[wt.Branch] {
+			continue
+		}
+		paths = append(paths, wt.Path)
+	}
+	// One bounded fan-out answers every linked worktree's cleanliness instead
+	// of a serial `git -C` probe per rendered branch.
+	cleans := make([]bool, len(paths))
+	_ = git.ParallelProbes(len(paths), func(i int) error {
+		clean, err := git.IsCleanAt(paths[i])
+		if err != nil {
+			// A worktree we cannot stat (e.g. pruned on disk) is reported
+			// without a dirty flag rather than failing the whole render.
+			clean = true
+		}
+		cleans[i] = clean
+		return nil
+	})
+	cleanByPath := make(map[string]bool, len(paths))
+	for i, p := range paths {
+		cleanByPath[p] = cleans[i]
+	}
 	info := make(map[string]worktreeInfo, len(wts))
 	for _, wt := range wts {
 		if wt.Path == main.Path {
@@ -125,13 +149,7 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		if wt.Branch == "" || !rendered[wt.Branch] {
 			continue
 		}
-		clean, err := git.IsCleanAt(wt.Path)
-		if err != nil {
-			// A worktree we cannot stat (e.g. pruned on disk) is reported without a
-			// dirty flag rather than failing the whole render.
-			clean = true
-		}
-		info[wt.Branch] = worktreeInfo{path: wt.Path, dirty: !clean}
+		info[wt.Branch] = worktreeInfo{path: wt.Path, dirty: !cleanByPath[wt.Path]}
 	}
 	return info, nil
 }

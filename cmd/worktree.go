@@ -347,6 +347,38 @@ func worktreeRemoveAll(asJSON bool) error {
 	}
 
 	result := worktreeRemoveAllResult{Removed: []worktreeRemovedEntry{}}
+	// Precompute the per-candidate probes: the rebase/clean state of every
+	// linked worktree in one bounded fan-out instead of two serial `git -C`
+	// spawns per candidate. Removals mid-loop only invalidate the removed
+	// path's own verdict, which is never consulted again.
+	var candPaths []string
+	for _, name := range names {
+		if wt, ok := stack.LinkedOwnerOf(wts, name); ok {
+			candPaths = append(candPaths, wt.Path)
+		}
+	}
+	type rmVerdict struct {
+		paused, clean    bool
+		rebaseErr, clErr error
+	}
+	slots := make([]rmVerdict, len(candPaths))
+	_ = git.ParallelProbes(len(candPaths), func(i int) error {
+		var v rmVerdict
+		paused, err := git.RebaseInProgressIn(candPaths[i])
+		if err != nil {
+			v.rebaseErr = err
+		} else if v.paused = paused; !paused {
+			if v.clean, err = git.IsCleanIn(candPaths[i]); err != nil {
+				v.clErr = err
+			}
+		}
+		slots[i] = v
+		return nil
+	})
+	verdicts := make(map[string]rmVerdict, len(candPaths))
+	for i, p := range candPaths {
+		verdicts[p] = slots[i]
+	}
 	// One port for the loop so its RepoRoot memo turns the per-candidate
 	// cwd checks into a single probe.
 	p := newGitPort()
@@ -372,19 +404,19 @@ func worktreeRemoveAll(asJSON bool) error {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "you are inside it"})
 			continue
 		}
-		if inProgress, err := git.RebaseInProgressIn(wt.Path); err != nil {
-			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
-			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
-		} else if inProgress {
+		v := verdicts[wt.Path]
+		if v.rebaseErr != nil {
+			result.Failed = &worktreeAllFailure{Branch: name, Error: v.rebaseErr.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), v.rebaseErr)
+		} else if v.paused {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "a rebase is in progress there"})
 			continue
 		}
-		clean, err := git.IsCleanIn(wt.Path)
-		if err != nil {
-			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
-			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
+		if v.clErr != nil {
+			result.Failed = &worktreeAllFailure{Branch: name, Error: v.clErr.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), v.clErr)
 		}
-		if !clean {
+		if !v.clean {
 			// Dirty is a SKIP, decided up front — never classified by parsing
 			// git's refusal, and never a hard failure.
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: "worktree has uncommitted changes"})

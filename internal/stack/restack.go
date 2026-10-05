@@ -1,6 +1,10 @@
 package stack
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/andyrewlee/stacked/internal/git"
+)
 
 func branchTipRef(name string) string {
 	return "refs/heads/" + name
@@ -94,7 +98,7 @@ func (s *State) restackBranch(env Env, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 	}
-	did, _, err := s.restackBranchWith(env, name, b, parentTip, currentBranchOr(env.Git))
+	did, _, err := s.restackBranchWith(env, name, b, parentTip, currentBranchOr(env.Git), nil)
 	return did, err
 }
 
@@ -115,7 +119,7 @@ func currentBranchOr(g Git) string {
 // on in-place success, expectedHEAD everywhere else (no-op, cross-worktree,
 // paused conflict, restored failure) — so cascades can thread it instead of
 // spawning a rev-parse per branch.
-func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, expectedHEAD string) (did bool, newHEAD string, err error) {
+func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, expectedHEAD string, cw *cascadeWorktrees) (did bool, newHEAD string, err error) {
 	if parentTip == b.ParentSHA {
 		return false, expectedHEAD, nil
 	}
@@ -128,10 +132,23 @@ func (s *State) restackBranchWith(env Env, name string, b *Branch, parentTip, ex
 	// HEAD, so expectedHEAD passes through — and doubles as the current-branch
 	// hint (the threading keeps it equal to the live HEAD on every path into
 	// this call; "" falls back to a live read).
-	if owner, elsewhere, err := s.ownerElsewhereWith(env.Git, name, expectedHEAD); err != nil {
-		return false, expectedHEAD, err
-	} else if elsewhere {
-		did, err := s.restackInWorktree(env, name, b, parentTip, owner)
+	var owner git.Worktree
+	var elsewhere bool
+	if cw != nil {
+		owner, elsewhere = ownerElsewhereFrom(cw.wts, name, expectedHEAD)
+	} else {
+		var oerr error
+		owner, elsewhere, oerr = s.ownerElsewhereWith(env.Git, name, expectedHEAD)
+		if oerr != nil {
+			return false, expectedHEAD, oerr
+		}
+	}
+	if elsewhere {
+		var verdicts map[string]wtVerdict
+		if cw != nil {
+			verdicts = cw.verdicts
+		}
+		did, err := s.restackInWorktree(env, name, b, parentTip, owner, verdicts)
 		return did, expectedHEAD, err
 	}
 
@@ -260,10 +277,23 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 	// happens before the walk), so the child index is built once for every
 	// root's Descendants walk and the leaf checks inside it.
 	idx := s.ChildIndex()
+	// One worktree snapshot plus batched gate verdicts for every foreign-owned
+	// path the walk can touch — without this each foreign-owned branch pays a
+	// `worktree list` plus two serial `git -C` probes.
+	cw, err := newCascadeWorktrees(env, s, starts, idx, expectedHEAD)
+	if err != nil {
+		return nil, err
+	}
 	for _, start := range starts {
 		order := append([]string{start}, descendantsOf(idx, start)...)
 		for _, name := range order {
-			did, newHEAD, err := s.restackAgainstTips(env, name, tips, idx, expectedHEAD)
+			did, newHEAD, err := s.restackAgainstTips(env, name, tips, idx, expectedHEAD, cw)
+			// An in-place rebase checks name out here: the caller's worktree
+			// entry in the snapshot must follow HEAD or it keeps claiming the
+			// vacated branch as owned-elsewhere.
+			if cw != nil {
+				cw.headMoved(expectedHEAD, newHEAD)
+			}
 			expectedHEAD = newHEAD
 			if err != nil {
 				return rebased, err
@@ -280,7 +310,7 @@ func (s *State) restackForest(env Env, starts []string) ([]string, error) {
 // parent tip comes from the map (RevParse fallback for parents outside it),
 // and a rebased branch refreshes its own map entry so later dependents see
 // the new tip.
-func (s *State) restackAgainstTips(env Env, name string, tips map[string]string, idx map[string][]string, expectedHEAD string) (did bool, newHEAD string, err error) {
+func (s *State) restackAgainstTips(env Env, name string, tips map[string]string, idx map[string][]string, expectedHEAD string, cw *cascadeWorktrees) (did bool, newHEAD string, err error) {
 	b, err := s.tracked(name)
 	if err != nil {
 		return false, expectedHEAD, err
@@ -292,7 +322,7 @@ func (s *State) restackAgainstTips(env Env, name string, tips map[string]string,
 			return false, expectedHEAD, fmt.Errorf("resolve parent %q: %w", b.Parent, err)
 		}
 	}
-	did, newHEAD, err = s.restackBranchWith(env, name, b, parentTip, expectedHEAD)
+	did, newHEAD, err = s.restackBranchWith(env, name, b, parentTip, expectedHEAD, cw)
 	if err != nil || !did {
 		return did, newHEAD, err
 	}

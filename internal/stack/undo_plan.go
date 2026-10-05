@@ -238,7 +238,18 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 	}
 
 	// Per-doomed facts, in sorted order — the order Undo executes them and
-	// UndoPreview emits their blockers.
+	// UndoPreview emits their blockers. The owning worktrees' cleanliness is
+	// probed in one parallel batch (a mismatched owner is never probed, same
+	// as the serial version).
+	var cleanPaths []string
+	for i := range p.doomed {
+		if owner, ok := LinkedOwnerOf(p.wts, p.doomed[i].name); ok {
+			if recorded := entry.CreatedWorktrees[p.doomed[i].name]; recorded == "" || sameWorktreePath(owner.Path, recorded) {
+				cleanPaths = append(cleanPaths, owner.Path)
+			}
+		}
+	}
+	verdicts := probeWorktrees(g, cleanPaths, false)
 	for i := range p.doomed {
 		d := &p.doomed[i]
 		if owner, ok := LinkedOwnerOf(p.wts, d.name); ok {
@@ -246,11 +257,11 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 			if recorded := entry.CreatedWorktrees[d.name]; recorded != "" && !sameWorktreePath(owner.Path, recorded) {
 				d.mismatch = true
 			} else {
-				clean, err := g.IsCleanIn(owner.Path)
-				if err != nil {
-					return nil, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, d.name, err)
+				v := verdicts[owner.Path]
+				if v.cleanErr != nil {
+					return nil, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, d.name, v.cleanErr)
 				}
-				d.dirty = !clean
+				d.dirty = !v.clean
 			}
 		}
 		if d.isCurrent {

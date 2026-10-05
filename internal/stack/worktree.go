@@ -258,8 +258,8 @@ func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, b
 // rebase this process did not start must never happen. A conflict during the
 // cross-worktree rebase is rolled back in that worktree and surfaced as an
 // error, rather than left paused where the main process cannot drive it.
-func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree) (bool, error) {
-	skipped, rebase, err := worktreeRestackDisposition(env, owner, name)
+func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree, verdicts map[string]wtVerdict) (bool, error) {
+	skipped, rebase, err := worktreeRestackDisposition(env, owner, name, verdicts)
 	if err != nil {
 		return false, err
 	}
@@ -291,6 +291,70 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 	return true, nil
 }
 
+// wtVerdict is the precomputed gate answer for one worktree path: whether a
+// rebase is paused there and whether the tree is clean. The error fields
+// record which probe failed so the consumer wraps it with its own branch
+// context — preserving the serial loop's error wording and position.
+type wtVerdict struct {
+	paused    bool
+	clean     bool
+	rebaseErr error
+	cleanErr  error
+}
+
+// probeWorktrees fans out the per-worktree gate probes over distinct paths,
+// replacing the serial per-branch probes loops like the restack cascade
+// and worktree rm --all paid. checkRebase controls whether the rebase-state
+// probe runs: when it does, the clean probe runs only on unpaused worktrees —
+// preserving the serial gate's check order (a paused-but-clean rebase must not
+// report clean). A probe error is recorded on that path's verdict rather than
+// aborting the fan-out, so the first CONSUMER reports it at its own position,
+// exactly where the serial loop would have surfaced it.
+func probeWorktrees(g Git, paths []string, checkRebase bool) map[string]wtVerdict {
+	var uniq []string
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			uniq = append(uniq, p)
+		}
+	}
+	// ParallelProbes' contract is slot writes: each fn writes only its own
+	// index (a map write per goroutine would race), and the map is assembled
+	// after the fan completes.
+	slots := make([]wtVerdict, len(uniq))
+	_ = git.ParallelProbes(len(uniq), func(i int) error {
+		path := uniq[i]
+		var v wtVerdict
+		if checkRebase {
+			paused, err := g.RebaseInProgressIn(path)
+			if err != nil {
+				v.rebaseErr = err
+				slots[i] = v
+				return nil
+			}
+			v.paused = paused
+			if paused {
+				slots[i] = v
+				return nil
+			}
+		}
+		clean, err := g.IsCleanIn(path)
+		if err != nil {
+			v.cleanErr = err
+		} else {
+			v.clean = clean
+		}
+		slots[i] = v
+		return nil
+	})
+	verdicts := make(map[string]wtVerdict, len(uniq))
+	for i, p := range uniq {
+		verdicts[p] = slots[i]
+	}
+	return verdicts
+}
+
 // worktreeRestackDisposition answers whether a foreign-owned worktree's
 // branch proceeds to a restack or is skipped — and for a skip, whether the
 // reason is a paused rebase (rebase=true) or a dirty tree (rebase=false). The
@@ -299,7 +363,22 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 // this process did not start must never happen. Both the apply path
 // (restackInWorktree) and the dry-run preview (wouldSkipWorktreeRestack)
 // consume it — the shared piece is the gate ORDER, so a new gate lands once.
-func worktreeRestackDisposition(env Env, owner git.Worktree, branch string) (skipped, rebase bool, err error) {
+// verdicts, when non-nil, carries precomputed answers (probeWorktrees); a path
+// missing from the map is probed live, so callers without a batch (single
+// restacks) behave exactly as before.
+func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verdicts map[string]wtVerdict) (skipped, rebase bool, err error) {
+	if v, ok := verdicts[owner.Path]; ok {
+		if v.rebaseErr != nil {
+			return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, v.rebaseErr)
+		}
+		if v.paused {
+			return true, true, nil
+		}
+		if v.cleanErr != nil {
+			return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, v.cleanErr)
+		}
+		return !v.clean, false, nil
+	}
 	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
 	if err != nil {
 		return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
@@ -312,6 +391,67 @@ func worktreeRestackDisposition(env Env, owner git.Worktree, branch string) (ski
 		return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
 	}
 	return !clean, false, nil
+}
+
+// cascadeWorktrees is the per-cascade worktree snapshot: one `worktree list`
+// plus the batched gate verdicts for every foreign-owned path the walk can
+// touch. restackForest builds it once so the per-branch loop pays no
+// `worktree list` and no serial `git -C` probes. Foreign worktree entries are
+// immutable for the cascade's duration (a rebase inside an owning worktree
+// never changes its checked-out branch), but the caller's own entry moves
+// with every in-place rebase — headMoved threads that. A nil
+// *cascadeWorktrees means "probe live" — the single-branch restack path keeps
+// its old spawns.
+type cascadeWorktrees struct {
+	wts      []git.Worktree
+	verdicts map[string]wtVerdict
+}
+
+// newCascadeWorktrees snapshots the worktree list and pre-probes the gate
+// answers for every branch in the walk that is foreign-owned (checked out in
+// another worktree). cur is the cascade's initial expectedHEAD — a walked
+// branch equal to it is by definition owned by this worktree, and HEAD only
+// ever lands on in-place-rebased (non-foreign) branches during the walk, so
+// the foreign set is stable for the cascade's duration.
+func newCascadeWorktrees(env Env, s *State, starts []string, idx map[string][]string, cur string) (*cascadeWorktrees, error) {
+	wts, err := env.Git.Worktrees()
+	if err != nil {
+		return nil, err
+	}
+	cw := &cascadeWorktrees{wts: wts}
+	if !IsMultiWorktree(wts) {
+		return cw, nil
+	}
+	var paths []string
+	for _, start := range starts {
+		for _, name := range append([]string{start}, descendantsOf(idx, start)...) {
+			if owner, elsewhere := ownerElsewhereFrom(wts, name, cur); elsewhere {
+				paths = append(paths, owner.Path)
+			}
+		}
+	}
+	cw.verdicts = probeWorktrees(env.Git, paths, true)
+	return cw, nil
+}
+
+// headMoved keeps the snapshot honest when an in-place rebase moves HEAD
+// oldHEAD → newHEAD: the caller's own worktree is the unique entry owning
+// oldHEAD (git forbids two worktrees on one branch), so it flips to newHEAD.
+// Without this the stale entry keeps claiming the vacated branch — owned by
+// the caller's own path — and ownerElsewhereFrom would misroute its rebase
+// into restackInWorktree, which aborts conflicts instead of pausing them in
+// place. oldHEAD == "" means the caller was detached at snapshot time; its
+// entry has Branch "" and is invisible to OwnerOf, so there is nothing to
+// flip (a "" match would wrongly flip every detached foreign entry).
+func (cw *cascadeWorktrees) headMoved(oldHEAD, newHEAD string) {
+	if oldHEAD == "" || oldHEAD == newHEAD {
+		return
+	}
+	for i := range cw.wts {
+		if cw.wts[i].Branch == oldHEAD {
+			cw.wts[i].Branch = newHEAD
+		}
+	}
 }
 
 // releaseOwnedWorktree tears down the linked worktree that owns branch, if any,

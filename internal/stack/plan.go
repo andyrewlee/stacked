@@ -232,6 +232,13 @@ type restackPreviewAccumulator struct {
 	moved         map[string]bool
 	seen          map[string]bool
 	seenSkipped   map[string]bool
+	// cw lazily holds the worktree snapshot + batched gate verdicts the
+	// preview consults per candidate; cur is the (static-during-preview)
+	// current branch, both fetched at most once per preview run.
+	cw       *cascadeWorktrees
+	cur      string
+	cwErr    error
+	cwLoaded bool
 }
 
 func newRestackPreviewAccumulator() *restackPreviewAccumulator {
@@ -258,7 +265,7 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	if !needs && !a.moved[b.Parent] {
 		return nil
 	}
-	skipped, rebase, err := wouldSkipWorktreeRestack(env, s, name)
+	skipped, rebase, err := a.wouldSkipWorktreeRestack(env, s, name)
 	if err != nil {
 		return err
 	}
@@ -283,20 +290,53 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	return nil
 }
 
+// worktreeCtx builds (once) the worktree snapshot plus the parallel gate
+// verdicts for every linked worktree — the preview walks many candidates, and
+// a per-name `worktree list` plus serial `git -C` probes would dominate it.
+// CurrentBranch is fetched once alongside: a preview never moves HEAD.
+func (a *restackPreviewAccumulator) worktreeCtx(env Env) (*cascadeWorktrees, error) {
+	if a.cwLoaded {
+		return a.cw, a.cwErr
+	}
+	a.cwLoaded = true
+	wts, err := env.Git.Worktrees()
+	if err != nil {
+		a.cwErr = err
+		return nil, err
+	}
+	a.cur, _ = env.Git.CurrentBranch()
+	cw := &cascadeWorktrees{wts: wts}
+	if IsMultiWorktree(wts) {
+		main, _ := MainWorktree(wts)
+		var paths []string
+		for _, wt := range wts {
+			if wt.Path != main.Path && wt.Branch != "" {
+				paths = append(paths, wt.Path)
+			}
+		}
+		cw.verdicts = probeWorktrees(env.Git, paths, true)
+	}
+	a.cw = cw
+	return cw, nil
+}
+
 // wouldSkipWorktreeRestack answers restackInWorktree's skip question for the
 // dry-run preview: a branch owned by another worktree is skipped when that
 // worktree has a rebase in progress (the second return) or a dirty tree. The
 // gate itself is shared with the apply path (worktreeRestackDisposition), so
-// the preview predicts the real run by construction.
-func wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase bool, err error) {
-	owner, elsewhere, err := s.ownerElsewhere(env.Git, branch)
+// the preview predicts the real run by construction. The worktree snapshot,
+// gate verdicts, and current branch come from the accumulator's lazily built
+// context — identical answers to per-name probing, at a fraction of the spawns.
+func (a *restackPreviewAccumulator) wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase bool, err error) {
+	cw, err := a.worktreeCtx(env)
 	if err != nil {
 		return false, false, err
 	}
+	owner, elsewhere := ownerElsewhereFrom(cw.wts, branch, a.cur)
 	if !elsewhere {
 		return false, false, nil
 	}
-	return worktreeRestackDisposition(env, owner, branch)
+	return worktreeRestackDisposition(env, owner, branch, cw.verdicts)
 }
 
 func restackPlanAgainstWithWorktrees(env Env, s *State, start string, tips map[string]string) (restackPreview, error) {
