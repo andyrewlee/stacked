@@ -478,6 +478,32 @@ func TestConformanceCommitSubjects(t *testing.T) {
 	})
 }
 
+// TestConformanceCommitLists pins the ordered pair surface CommitSubjects
+// cannot express: SHAs and subjects walk together, newest first.
+func TestConformanceCommitLists(t *testing.T) {
+	runConformance(t, func(d *confDriver) {
+		initTip := d.tip("main")
+		if err := d.g.CreateBranch("a"); err != nil {
+			d.t.Fatalf("CreateBranch: %v", err)
+		}
+		if err := d.g.Checkout("a"); err != nil {
+			d.t.Fatalf("checkout a: %v", err)
+		}
+		d.commit("a1")
+		d.commit("a2")
+		list, err := d.g.CommitList(initTip, "a")
+		if err != nil {
+			d.t.Fatalf("CommitList: %v", err)
+		}
+		if len(list) != 2 || list[0].Subject != "a2" || list[1].Subject != "a1" {
+			d.t.Fatalf("CommitList subjects = %+v, want a2 then a1", list)
+		}
+		if list[0].SHA != d.tip("a") {
+			d.t.Fatalf("CommitList newest SHA = %q, want a's tip %q", list[0].SHA, d.tip("a"))
+		}
+	})
+}
+
 // confGitIn runs git inside dir with the shell arm's cwd-independent form. It
 // returns output and error without failing the test — used for probes that
 // are EXPECTED to fail (a paused rebase, a bogus -C dir).
@@ -1225,7 +1251,7 @@ func TestConformancePortCoverageGuard(t *testing.T) {
 		"BuildAmendedTip": true, "LandAmendedTip": true,
 		"BlamePorcelain": true, "BranchExists": true, "ChangesContainedIn": true,
 		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitRange": true,
-		"CommitSubjects": true, "CreateBranch": true, "CreateBranchAt": true,
+		"CommitList": true, "CommitSubjects": true, "CreateBranch": true, "CreateBranchAt": true,
 		"CurrentBranch": true, "DeleteBranches": true, "DiffCachedHunks": true,
 		"DiffCachedPatchesFor": true, "ForceBranch": true, "HasStagedChanges": true,
 		"HasUnstagedChanges": true, "IsAncestor": true, "IsClean": true,

@@ -81,6 +81,24 @@ func TestCompleteOntoExcludesSubtree(t *testing.T) {
 	}
 }
 
+// TestCompleteCommits: commits' positional offers every tracked branch — the
+// engine refuses the trunk, so trunk is out.
+func TestCompleteCommits(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustRun(t, "git", "branch", "scratch")
+
+	out, err := runComplete(t, "commits", "0", "--")
+	if err != nil {
+		t.Fatalf("__complete commits: %v", err)
+	}
+	if want := "feat-a\nfeat-b\n"; out != want {
+		t.Fatalf("commits candidates = %q, want %q", out, want)
+	}
+}
+
 // TestCompleteTrackUntracked: track's positional offers local branches that are
 // neither tracked nor trunk.
 func TestCompleteTrackUntracked(t *testing.T) {
@@ -551,7 +569,7 @@ func TestCompletionRegistryIsSingleSource(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"checkout", "delete", "onto", "rename", "track", "untrack", "worktree"}
+	want := []string{"checkout", "commits", "delete", "onto", "rename", "track", "untrack", "worktree"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands with Completion = %v, want %v", got, want)
 	}

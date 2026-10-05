@@ -69,11 +69,11 @@ func TestHelpListsAllCommands(t *testing.T) {
 	// sides of the assertion (the golden pins the full help text elsewhere;
 	// this pins the machine-readable set).
 	wantCommands := []string{
-		"abort", "absorb", "bottom", "checkout", "completion", "continue",
-		"create", "delete", "down", "fold", "guide", "help", "init", "log",
-		"modify", "onto", "open", "prune", "rename", "repair", "restack",
-		"shell", "squash", "status", "submit", "sync", "top", "track",
-		"undo", "untrack", "up", "validate", "version", "worktree",
+		"abort", "absorb", "bottom", "checkout", "commits", "completion",
+		"continue", "create", "delete", "down", "fold", "guide", "help",
+		"init", "log", "modify", "onto", "open", "prune", "rename", "repair",
+		"restack", "shell", "squash", "status", "submit", "sync", "top",
+		"track", "undo", "untrack", "up", "validate", "version", "worktree",
 	}
 	var help struct {
 		Commands []struct {
@@ -116,6 +116,49 @@ func TestHelpListsAllCommands(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestCommitsE2E pins the read surface end to end: `st commits` lists the
+// commits in the recorded-base..tip range, matching `git log` on the same
+// range — and `main` refuses the trunk question.
+func TestCommitsE2E(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "add a")
+	r.create("feat-b", "b.txt", "b\n", "add b")
+
+	res := r.stOK("commits", "feat-b", "--json")
+	var payload struct {
+		Branch    string `json:"branch"`
+		ParentSHA string `json:"parentSHA"`
+		Commits   []struct {
+			SHA     string `json:"sha"`
+			Subject string `json:"subject"`
+		} `json:"commits"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &payload); err != nil {
+		t.Fatalf("commits --json not parseable: %v\n%s", err, res.stdout)
+	}
+	if payload.Branch != "feat-b" || payload.ParentSHA == "" {
+		t.Fatalf("commits payload = %+v, want feat-b with a recorded base", payload)
+	}
+	wantSHAs := strings.Fields(r.git("log", "--format=%H", payload.ParentSHA+"..feat-b"))
+	if len(payload.Commits) != len(wantSHAs) {
+		t.Fatalf("commits len = %d, git log %s..feat-b gives %d", len(payload.Commits), payload.ParentSHA, len(wantSHAs))
+	}
+	for i, c := range payload.Commits {
+		if c.SHA != wantSHAs[i] {
+			t.Fatalf("commits[%d].sha = %q, git log order says %q", i, c.SHA, wantSHAs[i])
+		}
+	}
+	if payload.Commits[0].Subject != "add b" {
+		t.Fatalf("newest subject = %q, want add b", payload.Commits[0].Subject)
+	}
+
+	res = r.st("commits", "main")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "trunk")
 }
 
 // TestUnknownCommand asserts an unrecognized command exits 1, writes the

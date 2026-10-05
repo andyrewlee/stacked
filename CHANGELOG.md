@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- New `st commits [<branch>] [--json]` lists the commits between a branch's
+  recorded stack base (`parentSHA`) and its live tip — `{branch, parentSHA,
+  commits: [{sha, subject}]}` — so agents can answer "what's in this branch"
+  without hand-building `git log` ranges.
+
 - `st status --json` and `st submit --dry-run --json` now report `published` —
   each branch's state (`current`/`stale`/`diverged`/`missing`/`unknown`)
   against its local remote-tracking ref, so an agent can answer "is a submit

@@ -7,6 +7,7 @@ commands:
   absorb             Absorb staged hunks into the stack commits that own their lines
   bottom (b)         Jump to the bottom branch of the current stack (just above trunk)
   checkout (co)      Check out a tracked branch (lists branches if no name)
+  commits            List the commits in a branch's recorded stack range (base..tip)
   completion         Print a shell completion script (bash|zsh|fish)
   continue           Resume a restack that was interrupted by a merge conflict
   create (c)         Create a new branch stacked on the current branch

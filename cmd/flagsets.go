@@ -175,6 +175,16 @@ func newTrackFlags(o *trackOpts) *flag.FlagSet {
 
 func trackFlagSet() *flag.FlagSet { return newTrackFlags(&trackOpts{}) }
 
+type commitsOpts struct {
+	asJSON bool
+}
+
+func newCommitsFlags(o *commitsOpts) *flag.FlagSet {
+	return withDefaults(newFlagSet("commits", &o.asJSON), "commits")
+}
+
+func commitsFlagSet() *flag.FlagSet { return newCommitsFlags(&commitsOpts{}) }
+
 type submitOpts struct {
 	asJSON bool
 	all    bool

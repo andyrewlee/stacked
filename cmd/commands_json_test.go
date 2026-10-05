@@ -676,6 +676,78 @@ func TestStatusDirtyWorktree(t *testing.T) {
 	}
 }
 
+// --- commits -----------------------------------------------------------------
+
+type commitsPayload struct {
+	Branch    string `json:"branch"`
+	ParentSHA string `json:"parentSHA"`
+	Commits   []struct {
+		SHA     string `json:"sha"`
+		Subject string `json:"subject"`
+	} `json:"commits"`
+}
+
+// TestCommitsTextAndJSON pins the read surface: text prints sha+subject
+// newest-first, JSON carries the recorded base it measured against.
+func TestCommitsTextAndJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "add a")
+	mustRun(t, "git", "commit", "-q", "--allow-empty", "-m", "add a2")
+
+	text := captureStdout(t, func() {
+		if err := runCommits(nil); err != nil {
+			t.Fatalf("commits: %v", err)
+		}
+	})
+	tip := mustRun(t, "git", "rev-parse", "feat-a")
+	base := mustRun(t, "git", "rev-parse", "main")
+	first := mustRun(t, "git", "rev-parse", "feat-a^")
+	for _, want := range []string{tip + " add a2", first + " add a\n"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("commits text missing %q:\n%s", want, text)
+		}
+	}
+	// Newest first: add a2 precedes add a.
+	if strings.Index(text, "add a2") > strings.Index(text, "add a\n") {
+		t.Fatalf("commits not newest-first:\n%s", text)
+	}
+
+	jsonOut := captureStdout(t, func() {
+		if err := runCommits([]string{"--json"}); err != nil {
+			t.Fatalf("commits --json: %v", err)
+		}
+	})
+	var p commitsPayload
+	decodeStrictJSON(t, "commits --json", jsonOut, &p)
+	if p.Branch != "feat-a" || p.ParentSHA != base {
+		t.Fatalf("commits payload = %+v, want branch feat-a base %s", p, base)
+	}
+	if len(p.Commits) != 2 || p.Commits[0].SHA != tip || p.Commits[0].Subject != "add a2" ||
+		p.Commits[1].SHA != first || p.Commits[1].Subject != "add a" {
+		t.Fatalf("commits list = %+v, want [tip add a2, first add a]", p.Commits)
+	}
+
+	// A positional selects another tracked branch; untracked refuses.
+	mustCreate(t, "feat-b", "b.txt", "b\n", "add b")
+	jsonOut = captureStdout(t, func() {
+		if err := runCommits([]string{"feat-a", "--json"}); err != nil {
+			t.Fatalf("commits feat-a --json: %v", err)
+		}
+	})
+	var p2 commitsPayload
+	decodeStrictJSON(t, "commits feat-a --json", jsonOut, &p2)
+	if p2.Branch != "feat-a" || len(p2.Commits) != 2 {
+		t.Fatalf("commits feat-a payload = %+v", p2)
+	}
+	if err := runCommits([]string{"scratch"}); err == nil || !strings.Contains(err.Error(), "not tracked") {
+		t.Fatalf("commits on untracked err = %v, want the not-tracked refusal", err)
+	}
+	if err := runCommits([]string{"main"}); err == nil || !strings.Contains(err.Error(), "trunk") {
+		t.Fatalf("commits on trunk err = %v, want the trunk refusal", err)
+	}
+}
+
 // --- init ------------------------------------------------------------------
 
 func TestInitJSONFreshAndRepeatedShape(t *testing.T) {

@@ -148,6 +148,15 @@ message.
   the sorted names, `omitempty` — since they cannot appear in the tree; text
   prints the same list as a `warning:` line advising `st repair`.
 - **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, `tip` is the current branch's live tip (`omitempty`, absent on detached HEAD or a deleted ref), and `needsRestack` is present only when it applies. `published` (`omitempty`) classifies the live tip against the branch's `refs/remotes/origin/<branch>` tracking ref: `current` (equal), `stale` (tracking ref is an ancestor — the branch is ahead; a submit is needed), `diverged` (tracking ref exists but is not an ancestor — the published history was rewritten locally), `missing` (no tracking ref — never pushed or pruned), or `unknown` (the comparison could not be made). It describes the last fetch or push only — never the server's current state — and is absent when no `origin` remote is configured or HEAD is detached. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
+- **`commits --json`** — `st commits [<branch>]` lists the commits between the
+  branch's RECORDED base and its live tip:
+  `{ "branch", "parentSHA", "commits": [ { "sha", "subject" }, … ] }` —
+  `parentSHA` is the stack model's recorded base (not a recomputed merge-base),
+  so a drifted stack reports its stale base honestly; the drift itself shows up
+  via `needsRestack`/`validate`. `commits` is newest-first and always a list
+  (`[]` when the range is empty). The trunk is refused — it has no stack base —
+  and an untracked branch gets the canonical `branch "X" is not tracked`. Text
+  mode prints `sha subject` per line, newest first.
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).

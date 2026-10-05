@@ -669,3 +669,40 @@ func CommitSubjects(base, branch string) ([]string, error) {
 	}
 	return strings.Split(out, "\n"), nil
 }
+
+// CommitInfo is one commit in a branch range — the full SHA and its subject
+// line.
+type CommitInfo struct {
+	SHA     string `json:"sha"`
+	Subject string `json:"subject"`
+}
+
+// CommitList returns the commits in the local branch range base..branch —
+// `git log base..branch` — newest first, as {SHA, subject} pairs in one
+// invocation. The subject is a commit's first line, so it can carry a tab but
+// never a newline: %x09 splits on the first tab only, leaving any later one
+// inside the subject intact.
+func CommitList(base, branch string) ([]CommitInfo, error) {
+	if err := validRefArg("ref", base); err != nil {
+		return nil, err
+	}
+	if err := validRefArg("branch", branch); err != nil {
+		return nil, err
+	}
+	out, err := Run("log", "--format=%H%x09%s", localBranchRef(base)+".."+LocalBranchNameRef(branch))
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var commits []CommitInfo
+	for _, line := range strings.Split(out, "\n") {
+		sha, subject, ok := strings.Cut(line, "\t")
+		if !ok || !IsHex40(sha) {
+			return nil, fmt.Errorf("unparseable git log line %q", line)
+		}
+		commits = append(commits, CommitInfo{SHA: sha, Subject: subject})
+	}
+	return commits, nil
+}
