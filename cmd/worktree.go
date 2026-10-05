@@ -183,22 +183,14 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 	if err != nil {
 		return materializedWorktree{}, err
 	}
-	addErr := git.WorktreeAdd(path, branch)
-	if addErr != nil {
-		// Invalidate even on error: a failed add can still have changed
-		// registration state, and a spare re-list is cheap.
-		resetProcCaches()
-		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, addErr)
+	if err := addWorktreePath(path, branch); err != nil {
+		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, err)
 	}
-	// The new worktree's identity is fully known — append it to the cache so
-	// `worktree --all` does not re-list once per add.
-	noteWorktreeAdded(path, branch)
 
 	copied, err := copyWorktreeIncludes(root, path)
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
-		removeErr := git.WorktreeRemove(path, true)
-		resetProcCaches()
+		removeErr := removeWorktreePath(path, true)
 		if removeErr != nil {
 			return materializedWorktree{}, stack.AlsoFailed(copyErr, fmt.Sprintf("remove failed worktree %q", path), removeErr)
 		}
@@ -257,9 +249,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	} else if inProgress {
 		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
 	}
-	removeErr := git.WorktreeRemove(wt.Path, false)
-	resetProcCaches()
-	if removeErr != nil {
+	if removeErr := removeWorktreePath(wt.Path, false); removeErr != nil {
 		return fmt.Errorf("removing worktree for %q: %w", branch, removeErr)
 	}
 	payload := struct {
@@ -434,8 +424,7 @@ func worktreeRemoveAll(asJSON bool) error {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipDirty})
 			continue
 		}
-		removeErr := git.WorktreeRemove(wt.Path, false)
-		resetProcCaches()
+		removeErr := removeWorktreePath(wt.Path, false)
 		if removeErr != nil {
 			result.Failed = &worktreeAllFailure{Branch: name, Error: removeErr.Error()}
 			return bulkWorktreeFailure(asJSON, result, "removing worktree for", name, "removed", len(result.Removed), len(names), removeErr)

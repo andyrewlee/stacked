@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -220,11 +219,7 @@ func teleportCheckout(branch string) (string, error) {
 			return wt.Path, nil
 		}
 	}
-	err = git.Checkout(branch)
-	// A checkout attempt can move HEAD even when it ultimately fails; drop the
-	// memoized worktree list (which records each worktree's checked-out
-	// branch) just as the cached port's Checkout override does.
-	resetProcCaches()
+	err = checkoutAndReset(branch)
 	if err != nil {
 		return "", fmt.Errorf("checking out %q: %w", branch, err)
 	}

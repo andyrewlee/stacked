@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -14,22 +15,25 @@ import (
 // cross-worktree restack cascade resolves ownership per branch — so
 // unmemoized probes spawn the same git subprocesses many times in a single
 // command. The cache stays correct because every worktree-mutating AND
-// HEAD-moving site invalidates it via resetProcCaches(): the cached port's
-// WorktreeRemove/Checkout/CheckoutDetach/RenameBranch overrides
-// (cmd/gitenv.go) cover engine-driven removals and checkouts, and its
+// HEAD-moving site invalidates it structurally, not by remembering: the
+// cached port's WorktreeRemove/Checkout/CheckoutDetach/RenameBranch
+// overrides (cmd/gitenv.go) cover engine-driven removals and checkouts, its
 // RebaseOnto/RebaseOntoIn/RebaseContinue/RebaseAbort/RebaseAbortIn overrides
 // cover rebase-driven HEAD moves (a rebase attempt — even one that errors —
-// can leave a different branch checked out in a worktree). The cmd layer's
-// direct git.WorktreeRemove and git.Checkout calls reset explicitly, and so
-// does the one off-port HEAD move: prepareUndoCreatedWorktrees' os.Chdir into
-// the main worktree. The one surgical exception is noteWorktreeAdded: a
-// worktree the process just created is fully described by the {Path, Branch}
-// it asked git for, so `st worktree --all` — which lists once per add
-// otherwise — appends the known entry instead of re-listing. worktrees() may
-// therefore be called at ANY point in a command and reflects the live
-// worktree topology. New worktree-mutating or HEAD-moving code must either
-// go through the cached port, call resetProcCaches(), or append what it
-// knows via noteWorktreeAdded.
+// can leave a different branch checked out in a worktree), and the cmd
+// layer's direct calls go through helpers that own the reset —
+// addWorktreePath/removeWorktreePath for `git worktree add`/`remove`,
+// checkoutAndReset for the one direct checkout, moveCwdAndReset for the one
+// off-port HEAD move (prepareUndoCreatedWorktrees' os.Chdir into the main
+// worktree). The one surgical exception is noteWorktreeAdded, reached only
+// through addWorktreePath: a worktree the process just created is fully
+// described by the {Path, Branch} it asked git for, so `st worktree --all` —
+// which lists once per add otherwise — appends the known entry instead of
+// re-listing. worktrees() may therefore be called at ANY point in a command
+// and reflects the live worktree topology. New worktree-mutating or
+// HEAD-moving code must go through the cached port or these helpers —
+// reaching for a bare git.Worktree*/git.Checkout/os.Chdir in cmd is a
+// design smell.
 //
 // CurrentBranch is NOT memoized here: its memo lives per cachedPort instance
 // (cmd/gitenv.go) so a stale branch name cannot outlive the port a command
@@ -89,13 +93,56 @@ func noteWorktreeAdded(path, branch string) {
 }
 
 // resetProcCaches discards the process-scoped git memo — the worktree
-// list — so the next worktrees() call re-lists. Every worktree-mutating or
-// HEAD-moving call site invalidates through it (except the appendable add);
-// the test harness also calls it when it chdirs into a fresh repo.
+// list — so the next worktrees() call re-lists. Worktree-mutating and
+// HEAD-moving call sites invalidate through the helpers below (or the
+// cached port's overrides), never through a bare resetProcCaches(); the
+// test harness calls it directly when it chdirs into a fresh repo.
 func resetProcCaches() {
 	worktreeCacheState.Lock()
 	defer worktreeCacheState.Unlock()
 	worktreeCacheState.probed = false
 	worktreeCacheState.wts = nil
 	git.ForgetDirMemos()
+}
+
+// The mutation helpers own the invalidation so a caller cannot forget it —
+// the structural form of the rule above. Each resets even on error: a failed
+// mutation can still have moved state.
+
+// addWorktreePath runs git.WorktreeAdd, then either records the fully-known
+// entry (noteWorktreeAdded — the deliberate append exception) on success or
+// resets the cache on error, when the failed add may have changed
+// registration state.
+func addWorktreePath(path, branch string) error {
+	if err := git.WorktreeAdd(path, branch); err != nil {
+		resetProcCaches()
+		return err
+	}
+	noteWorktreeAdded(path, branch)
+	return nil
+}
+
+// removeWorktreePath runs git.WorktreeRemove then invalidates.
+func removeWorktreePath(path string, force bool) error {
+	err := git.WorktreeRemove(path, force)
+	resetProcCaches()
+	return err
+}
+
+// checkoutAndReset runs git.Checkout then invalidates — a checkout attempt
+// can move HEAD even when it ultimately fails.
+func checkoutAndReset(branch string) error {
+	err := git.Checkout(branch)
+	resetProcCaches()
+	return err
+}
+
+// moveCwdAndReset runs os.Chdir then invalidates. The process's cwd moving
+// worktrees does not change the worktree list itself, but worktree paths and
+// HEAD now read relative to the destination — drop the memo so any later
+// read re-lists.
+func moveCwdAndReset(dir string) error {
+	err := os.Chdir(dir)
+	resetProcCaches()
+	return err
 }

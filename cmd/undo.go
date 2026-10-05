@@ -3,7 +3,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,15 +317,12 @@ func prepareUndoCreatedWorktrees(entries []stack.UndoEntry, live *stack.State) (
 	if !shimActive() {
 		return "", fmt.Errorf("cannot undo creation of current worktree branch %q from inside its worktree %q without the shell shim; run from the main worktree or run: cd %s && st undo", cur, owner.Path, main.Path)
 	}
-	if err := os.Chdir(main.Path); err != nil {
+	// The process's cwd moves worktrees; moveCwdAndReset drops the memoized
+	// list so later reads re-list (the per-port CurrentBranch/RepoRoot memos
+	// do not need this: the undo loop builds fresh ports after this move).
+	if err := moveCwdAndReset(main.Path); err != nil {
 		return "", fmt.Errorf("leaving worktree %q before undo: %w", owner.Path, err)
 	}
-	// The process's cwd moved worktrees: the worktree list itself did not
-	// change, but worktree paths and HEAD now read relative to the main
-	// worktree — drop the memoized list so any later read re-lists (the
-	// per-port CurrentBranch/RepoRoot memos do not need this: the undo loop
-	// builds fresh ports after this move).
-	resetProcCaches()
 	if inProgress, err := git.RebaseInProgress(); err != nil {
 		return "", err
 	} else if inProgress {
