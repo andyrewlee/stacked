@@ -176,6 +176,10 @@ type commandInfo struct {
 	Usage   string     `json:"usage"`
 	Aliases []string   `json:"aliases,omitempty"`
 	Flags   []flagInfo `json:"flags,omitempty"`
+	// SubVerbs lists the literal sub-verbs the command accepts (worktree's
+	// ls/rm, shell's install) — declared once on the registry entry, emitted
+	// here so agents need not regex the prose usage string for them.
+	SubVerbs []string `json:"subVerbs,omitempty"`
 }
 
 // flagInfo describes one declared flag (a flat entry: -m and --message and --json
@@ -191,7 +195,7 @@ type flagInfo struct {
 // registeredInfo builds the machine-readable description of a registered command,
 // including its declared flags.
 func registeredInfo(c *Command) commandInfo {
-	return commandInfo{Name: c.Name, Summary: c.Summary, Usage: c.Usage, Aliases: c.Aliases, Flags: commandFlags(c)}
+	return commandInfo{Name: c.Name, Summary: c.Summary, Usage: c.Usage, Aliases: c.Aliases, Flags: commandFlags(c), SubVerbs: c.SubVerbs}
 }
 
 // commandFlags lists a command's declared flags by introspecting the very flag

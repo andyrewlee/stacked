@@ -1501,6 +1501,28 @@ func TestSubVerbsMatchUsage(t *testing.T) {
 	}
 }
 
+// TestSubVerbsReachHelpJSON pins the schema emission: every registered
+// SubVerbs list must reach `help <name> --json` verbatim, and commands without
+// sub-verbs must omit the key — the registry→JSON honesty the Usage pin
+// asserts for prose.
+func TestSubVerbsReachHelpJSON(t *testing.T) {
+	for _, c := range registry {
+		if c.Hidden {
+			continue
+		}
+		out := captureStdout(t, func() {
+			withArgs(t, []string{"help", c.Name, "--json"}, func() { _ = Execute() })
+		})
+		var info commandInfo
+		if err := json.Unmarshal([]byte(out), &info); err != nil {
+			t.Fatalf("help %s --json not parseable: %v\n%s", c.Name, err, out)
+		}
+		if !reflect.DeepEqual(info.SubVerbs, c.SubVerbs) {
+			t.Errorf("help %s --json subVerbs = %v, want registered %v", c.Name, info.SubVerbs, c.SubVerbs)
+		}
+	}
+}
+
 // TestCompletionScriptsParse feeds each generated script to its real shell's
 // no-execute parser when the interpreter is on PATH (skip otherwise, for
 // hermeticity). The substring assertions elsewhere document content; this
