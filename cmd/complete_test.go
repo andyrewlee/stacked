@@ -202,6 +202,7 @@ func TestCompleteDoubleDashPositional(t *testing.T) {
 // TestCompleteWorktree: the create form offers tracked branches without a
 // linked worktree; after rm|remove it offers owners only.
 func TestCompleteWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")

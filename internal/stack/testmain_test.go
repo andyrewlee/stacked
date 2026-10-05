@@ -67,7 +67,8 @@ func TestGitFixtureEnvironmentIsolation(t *testing.T) {
 	// A decoy repository the routing variables point at: if GIT_DIR or
 	// GIT_WORK_TREE leak into the child, its fixture commits land here.
 	decoy := filepath.Join(hostile, "decoy")
-	fixtureGit(t, "", "init", "-q", "-b", "main", decoy)
+	fixtureGit(t, "", "init", "-q", decoy)
+	fixtureGit(t, decoy, "symbolic-ref", "HEAD", "refs/heads/main")
 
 	// A signer and a hook that record any invocation to a sentinel file and
 	// then fail, so contamination breaks the fixture commit and is provable
