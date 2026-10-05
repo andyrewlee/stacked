@@ -27,6 +27,12 @@ type submitResult struct {
 	RepoURL string         `json:"repoURL,omitempty"`
 	PRHints []stack.PRHint `json:"prHints,omitempty"`
 	Summary string         `json:"summary,omitempty"`
+	// Published maps each would-push branch to its state against the remote's
+	// local tracking ref — current/stale/diverged/missing/unknown, reflecting
+	// the last fetch or push, never live server state. Emitted only for
+	// --dry-run, where "is a submit needed" is the decision being made; a real
+	// push moves the tracking refs, so its Pushed/Failed records are the truth.
+	Published map[string]git.PublishedState `json:"published,omitempty"`
 	// Failed names the first branch (in stack order) the remote confirmed
 	// rejected; set only on a partial failure, alongside every branch
 	// confirmed pushed (in Pushed). A ref whose outcome is unconfirmed is
@@ -147,7 +153,14 @@ func runSubmit(args []string) error {
 	}
 	prHints := stack.PRHintsFor(state, stackBranches, repoURL, host)
 
-	payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: pushed, RepoURL: repoURL, PRHints: prHints}
+	var published map[string]git.PublishedState
+	if dryRun {
+		if published, err = git.PublishedStates(remote, stackBranches); err != nil {
+			return err
+		}
+	}
+
+	payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: pushed, RepoURL: repoURL, PRHints: prHints, Published: published}
 	return emit(asJSON, payload, func() {
 		if dryRun {
 			out("\ndry run: %d branch(es) would be pushed to %s:\n", len(pushed), sanitizeForTerminal(remote))

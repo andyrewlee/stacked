@@ -212,3 +212,110 @@ func RemoteURL(remote string) (string, error) {
 	}
 	return Run("remote", "get-url", remote)
 }
+
+// PublishedState classifies a branch's live local tip against its
+// remote-tracking ref (refs/remotes/<remote>/<branch>) as it stands locally.
+// It describes the last fetch/push — never the server's current state.
+type PublishedState string
+
+const (
+	// PublishedCurrent means the tracking ref equals the live tip.
+	PublishedCurrent PublishedState = "current"
+	// PublishedStale means the tracking ref is an ancestor of the live tip —
+	// the branch is ahead of what the remote last saw; submit needed.
+	PublishedStale PublishedState = "stale"
+	// PublishedDiverged means the tracking ref exists but is not an ancestor
+	// of the live tip — the published history was rewritten locally.
+	PublishedDiverged PublishedState = "diverged"
+	// PublishedMissing means no tracking ref exists under the remote — never
+	// pushed, or the ref was pruned.
+	PublishedMissing PublishedState = "missing"
+	// PublishedUnknown means the comparison could not be made — a missing
+	// local ref or a failed probe.
+	PublishedUnknown PublishedState = "unknown"
+)
+
+// RemoteTrackingTips lists refs/remotes/<remote>/<branch> → SHA in one
+// for-each-ref invocation, keyed by the branch part. The map is the remote's
+// tracking-ref cache — what the last fetch or push recorded, not live server
+// state.
+func RemoteTrackingTips(remote string) (map[string]string, error) {
+	if err := validRefArg("remote", remote); err != nil {
+		return nil, err
+	}
+	prefix := "refs/remotes/" + remote + "/"
+	out, err := Run("for-each-ref", "--format=%(refname) %(objectname)", prefix)
+	if err != nil {
+		return nil, err
+	}
+	tips := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		ref, sha, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		tips[strings.TrimPrefix(ref, prefix)] = sha
+	}
+	return tips, nil
+}
+
+// PublishedStates compares each named branch's live local tip to its
+// remote-tracking ref under remote, per the PublishedState contract. The
+// reads are two batched probes (one for-each-ref, one TipsFor) plus a bounded
+// fan-out of merge-base --is-ancestor only for branches whose tracking ref
+// differs from the tip — no network access, ever.
+func PublishedStates(remote string, branches []string) (map[string]PublishedState, error) {
+	states := make(map[string]PublishedState, len(branches))
+	if len(branches) == 0 {
+		return states, nil
+	}
+	tracking, err := RemoteTrackingTips(remote)
+	if err != nil {
+		return nil, err
+	}
+	tips, err := TipsFor(branches)
+	if err != nil {
+		return nil, err
+	}
+	// Equality and presence classify most branches in-process; only the
+	// unequal survivors need the ancestry probe.
+	checkIdx := []int{}
+	ancestors := []bool{}
+	ancestorOK := []bool{}
+	for i, name := range branches {
+		tip := tips[name]
+		tracked, trackedOK := tracking[name]
+		switch {
+		case tip == "":
+			states[name] = PublishedUnknown
+		case !trackedOK:
+			states[name] = PublishedMissing
+		case tracked == tip:
+			states[name] = PublishedCurrent
+		default:
+			checkIdx = append(checkIdx, i)
+			ancestors = append(ancestors, false)
+			ancestorOK = append(ancestorOK, false)
+		}
+	}
+	_ = ParallelProbes(len(checkIdx), func(i int) error {
+		anc, err := IsAncestor(tracking[branches[checkIdx[i]]], tips[branches[checkIdx[i]]])
+		if err != nil {
+			return nil // a failed ancestry probe is per-branch unknown, not fatal
+		}
+		ancestors[i] = anc
+		ancestorOK[i] = true
+		return nil
+	})
+	for i, bi := range checkIdx {
+		switch {
+		case !ancestorOK[i]:
+			states[branches[bi]] = PublishedUnknown
+		case ancestors[i]:
+			states[branches[bi]] = PublishedStale
+		default:
+			states[branches[bi]] = PublishedDiverged
+		}
+	}
+	return states, nil
+}

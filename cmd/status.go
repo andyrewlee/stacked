@@ -105,6 +105,19 @@ func runStatus(args []string) error {
 		tip = tips[cur]
 	}
 
+	// Published state compares the live tip to the local tracking ref — the
+	// last fetch/push, not the server's current state. status resolves "the"
+	// remote as origin, the single-remote default every command shares; with
+	// no origin there is no remote context and the field stays absent.
+	published := ""
+	if cur != "" && newGitPort().remoteExists("origin") {
+		states, err := git.PublishedStates("origin", []string{cur})
+		if err != nil {
+			return err
+		}
+		published = string(states[cur])
+	}
+
 	// In a multi-worktree repo, report where the current branch lives. Gated so
 	// single-tree output is byte-for-byte unchanged (worktreePath stays "").
 	worktreePath := ""
@@ -123,6 +136,7 @@ func runStatus(args []string) error {
 			Role             string   `json:"role"`
 			Parent           string   `json:"parent,omitempty"`
 			Tip              string   `json:"tip,omitempty"`
+			Published        string   `json:"published,omitempty"`
 			Children         []string `json:"children"`
 			NeedsRestack     *bool    `json:"needsRestack,omitempty"`
 			WorktreeClean    bool     `json:"worktreeClean"`
@@ -130,7 +144,7 @@ func runStatus(args []string) error {
 			RebaseBranch     string   `json:"rebaseBranch,omitempty"`
 			ConflictedFiles  []string `json:"conflictedFiles,omitempty"`
 			Worktree         string   `json:"worktree,omitempty"`
-		}{cur, s.Trunk, role, parent, tip, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
+		}{cur, s.Trunk, role, parent, tip, published, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err

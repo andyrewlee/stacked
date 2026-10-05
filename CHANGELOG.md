@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+
+- `st status --json` and `st submit --dry-run --json` now report `published` —
+  each branch's state (`current`/`stale`/`diverged`/`missing`/`unknown`)
+  against its local remote-tracking ref, so an agent can answer "is a submit
+  needed" without a fetch.
 - **`st log --json` and `st status --json` report the live tip SHA.** Each
   `log` node and the `status` payload carry `tip` (`omitempty`) — the live
   ref tip from the same batched probe the render already ran, versus the
