@@ -40,7 +40,8 @@ Branch on the exit code; do not parse messages.
 
 ## JSON output
 
-Every subcommand except `completion` and `shell` accepts `--json`. The built-ins `help`,
+Every subcommand except `__complete` and `completion` and `shell` accepts `--json`
+(`__complete` is the hidden completion endpoint, not a user command). The built-ins `help`,
 `-h`/`--help`, `version`, and `-v`/`--version` also accept `--json`. Successful
 JSON output is a single indented object on **stdout**. On failure, `--json`
 writes a structured envelope to **stderr** and the process still exits with the
@@ -137,7 +138,7 @@ message.
   cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
   the sorted names, `omitempty` — since they cannot appear in the tree; text
   prints the same list as a `warning:` line advising `st repair`.
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the linked worktree the current branch lives in, `omitempty`).
+- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
@@ -227,10 +228,10 @@ message.
     `blockers` lists, in the real undo's gate order, everything a real run
     would refuse on: `rebase_in_progress`, `state_too_new`,
     `malformed_snapshot`, `malformed_journal`,
+    `ref_moved_since:<b>`, `paused_rebase:<b>`,
     `cwd_inside_created_worktree:<b>`,
     `recorded_worktree_mismatch:<b>`, `worktree_dirty:<b>`,
-    `missing_restore_target:<b>`, `ref_moved_since:<b>`,
-    `paused_rebase:<b>` — a missing ref is
+    `missing_restore_target:<b>` — a missing ref is
     NOT a blocker (undo
     restores it). `ref_moved_since:<b>` marks a branch whose live tip no
     longer matches either the recorded pre- or post-operation tip — it moved
@@ -257,7 +258,10 @@ message.
     computed preview exits 0 even with
     blockers (they are data); an empty journal emits
     `{ "dryRun": true, "undone": false }`. `--dry-run` and `--list` are
-    mutually exclusive (exit 1). The preview holds the advisory lock but
+    mutually exclusive (exit 1), and `--force` pairs with neither —
+    `--force`/`--dry-run` and `--force`/`--list` both exit 1, since a
+    preview or listing never moves refs and has nothing to force. The
+    preview holds the advisory lock but
     mutates nothing — state, journal, refs, worktrees, and cwd are unchanged,
     and a later real `st undo` revalidates everything (no reservation).
   - `undo --dry-run <n> --json` (n > 1) previews each of the newest `n` steps
@@ -301,7 +305,13 @@ message.
   resolve pauses, while `undo` and `worktree rm` apply their own narrower
   refusals scoped to the refs or worktree they would touch.
 - `undo` reverts the last mutating command's metadata and branch tips; it does not
-  touch the working tree. `undo <n>` rewinds the newest `n` journal entries
+  touch the working tree. Only commands routed through the shared `mutate`
+  wrapper journal entries — `create`, `modify`, `fold`, `squash`, `onto`,
+  `delete`, `rename`, `track`, `untrack`, `restack`, `prune`, `absorb`,
+  `repair`, `sync`'s local mutations, and `create --worktree`. `worktree`
+  add/rm/`--all`, `init`, `submit`, `checkout`/navigation, `continue`,
+  `abort`, and `undo` itself record nothing and are not undoable.
+  `undo <n>` rewinds the newest `n` journal entries
   newest-first; each step drops its journal entry only after its restore
   completes — within a step the snapshot-ref restore is one atomic
   transaction, but earlier cleanup (deleting branches/worktrees the undone

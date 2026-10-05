@@ -134,7 +134,7 @@ before or after a positional branch name — the exception is `st undo`'s
 count positional, which parses flags only before it (`st undo --json 2`,
 not `st undo 2 --json`).
 
-Every command below except `completion` and `shell` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
+Every command below except `__complete` and `completion` and `shell` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
 
 | Command | Aliases | Summary |
 | --- | --- | --- |
