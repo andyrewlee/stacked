@@ -118,6 +118,24 @@ func DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	hunks, unsupported, claimed, err := parseCachedDiffSections(out)
+	if err != nil {
+		return nil, nil, err
+	}
+	for p := range inventory {
+		if !claimed[p] {
+			unsupported = append(unsupported, UnsupportedRecord{File: p, Reason: "unaccounted staged change"})
+		}
+	}
+	return hunks, unsupported, nil
+}
+
+// parseCachedDiffSections classifies `git diff --cached -U0` output into
+// hunk/unsupported sections — the pure half of DiffCachedHunks, split so the
+// section grammar is fuzzable without a repository. `claimed` is the set of
+// staged paths a section accounted for (the caller's inventory cross-check
+// turns anything unclaimed into a refusal).
+func parseCachedDiffSections(out string) ([]Hunk, []UnsupportedRecord, map[string]bool, error) {
 	var hunks []Hunk
 	var unsupported []UnsupportedRecord
 	claimed := map[string]bool{}
@@ -190,7 +208,7 @@ func DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) {
 			}
 		case !sec.open:
 			if line != "" {
-				return nil, nil, fmt.Errorf("git diff --cached: unexpected output before first section: %q", line)
+				return nil, nil, nil, fmt.Errorf("git diff --cached: unexpected output before first section: %q", line)
 			}
 		case !sec.sawHunk && (strings.HasPrefix(line, "old mode ") || strings.HasPrefix(line, "new mode ")):
 			sec.modeChange = true
@@ -234,12 +252,7 @@ func DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) {
 		}
 	}
 	flush()
-	for p := range inventory {
-		if !claimed[p] {
-			unsupported = append(unsupported, UnsupportedRecord{File: p, Reason: "unaccounted staged change"})
-		}
-	}
-	return hunks, unsupported, nil
+	return hunks, unsupported, claimed, nil
 }
 
 // parseHunkHeader parses "@@ -<oldStart>[,<oldN>] +<newStart>[,<newN>] @@ ...";

@@ -97,3 +97,66 @@ func firstDuplicate(names []string) string {
 	}
 	return ""
 }
+
+// FuzzDecodeState hardens the state.json decoder — the file the code itself
+// calls potentially hostile (hand-edited, corrupt, or written by a newer st).
+// Contract: no panic; parseable input that violates the schema is refused
+// (too-new version, map-key/name disagreement, a trunk-named record); valid
+// bytes decode to a State whose branches carry coherent Name fields.
+func FuzzDecodeState(f *testing.F) {
+	f.Add(`{"version":1,"trunk":"main","branches":{"a":{"name":"a","parent":"main","parentSHA":"deadbeef"}}}`)
+	f.Add(`{"version":2,"trunk":"main","branches":{}}`)                           // too new
+	f.Add(`{"version":1,"trunk":"main","branches":{"a":{"name":"b"}}}`)           // key/name mismatch
+	f.Add(`{"version":1,"trunk":"main","branches":{"main":{"name":"main"}}}`)     // trunk in branches
+	f.Add(`{"version":1,"trunk":"main","branches":{"a":null}}`)                   // nil record
+	f.Add(`{"trunk":"main","branches":{"a":{"parent":"main","parentSHA":"ab"}}}`) // legacy v0
+	f.Add(`{"version":1,"trunk":"main","branches":{"a":{"parent":"ghost"}}}`)     // dangling parent
+	f.Add(`{"version":1,"trunk":"main","branches`)
+	f.Add(`not json at all`)
+	f.Add(``)
+
+	f.Fuzz(func(t *testing.T, data string) {
+		s, err := decodeState([]byte(data))
+		if err != nil {
+			return // refused input is fine — only panics and silent corruption are bugs
+		}
+		if s == nil {
+			t.Fatal("decodeState returned (nil, nil)")
+		}
+		for key, b := range s.Branches {
+			if b == nil {
+				t.Fatalf("decoded state carries a nil record for %q", key)
+			}
+			if b.Name != key {
+				t.Fatalf("decoded state key %q disagrees with record name %q — decoder must refuse or backfill", key, b.Name)
+			}
+			if key == s.Trunk {
+				t.Fatalf("decoded state lets trunk %q appear as a tracked branch", key)
+			}
+		}
+	})
+}
+
+// FuzzDecodeUndoState exercises the same schema barrier through the undo
+// journal's two entry points — ValidateUndoState and DecodeUndoState must
+// agree on every input (a journal snapshot is a serialized State).
+func FuzzDecodeUndoState(f *testing.F) {
+	f.Add(`{"version":1,"trunk":"main","branches":{"a":{"name":"a","parent":"main","parentSHA":"deadbeef"}}}`)
+	f.Add(`{"version":99,"trunk":"main","branches":{}}`)
+	f.Add(`{"version":1,"trunk":"main","branches":{"x":{"name":"y"}}}`)
+	f.Add(`{"version":1,"trunk":"main"}`)
+	f.Add(`{"version":-1,"trunk":"main","branches":{}}`)
+	f.Add(`[]`)
+	f.Add(``)
+
+	f.Fuzz(func(t *testing.T, data string) {
+		s, err := DecodeUndoState([]byte(data))
+		validErr := ValidateUndoState([]byte(data))
+		if (err == nil) != (validErr == nil) {
+			t.Fatalf("DecodeUndoState err=%v but ValidateUndoState err=%v — the two barriers disagree", err, validErr)
+		}
+		if err == nil && s == nil {
+			t.Fatal("DecodeUndoState returned (nil, nil)")
+		}
+	})
+}

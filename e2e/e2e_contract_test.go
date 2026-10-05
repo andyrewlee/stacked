@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -63,9 +64,17 @@ func TestHelpListsAllCommands(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 
-	// Derive the command set from the binary's own machine-readable help (which
-	// is generated from the registry), so this can never drift from a
-	// hand-maintained slice (TEST-8).
+	// The command set is asserted against an explicit list — deriving it from
+	// `help --json` itself would let a dropped command disappear from both
+	// sides of the assertion (the golden pins the full help text elsewhere;
+	// this pins the machine-readable set).
+	wantCommands := []string{
+		"abort", "absorb", "bottom", "checkout", "completion", "continue",
+		"create", "delete", "down", "fold", "guide", "help", "init", "log",
+		"modify", "onto", "open", "prune", "rename", "repair", "restack",
+		"shell", "squash", "status", "submit", "sync", "top", "track",
+		"undo", "untrack", "up", "validate", "version", "worktree",
+	}
 	var help struct {
 		Commands []struct {
 			Name string `json:"name"`
@@ -75,8 +84,26 @@ func TestHelpListsAllCommands(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.stdout), &help); err != nil {
 		t.Fatalf("help --json not parseable: %v\n%s", err, res.stdout)
 	}
-	if len(help.Commands) < 20 {
-		t.Fatalf("help --json listed only %d commands, expected the full registry", len(help.Commands))
+	got := map[string]bool{}
+	for _, c := range help.Commands {
+		got[c.Name] = true
+	}
+	if len(help.Commands) != len(got) {
+		t.Fatalf("help --json lists duplicate command names: %s", res.stdout)
+	}
+	for _, name := range wantCommands {
+		if !got[name] {
+			t.Fatalf("help --json missing command %q\njson:\n%s", name, res.stdout)
+		}
+		delete(got, name)
+	}
+	if len(got) != 0 {
+		var extra []string
+		for name := range got {
+			extra = append(extra, name)
+		}
+		sort.Strings(extra)
+		t.Fatalf("help --json lists unexpected commands %v — update the pinned set if this is a new command", extra)
 	}
 
 	for _, form := range [][]string{nil, {"help"}, {"-h"}, {"--help"}} {
