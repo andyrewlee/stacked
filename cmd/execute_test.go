@@ -402,6 +402,25 @@ func TestHelpJSONIncludesFlags(t *testing.T) {
 	}
 }
 
+// TestHelpCompleteEndpointReportsNoFlags pins `help __complete --json`: the
+// hidden completion endpoint takes no flags, so its flag list must be empty
+// rather than fabricating the --json default a flagless NewFlagSet would get.
+func TestHelpCompleteEndpointReportsNoFlags(t *testing.T) {
+	out := captureStdout(t, func() {
+		withArgs(t, []string{"help", "__complete", "--json"}, func() { _ = Execute() })
+	})
+	var info commandInfo
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		t.Fatalf("help __complete --json not parseable: %v\n%s", err, out)
+	}
+	if info.Name != "__complete" {
+		t.Errorf("name = %q, want __complete", info.Name)
+	}
+	if len(info.Flags) != 0 {
+		t.Errorf("__complete advertises flags it rejects: %+v", info.Flags)
+	}
+}
+
 // TestUnknownFlagPointsAtHelp asserts an unknown flag's error points at the
 // command's help, mirroring the unknown-command path (the raw stdlib message is
 // a dead end otherwise).

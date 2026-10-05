@@ -18,10 +18,11 @@ import (
 
 func init() {
 	register(&Command{
-		Name:   "__complete",
-		Usage:  "st __complete <command> <index> -- <words...>",
-		Hidden: true,
-		Run:    runCompleteEndpoint,
+		Name:       "__complete",
+		Usage:      "st __complete <command> <index> -- <words...>",
+		Hidden:     true,
+		NewFlagSet: emptyFlagSet("__complete"),
+		Run:        runCompleteEndpoint,
 	})
 }
 

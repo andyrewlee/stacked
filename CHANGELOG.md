@@ -47,13 +47,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   worktrees (even when none was recorded) and dirtiness, and `blockers`
   names — in the real undo's gate order — everything a real run would
   refuse on (`rebase_in_progress`, `state_too_new`, `malformed_snapshot`,
-  `malformed_journal`, `cwd_inside_created_worktree`, `worktree_dirty`,
-  `recorded_worktree_mismatch`, `missing_restore_target`, `ref_moved_since`,
-  `paused_rebase`). The preview holds the
+  `malformed_journal`, `ref_moved_since`, `paused_rebase`,
+  `cwd_inside_created_worktree`, then per-branch
+  `recorded_worktree_mismatch`, `worktree_dirty`,
+  `missing_restore_target`). The preview holds the
   advisory lock but
   mutates nothing: state, journal, refs, worktrees, and cwd are byte-for-
   byte unchanged, and a later real undo revalidates everything. `--dry-run`
-  and `--list` are mutually exclusive; blockers are data, exit is still 0.
+  and `--list` are mutually exclusive, and `--force` pairs with neither
+  (a preview or listing never moves refs); blockers are data, exit is
+  still 0.
 - **`st prune` is sync's prune step as a standalone command.** It deletes
   every tracked branch already merged into the local trunk — or into
   `refs/remotes/<remote>/<trunk>` with `--remote` (no fetch; a missing
@@ -87,7 +90,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   All-or-nothing: any refusal or dirty target worktree leaves the whole plan
   unapplied.
 
+### Security
+- **Git output folded into errors is credential-scrubbed.** Captured git
+  stderr/stdout that reaches error text or `--json` envelopes is now
+  stripped of credential-shaped `scheme://userinfo@host` and
+  `user:pass@host:` material first, so a remote URL carrying a token can
+  no longer surface in diagnostics.
+
 ### Changed
+- **Independent read-only git probes run concurrently.** `st log`'s
+  merge-base checks, `track --all`'s parent inference, and the
+  merge-containment sweeps in prune/sync now fan out through a bounded
+  parallel probe helper instead of serial `git` spawns; output ordering
+  is unchanged.
 - **Mutating commands spawn fewer git probes.** The command-layer git port
   (`cmd/gitenv.go`) memoizes `CurrentBranch` and `RepoRoot` per port
   instance — `st modify` asks `rev-parse --abbrev-ref HEAD` once instead of
