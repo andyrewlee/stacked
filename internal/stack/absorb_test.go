@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/andyrewlee/stacked/internal/git"
 )
@@ -1066,9 +1068,10 @@ func TestAbsorbPostAmendProbeFailures(t *testing.T) {
 	})
 }
 
-// failNthAmendGit wraps a Git port so the nth AmendTipWithPatch call returns
-// err — a test-local seam for failing a mid-sequence absorb amend without
-// touching the shared fake's knobs.
+// failNthAmendGit wraps a Git port so the nth LandAmendedTip call returns
+// err — a test-local seam for failing a mid-sequence absorb ref move without
+// touching the shared fake's knobs. (A failure on the BUILD half aborts
+// before any land; only a land failure leaves earlier amends persisted.)
 type failNthAmendGit struct {
 	Git
 	n     int
@@ -1076,12 +1079,12 @@ type failNthAmendGit struct {
 	calls int
 }
 
-func (w *failNthAmendGit) AmendTipWithPatch(branch string, patch []byte) (string, error) {
+func (w *failNthAmendGit) LandAmendedTip(branch, oldTip, newTip string) error {
 	w.calls++
 	if w.calls == w.n {
-		return "", w.err
+		return w.err
 	}
-	return w.Git.AmendTipWithPatch(branch, patch)
+	return w.Git.LandAmendedTip(branch, oldTip, newTip)
 }
 
 // ckpt records every AbsorbCheckpoint argument in call order (the maps are
@@ -1401,4 +1404,132 @@ func TestAbsorbRecoveryCheckpoints(t *testing.T) {
 			}
 		})
 	})
+}
+
+// absorbBuildBarrier proves absorb's per-target amended-tip builds overlap:
+// each BuildAmendedTip call parks until every build is in flight at once —
+// a serial build loop leaves each call parked for the full timeout, so a
+// regression fails loudly instead of hanging the suite.
+type absorbBuildBarrier struct {
+	Git
+	need     int64
+	arrived  atomic.Int64
+	timedOut atomic.Bool // a call gave up waiting — the builds ran serially
+	release  chan struct{}
+	lands    atomic.Int64
+}
+
+func (w *absorbBuildBarrier) BuildAmendedTip(branch string, patch []byte) (string, string, error) {
+	if w.arrived.Add(1) == w.need {
+		close(w.release)
+	}
+	select {
+	case <-w.release:
+	case <-time.After(2 * time.Second):
+		w.timedOut.Store(true)
+	}
+	return w.Git.BuildAmendedTip(branch, patch)
+}
+
+func (w *absorbBuildBarrier) LandAmendedTip(branch, oldTip, newTip string) error {
+	w.lands.Add(1)
+	return w.Git.LandAmendedTip(branch, oldTip, newTip)
+}
+
+// failNthBuildGit wraps a Git port so the nth BuildAmendedTip call returns
+// err — failing an absorb amend's side-effect-free half, which must abort
+// the op before ANY ref moves (unlike failNthAmendGit's land failure, which
+// leaves earlier amends persisted).
+type failNthBuildGit struct {
+	Git
+	n     int
+	err   error
+	calls int
+}
+
+func (w *failNthBuildGit) BuildAmendedTip(branch string, patch []byte) (string, string, error) {
+	w.calls++
+	if w.calls == w.n {
+		return "", "", w.err
+	}
+	return w.Git.BuildAmendedTip(branch, patch)
+}
+
+func TestAbsorbFansOutAmendBuilds(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedPatch = []byte("fake patch")
+	f.stagedHunks = []git.Hunk{
+		{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+		{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
+	}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+		2: blameID(tips["a"], 2, "f.txt"),
+		5: blameID(tips["b"], 5, "f.txt"),
+	}}
+	barrier := &absorbBuildBarrier{Git: f, need: 2, release: make(chan struct{})}
+	env.Git = barrier
+	c := &ckpt{}
+	env.AbsorbCheckpoint = c.hook()
+
+	res, err := Absorb(env, s)
+	if err != nil {
+		t.Fatalf("Absorb: %v", err)
+	}
+	if barrier.timedOut.Load() {
+		t.Fatalf("only %d of 2 builds were ever in flight — the amend builds regressed to serial", barrier.arrived.Load())
+	}
+	if got := barrier.lands.Load(); got != 2 {
+		t.Fatalf("lands = %d, want 2 (one per target, in landed order)", got)
+	}
+	// Checkpoint k names only landed amends: map[0] has a alone, map[1] adds b.
+	if len(c.maps) < 2 {
+		t.Fatalf("checkpoints = %d, want at least the 2 per-target writes", len(c.maps))
+	}
+	if len(c.maps[0]) != 1 || c.maps[0]["a"] == "" {
+		t.Fatalf("checkpoint[0] = %v, want only a's landed amend", c.maps[0])
+	}
+	if len(c.maps[1]) != 2 || c.maps[1]["b"] == "" {
+		t.Fatalf("checkpoint[1] = %v, want a+b landed", c.maps[1])
+	}
+	if res.DryRun {
+		t.Fatal("applied result still marked DryRun")
+	}
+}
+
+// A failed BUILD aborts the absorb before any ref moves — a stronger
+// nothing-mutated boundary than the old serial interleave (where a later
+// patch failure left earlier targets amended). The staged edit stays staged.
+func TestAbsorbBuildFailureLandsNothing(t *testing.T) {
+	f, s, env, tips := absorbEnv(t)
+	f.staged = true
+	f.stagedPatch = []byte("fake patch")
+	f.stagedHunks = []git.Hunk{
+		{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+		{File: "f.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
+	}
+	f.blame = map[string]map[int]git.BlameLine{"f.txt": {
+		2: blameID(tips["a"], 2, "f.txt"),
+		5: blameID(tips["b"], 5, "f.txt"),
+	}}
+	boom := errors.New("patch exploded")
+	env.Git = &failNthBuildGit{Git: f, n: 2, err: boom}
+	c := &ckpt{}
+	env.AbsorbCheckpoint = c.hook()
+
+	_, err := Absorb(env, s)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Absorb = %v, want errors.Is(%v)", err, boom)
+	}
+	for _, name := range []string{"a", "b"} {
+		if f.branches[name] != tips[name] {
+			t.Fatalf("%s's tip moved — a failed build must land nothing", name)
+		}
+	}
+	if !f.staged {
+		t.Fatal("a failed build must leave the staged edit staged")
+	}
+	if c.calls != 0 {
+		t.Fatalf("checkpoints = %d, want 0 (nothing landed)", c.calls)
+	}
 }

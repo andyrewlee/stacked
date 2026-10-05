@@ -550,9 +550,13 @@ func TestRestackUpstackRefreshesMovedParentTips(t *testing.T) {
 	// One refresh, not two: b's tip is refreshed because c consumes it, but c
 	// is a leaf — nothing reads tips["c"], so its post-rebase refresh is
 	// skipped (the c.ParentSHA assertion below still proves c rebased onto the
-	// REFRESHED b tip).
-	if counting.revParseCalls != 1 {
-		t.Fatalf("RevParse calls = %d, want 1 refresh (b only; leaf c skipped)", counting.revParseCalls)
+	// REFRESHED b tip). The refresh reads the loose ref the rebase just
+	// wrote, so it costs no spawn at all.
+	if counting.revParseCalls != 0 {
+		t.Fatalf("RevParse calls = %d, want 0 (the loose-ref fast path answers)", counting.revParseCalls)
+	}
+	if f.calls["LooseBranchTip"] != 1 {
+		t.Fatalf("LooseBranchTip calls = %d, want 1 refresh (b only; leaf c skipped)", f.calls["LooseBranchTip"])
 	}
 	b, _ := s.Get("b")
 	c, _ := s.Get("c")

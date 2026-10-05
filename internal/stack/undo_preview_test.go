@@ -530,18 +530,18 @@ type commitRangeBarrierGit struct {
 	Git
 	need     int64
 	arrived  atomic.Int64
-	released atomic.Bool
+	timedOut atomic.Bool // a call gave up waiting — the probes ran serially
 	release  chan struct{}
 }
 
 func (g *commitRangeBarrierGit) CommitRange(exclude, include string) (map[string]bool, error) {
 	if g.arrived.Add(1) == g.need {
-		g.released.Store(true)
 		close(g.release)
 	}
 	select {
 	case <-g.release:
 	case <-time.After(2 * time.Second):
+		g.timedOut.Store(true)
 	}
 	return g.Git.CommitRange(exclude, include)
 }
@@ -568,7 +568,7 @@ func TestUndoPreviewFansOutCommitRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UndoPreview: %v", err)
 	}
-	if !barrier.released.Load() {
+	if barrier.timedOut.Load() {
 		t.Fatalf("only %d of %d CommitRange probes were ever in flight — the fan-out regressed to serial", barrier.arrived.Load(), want)
 	}
 	if got := int64(len(res.WouldRestore)); got != want {

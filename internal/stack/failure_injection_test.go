@@ -566,6 +566,9 @@ func TestProbeFailuresSurface(t *testing.T) {
 			setup: func(t *testing.T) (*fakeGit, *State, Env) {
 				f, s, env := stack2(t)
 				drift(t, f)
+				// The refresh prefers the loose ref the rebase just wrote;
+				// looseOff forces the RevParse fallback arm under test.
+				f.looseOff = true
 				return f, s, env
 			},
 			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Restack(env, s); return err },

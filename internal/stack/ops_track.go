@@ -185,10 +185,25 @@ func TrackAllBranches(env Env, s *State) (*OpResult, error) {
 		adoptable = append(adoptable, name)
 	}
 	sort.Strings(adoptable)
-	for _, name := range adoptionOrder(adoptable, parents) {
-		if err := trackOne(env, s, name, parents[name]); err != nil {
-			return nil, err
+	order := adoptionOrder(adoptable, parents)
+	// Each adoption's merge-base is an independent read against refs that do
+	// not move during the op — fan them out. The probes write slots, so the
+	// lowest-index error is the one the serial loop would have hit first,
+	// and the Track pass below still runs parents-first.
+	bases := make([]string, len(order))
+	if err := git.ParallelProbes(len(order), func(i int) error {
+		name, parent := order[i], parents[order[i]]
+		base, err := env.Git.MergeBase(branchTipRef(parent), branchTipRef(name))
+		if err != nil {
+			return fmt.Errorf("computing merge base of %q and %q: %w", parent, name, err)
 		}
+		bases[i] = base
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for i, name := range order {
+		s.Track(name, parents[name], bases[i])
 	}
 	if err := env.save(); err != nil {
 		return nil, err

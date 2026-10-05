@@ -133,6 +133,19 @@ type Git interface {
 	// parents. On any failure — including a patch that does not apply to that
 	// tree — the repository is untouched. Returns the new tip SHA.
 	AmendTipWithPatch(branch string, patch []byte) (string, error)
+	// BuildAmendedTip is AmendTipWithPatch's side-effect-free half: it
+	// computes the amended tip (and the tip it was built on) without moving
+	// any ref, index, or worktree — safe to run concurrently across
+	// branches. LandAmendedTip performs the compare-and-swap ref move. Absorb
+	// fans builds out and lands serially so each recovery checkpoint names
+	// only already-landed amends.
+	BuildAmendedTip(branch string, patch []byte) (newTip, oldTip string, err error)
+	LandAmendedTip(branch, oldTip, newTip string) error
+	// LooseBranchTip answers "where does this branch point" from its loose
+	// ref file (<commonDir>/refs/heads/<name>) — the shape every ref write
+	// leaves — without spawning. ok=false (packed-only layouts, symref
+	// payloads, a missing/unreadable file) means the caller must RevParse.
+	LooseBranchTip(name string) (sha string, ok bool)
 	// ResetHardIn runs `git reset --hard <ref>` in the worktree at dir (""
 	// means the current worktree). Absorb-only: called after the staged content
 	// is safely committed in the target branch (to drop the now-redundant

@@ -332,9 +332,16 @@ func (s *State) restackAgainstTips(env Env, name string, tips map[string]string,
 	// duration of a cascade (re-parenting happens before the walk), so the
 	// hoisted child index answers the leaf check.
 	if len(idx[name]) > 0 {
-		newTip, err := env.Git.RevParse(branchTipRef(name))
-		if err != nil {
-			return false, newHEAD, fmt.Errorf("resolve %q after restack: %w", name, err)
+		// The just-landed rebase wrote the ref loose under the common dir —
+		// read it in-process. Packed/mirror layouts (or a foreign-worktree
+		// ref) miss the loose file and fall back to RevParse.
+		newTip, ok := env.Git.LooseBranchTip(name)
+		if !ok {
+			var err error
+			newTip, err = env.Git.RevParse(branchTipRef(name))
+			if err != nil {
+				return false, newHEAD, fmt.Errorf("resolve %q after restack: %w", name, err)
+			}
 		}
 		tips[name] = newTip
 	}

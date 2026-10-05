@@ -48,6 +48,10 @@ func (Shell) AmendMessage(message string, all bool) error { return AmendMessage(
 func (Shell) Add(paths ...string) error                   { return Add(paths...) }
 func (Shell) RenameBranch(oldName, newName string) error  { return RenameBranch(oldName, newName) }
 func (Shell) MergeBase(a, b string) (string, error)       { return MergeBase(a, b) }
+func (Shell) LooseBranchTip(name string) (string, bool) {
+	return LooseBranchTip(name)
+}
+
 func (Shell) IsAncestor(ancestor, descendant string) (bool, error) {
 	return IsAncestor(ancestor, descendant)
 }
@@ -94,6 +98,14 @@ func (Shell) DiffCachedPatchesFor(want map[string][]Hunk) (map[string][]byte, er
 
 func (Shell) AmendTipWithPatch(branch string, patch []byte) (string, error) {
 	return AmendTipWithPatch(branch, patch)
+}
+
+func (Shell) BuildAmendedTip(branch string, patch []byte) (newTip, oldTip string, err error) {
+	return BuildAmendedTip(branch, patch)
+}
+
+func (Shell) LandAmendedTip(branch, oldTip, newTip string) error {
+	return LandAmendedTip(branch, oldTip, newTip)
 }
 func (Shell) ResetHardIn(dir, ref string) error { return ResetHardIn(dir, ref) }
 

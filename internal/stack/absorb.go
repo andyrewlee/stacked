@@ -327,10 +327,13 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 
 	// Amend ancestors first (deterministic; the amends are independent — each
 	// reads only its own tip tree, and targets' hunks are line-disjoint by the
-	// multi-owner refusal). If amend k fails, amends 1..k-1 persist and the
-	// undo entry reverts them. AmendTipWithPatch stays per-target — each lands
-	// a DIFFERENT hunk set on a DIFFERENT ref — but the staged diff itself is
-	// captured once for all targets.
+	// multi-owner refusal). The staged diff itself is captured once for all
+	// targets, each lands a DIFFERENT hunk set on a DIFFERENT ref, and the
+	// side-effect-free builds (temp index + write-tree + commit-tree — the
+	// temp-index apply is the pre-flight check) fan out while the ref moves
+	// and their recovery checkpoints stay serial in landed order: checkpoint
+	// k still names only amends 1..k, and a CAS land failure leaves amends
+	// 1..k-1 persisted for the undo entry to revert.
 	hunksByTarget := map[string][]git.Hunk{}
 	for _, a := range plan.Absorbed {
 		hunksByTarget[a.Branch] = append(hunksByTarget[a.Branch], a.hunk)
@@ -339,19 +342,32 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assembling staged patches: %w", err)
 	}
-	newTips := make(map[string]string, len(targets))
-	for _, target := range targets {
-		newTip, err := g.AmendTipWithPatch(target, patches[target])
+	type builtTip struct{ newTip, oldTip string }
+	built := make([]builtTip, len(targets))
+	if err := git.ParallelProbes(len(targets), func(i int) error {
+		target := targets[i]
+		newTip, oldTip, err := g.BuildAmendedTip(target, patches[target])
 		if err != nil {
-			// The temp-index apply is the pre-flight check: THIS target is
-			// untouched; earlier amends persist under the undo entry.
+			return fmt.Errorf("absorb into %q: %w", target, err)
+		}
+		built[i] = builtTip{newTip: newTip, oldTip: oldTip}
+		return nil
+	}); err != nil {
+		// A build failure lands nothing — a stronger nothing-mutated
+		// boundary than the serial interleave had (there, earlier targets
+		// could already have landed when a later build failed).
+		return nil, err
+	}
+	newTips := make(map[string]string, len(targets))
+	for i, target := range targets {
+		if err := g.LandAmendedTip(target, built[i].oldTip, built[i].newTip); err != nil {
 			return nil, fmt.Errorf("absorb into %q: %w", target, err)
 		}
-		newTips[target] = newTip
-		// Checkpoint the cumulative recovery map BEFORE the next amend or any
+		newTips[target] = built[i].newTip
+		// Checkpoint the cumulative recovery map BEFORE the next land or any
 		// reset below: a later failure — or an abort→undo — can still name the
 		// commits now holding the staged edits. The map is cloned because the
-		// callback may retain it; later amends must not rewrite an earlier
+		// callback may retain it; later lands must not rewrite an earlier
 		// snapshot. A checkpoint failure stops the op here, and the error
 		// still reports the SHAs that landed so they are recoverable even
 		// when the journal write was not.
