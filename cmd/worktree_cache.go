@@ -97,4 +97,5 @@ func resetProcCaches() {
 	defer worktreeCacheState.Unlock()
 	worktreeCacheState.probed = false
 	worktreeCacheState.wts = nil
+	git.ForgetDirMemos()
 }

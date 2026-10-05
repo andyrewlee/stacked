@@ -1912,6 +1912,44 @@ func TestRebaseInProgressFalse(t *testing.T) {
 	}
 }
 
+// TestWorktreeGitDir pins the in-process resolution: a linked worktree's .git
+// file is a gitdir pointer the fast path parses, a main worktree's .git is a
+// directory returned as-is, and a bogus dir falls back to rev-parse's error.
+func TestWorktreeGitDir(t *testing.T) {
+	newRepo(t)
+	ForgetDirMemos()
+	repo, err := RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, "branch", "feat")
+	mustGit(t, "worktree", "add", wt, "feat")
+
+	got, err := worktreeGitDir(wt)
+	if err != nil {
+		t.Fatalf("worktreeGitDir(linked): %v", err)
+	}
+	want := mustGit(t, "-C", wt, "rev-parse", "--absolute-git-dir")
+	if resolveSymlinks(t, got) != resolveSymlinks(t, want) {
+		t.Fatalf("worktreeGitDir(linked) = %q, want %q", got, want)
+	}
+
+	got, err = worktreeGitDir(repo)
+	if err != nil {
+		t.Fatalf("worktreeGitDir(main): %v", err)
+	}
+	want = mustGit(t, "-C", repo, "rev-parse", "--absolute-git-dir")
+	if resolveSymlinks(t, got) != resolveSymlinks(t, want) {
+		t.Fatalf("worktreeGitDir(main) = %q, want %q", got, want)
+	}
+
+	if _, err := worktreeGitDir(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Fatal("worktreeGitDir on a non-repo must surface the rev-parse error")
+	}
+}
+
 // TestRebaseInProgressIn pins the per-worktree probe: rebase metadata lives
 // under the worktree's own git dir, so a paused rebase in a linked worktree is
 // visible to RebaseInProgressIn(wtPath) and invisible to the caller's

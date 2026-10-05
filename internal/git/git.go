@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // gitEnvBlocked names the inherited environment variables that redirect which
@@ -173,9 +174,90 @@ func isSingleAbsolutePath(path string) bool {
 	return filepath.IsAbs(path) && !strings.Contains(path, "\n")
 }
 
+// gitDirMemo memoizes cwd-keyed git-dir resolutions: a repository's .git
+// directory is stable for the life of a command, and probes (rebase state,
+// rebase head-name) resolve it several times each. Keyed by cwd, not
+// sync.Once, for the same reason repoDirsForCwd is — the test binary chdirs
+// between repos in one process. Errors are not memoized: a transient failure
+// (or an init that lands mid-process) must be re-asked.
+var gitDirMemo sync.Map // cwd -> string
+
+// worktreeGitDirMemo memoizes a worktree path's resolved git dir for the same
+// reason: RebaseInProgressIn/RebaseHeadNameIn each resolved it per call, and
+// PausedRebaseOwners asks both questions of the same worktree. Entries are
+// keyed by the worktree path itself; a `git worktree move` rewrites the
+// pointer file, but the moved worktree's new path resolves fresh and the
+// orphaned entry is never consulted again. cmd's resetProcCaches clears both
+// memos on every worktree mutation regardless.
+var worktreeGitDirMemo sync.Map // worktree dir -> string
+
+// ForgetDirMemos drops both git-dir memos; cmd calls it wherever a worktree
+// move or removal could invalidate a remembered path mapping.
+func ForgetDirMemos() {
+	gitDirMemo = sync.Map{}
+	worktreeGitDirMemo = sync.Map{}
+}
+
 // GitDir returns the absolute path to the repository's .git directory.
 func GitDir() (string, error) {
-	return Run("rev-parse", "--absolute-git-dir")
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		if v, ok := gitDirMemo.Load(cwd); ok {
+			return v.(string), nil
+		}
+	}
+	dir, err := Run("rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	if cwdErr == nil {
+		gitDirMemo.Store(cwd, dir)
+	}
+	return dir, nil
+}
+
+// worktreeGitDir resolves the git dir of the worktree rooted at dir without
+// spawning rev-parse on the common paths: a linked worktree's .git is a FILE
+// containing "gitdir: <abs path>", and a main worktree's .git is a directory.
+// Anything else (GIT_DIR-style layouts, a .git file that is not a gitdir
+// pointer) falls back to `git -C dir rev-parse --absolute-git-dir`, which is
+// also the error path for a dir that is not a worktree at all.
+func worktreeGitDir(dir string) (string, error) {
+	if v, ok := worktreeGitDirMemo.Load(dir); ok {
+		return v.(string), nil
+	}
+	gitDir, err := resolveWorktreeGitDir(dir)
+	if err != nil {
+		return "", err
+	}
+	worktreeGitDirMemo.Store(dir, gitDir)
+	return gitDir, nil
+}
+
+func resolveWorktreeGitDir(dir string) (string, error) {
+	abs, aerr := filepath.Abs(dir)
+	if aerr != nil {
+		abs = dir
+	}
+	dotGit := filepath.Join(abs, ".git")
+	info, err := os.Stat(dotGit)
+	if err == nil {
+		if info.IsDir() {
+			return dotGit, nil
+		}
+		if info.Mode().IsRegular() {
+			if data, rerr := os.ReadFile(dotGit); rerr == nil {
+				if target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:"); ok {
+					target = strings.TrimSpace(target)
+					if !filepath.IsAbs(target) {
+						target = filepath.Join(abs, target)
+					}
+					return filepath.Clean(target), nil
+				}
+			}
+		}
+	}
+	return Run("-C", dir, "rev-parse", "--absolute-git-dir")
 }
 
 // RepoRoot returns the absolute path to the top level of the working tree.
