@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -33,14 +34,26 @@ func LsFilesZ(dir string) ([]string, error) {
 // cannot classify (for example one beyond a symlinked directory) poisons the
 // whole batch, so a non-clean batch failure falls back to per-entry probes: a
 // path git cannot classify counts as not ignored.
+//
+// The boundary contract: rels arrive in native filepath.Rel form (backslashes
+// on Windows) while git's pathspec convention is slash-separated on every
+// platform, so the probe runs in slash form and the result map is keyed back
+// to the native rels callers look up. (-z makes the echo verbatim, so the
+// slash forms map back unambiguously.)
 func CheckIgnored(root string, rels []string) (map[string]bool, error) {
 	ignored := make(map[string]bool, len(rels))
 	if len(rels) == 0 {
 		return ignored, nil
 	}
+	slashed := make([]string, len(rels))
+	bySlash := make(map[string]string, len(rels))
+	for i, rel := range rels {
+		slashed[i] = filepath.ToSlash(rel)
+		bySlash[slashed[i]] = rel
+	}
 	cmd := exec.Command("git", "-C", root, "check-ignore", "-z", "--stdin")
 	cmd.Env = gitEnv()
-	cmd.Stdin = bytes.NewReader([]byte(strings.Join(rels, "\x00") + "\x00"))
+	cmd.Stdin = bytes.NewReader(checkIgnoreStdin(slashed))
 	out, err := spawnOutput(cmd)
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -51,8 +64,8 @@ func CheckIgnored(root string, rels []string) (map[string]bool, error) {
 		case 1:
 			return ignored, nil // none of the paths are ignored
 		default:
-			for _, rel := range rels {
-				if checkIgnored(root, rel) {
+			for i, rel := range rels {
+				if checkIgnored(root, slashed[i]) {
 					ignored[rel] = true
 				}
 			}
@@ -60,11 +73,22 @@ func CheckIgnored(root string, rels []string) (map[string]bool, error) {
 		}
 	}
 	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" {
+		if p == "" {
+			continue
+		}
+		if rel, ok := bySlash[p]; ok {
+			ignored[rel] = true
+		} else {
 			ignored[p] = true
 		}
 	}
 	return ignored, nil
+}
+
+// checkIgnoreStdin builds the -z --stdin payload: the slash-formed rels,
+// NUL-separated with a trailing NUL (each entry becomes one pathspec).
+func checkIgnoreStdin(slashed []string) []byte {
+	return []byte(strings.Join(slashed, "\x00") + "\x00")
 }
 
 // checkIgnored reports whether rel (relative to root) is ignored by git, via

@@ -3118,3 +3118,44 @@ func TestGitEnvExtraEnvOverrides(t *testing.T) {
 		t.Fatalf("last GIT_INDEX_FILE entry = %q — extraEnv must win over a blocked inherited value", last)
 	}
 }
+
+// TestCheckIgnoreStdinSlashForm pins the wire contract at the builder level:
+// whatever native form a rel arrives in, check-ignore's stdin sees git's
+// slash-separated pathspec form, NUL-separated with a trailing NUL. The
+// conversion is a no-op on POSIX separators — this test pins the format and
+// the ToSlash application point so a Windows runner exercises the \ path.
+func TestCheckIgnoreStdinSlashForm(t *testing.T) {
+	rel := filepath.Join("sub", "file.txt")
+	got := string(checkIgnoreStdin([]string{rel, "top.txt"}))
+	want := filepath.ToSlash(rel) + "\x00" + "top.txt\x00"
+	if got != want {
+		t.Fatalf("checkIgnoreStdin = %q, want %q", got, want)
+	}
+}
+
+// TestCheckIgnoredNativeKeys pins the result contract: git's -z echo travels
+// in slash form but the returned map is keyed by the input rels, so callers
+// doing ignored[filepath.Rel output] hit. A nested rel exercises the
+// separator boundary the Windows path relies on.
+func TestCheckIgnoredNativeKeys(t *testing.T) {
+	newRepo(t)
+	repo, err := RepoRoot()
+	if err != nil {
+		t.Fatalf("RepoRoot: %v", err)
+	}
+	writeFile(t, filepath.Join(repo, ".gitignore"), "sub/\n")
+	mustGit(t, "add", ".gitignore")
+	mustGit(t, "commit", "-q", "-m", "gitignore")
+
+	rel := filepath.Join("sub", "deep", "file.txt")
+	ignored, err := CheckIgnored(repo, []string{rel, "tracked.txt"})
+	if err != nil {
+		t.Fatalf("CheckIgnored: %v", err)
+	}
+	if !ignored[rel] {
+		t.Fatalf("CheckIgnored keys must be input-form rels: %v missing %q", ignored, rel)
+	}
+	if ignored["tracked.txt"] {
+		t.Fatal("tracked.txt must not be reported ignored")
+	}
+}
