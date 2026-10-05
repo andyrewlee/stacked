@@ -1,5 +1,7 @@
 package stack
 
+import "github.com/andyrewlee/stacked/internal/git"
+
 // --- undo preview (st undo --dry-run) ---------------------------------------
 //
 // UndoPreview renders the same computation Undo executes — planUndo
@@ -11,6 +13,7 @@ package stack
 // zeroSHA stands in for a missing live tip in a preview's From field: the ref
 // undo would restore does not exist, so there is no tip to read. (The same
 // all-zeros object id git uses for a deleted ref.)
+
 const zeroSHA = "0000000000000000000000000000000000000000"
 
 // UndoRestorePreview is one WouldRestore entry: the ref move a real undo makes
@@ -151,24 +154,43 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalI
 	// WouldRestore: every recorded ref, sorted by branch. `commitsLostFromRef`
 	// is rev-list to..from — the commits that stop being reachable from THAT
 	// ref; a missing live ref or recorded object degrades it to "unknown"
-	// (never a blocker — undo restores the ref by name).
-	for _, name := range p.restores {
-		to := entry.Refs[name]
-		r := UndoRestorePreview{Branch: name, To: to}
-		live, ok := liveSet.tip(g, name)
-		if !ok {
+	// (never a blocker — undo restores the ref by name). The rev-list spawns
+	// are independent per ref, so they fan out in one bounded batch — each
+	// slot holds the count or the "unknown" degrade the serial loop assigned.
+	type restoreProbe struct {
+		live    string
+		liveOK  bool
+		lostCnt int // -1 = "unknown" (missing live ref, missing object, or rev-list error)
+	}
+	slots := make([]restoreProbe, len(p.restores))
+	_ = git.ParallelProbes(len(p.restores), func(i int) error {
+		name := p.restores[i]
+		var pr restoreProbe
+		pr.live, pr.liveOK = liveSet.tip(g, name)
+		pr.lostCnt = -1
+		if pr.liveOK {
+			if lost, err := g.CommitRange(entry.Refs[name], pr.live); err == nil {
+				pr.lostCnt = len(lost)
+			}
+		}
+		slots[i] = pr
+		return nil
+	})
+	for i, name := range p.restores {
+		pr := slots[i]
+		r := UndoRestorePreview{Branch: name, To: entry.Refs[name]}
+		if !pr.liveOK {
 			r.From = zeroSHA
 			r.CommitsLostFromRef = "unknown"
 			tips[name] = nil
 		} else {
-			r.From = live
-			t := live
+			r.From = pr.live
+			t := pr.live
 			tips[name] = &t
-			lost, err := g.CommitRange(to, live)
-			if err != nil {
+			if pr.lostCnt < 0 {
 				r.CommitsLostFromRef = "unknown"
 			} else {
-				r.CommitsLostFromRef = len(lost)
+				r.CommitsLostFromRef = pr.lostCnt
 			}
 		}
 		res.WouldRestore = append(res.WouldRestore, r)

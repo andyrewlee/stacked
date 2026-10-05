@@ -681,3 +681,49 @@ func TestFinalizeUndoRecordsPostRefs(t *testing.T) {
 		t.Fatalf("postRefs = %v, want both branches pinned at %s", got.PostRefs, postTip)
 	}
 }
+
+// FinalizeUndo used to pay three journal round-trips after the op — one per
+// annotation setter plus the trim — each a load + marshal + atomic write +
+// fsync. The annotations are bookkeeping, not crash boundaries, so the whole
+// closeout must land in ONE write.
+func TestFinalizeUndoWritesJournalOnce(t *testing.T) {
+	f, s, _ := setupCountingUndoCloseout(t)
+	mustCheckout(t, f, "a")
+	if err := f.CreateBranch("fresh"); err != nil {
+		t.Fatal(err)
+	}
+	s.Track("fresh", "a", s.Branches["a"].ParentSHA)
+
+	writes := 0
+	orig := writeUndo
+	writeUndo = func(entries []UndoEntry) error {
+		writes++
+		return orig(entries)
+	}
+	t.Cleanup(func() { writeUndo = orig })
+
+	entry, ok, err := PeekUndo()
+	if err != nil || !ok {
+		t.Fatalf("PeekUndo: ok=%v err=%v", ok, err)
+	}
+	if err := FinalizeUndo(f, s, entry); err != nil {
+		t.Fatalf("FinalizeUndo: %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("journal writes during FinalizeUndo = %d, want 1", writes)
+	}
+	entries, err := loadUndo()
+	if err != nil {
+		t.Fatalf("loadUndo: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("journal = %d entries, want 1 retained", len(entries))
+	}
+	got := entries[0]
+	if len(got.CreatedBranches) != 1 || got.CreatedBranches[0] != "fresh" {
+		t.Fatalf("createdBranches = %v, want [fresh]", got.CreatedBranches)
+	}
+	if got.PostRefs == nil {
+		t.Fatal("postRefs was not annotated in the retained entry")
+	}
+}

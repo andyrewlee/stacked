@@ -56,6 +56,22 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 
 	liveSet := p.liveSet
 	skipCheckoutRestore := false
+
+	// The doomed deletions batch into one `git branch -D` after the loop —
+	// the per-branch gates above (worktree removal, the HEAD-off checkout)
+	// keep their serial order; only the delete itself defers. That is safe
+	// only while the snapshot answers the loop's existence questions, so
+	// every doomed name is pre-folded out of it: a later sibling's parent
+	// lookup must not pick a branch already committed to deletion. In the
+	// nil-snapshot degrade exists/tip probe live git, which has to keep
+	// seeing the serial truth — deletes stay one-by-one there.
+	batchDelete := liveSet != nil
+	if batchDelete {
+		for _, d := range p.doomed {
+			delete(liveSet, d.name)
+		}
+	}
+	var doomedNames []string
 	for _, d := range p.doomed {
 		// The plan already discovered the branch's live linked-worktree
 		// owner and its verdicts; execute them in gate order: the
@@ -133,13 +149,18 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 				skipCheckoutRestore = true
 			}
 		}
+		if batchDelete {
+			doomedNames = append(doomedNames, d.name)
+			continue
+		}
 		if err := g.DeleteBranch(d.name, true); err != nil {
 			return nil, fmt.Errorf("deleting branch %q created by undone command: %w", d.name, err)
 		}
-		// Keep the snapshot truthful for the next doomed branch's
-		// parent/target existence questions — a doomed branch's recorded
-		// parent may be a sibling this loop just deleted.
-		delete(liveSet, d.name)
+	}
+	if len(doomedNames) > 0 {
+		if err := g.DeleteBranches(doomedNames, true); err != nil {
+			return nil, fmt.Errorf("deleting branches %s created by undone command: %w", joinBranchList(doomedNames), err)
+		}
 	}
 
 	// Restore every recorded ref in ONE update-ref transaction BEFORE saving
