@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // TestModelInvariants applies long random sequences of stack operations to the
@@ -123,7 +125,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 		// and applied again.
 		var label string
 		var op func() error
-		switch rng.Intn(10) {
+		switch rng.Intn(12) {
 		case 0: // create off a random branch
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			nameSeq++
@@ -253,6 +255,46 @@ func runModel(t *testing.T, seed int64, steps int) {
 				}
 				f.commit("subj")
 				_, err := TrackBranch(env, s, "", "")
+				return err
+			}
+		case 10: // absorb a staged hunk owned by the current branch's tip
+			if len(tracked) == 0 {
+				continue
+			}
+			target := pick(rng, tracked)
+			label = "absorb"
+			op = func() error {
+				mustCheckout(t, f, target)
+				tip, err := f.RevParse(target)
+				if err != nil {
+					return err
+				}
+				// Re-seeded on EVERY invocation: Absorb ends with ResetHardIn
+				// which clears the staged state, and the undo oracle applies
+				// this closure twice.
+				f.staged = true
+				f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
+				f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tip, 2, "f.txt")}}
+				f.stagedPatch = []byte("model patch")
+				_, err = Absorb(env, s)
+				return err
+			}
+		case 11: // remote-backed sync, sometimes with an upstream-merged branch
+			label = "sync"
+			op = func() error {
+				if len(tracked) > 0 && rng.Intn(2) == 0 {
+					victim := pick(rng, tracked)
+					tip, err := f.RevParse(victim)
+					if err != nil {
+						return err
+					}
+					// The remote landed victim: advance the local trunk ref as
+					// the fetch+fast-forward would (plumbing — no worktree gate).
+					if err := f.UpdateRef(branchTipRef(s.Trunk), tip); err != nil {
+						return err
+					}
+				}
+				_, err := Sync(env, &fakeRemote{exists: true, ff: "trunk fast-forwarded", git: f}, s, "origin", false, false)
 				return err
 			}
 		}

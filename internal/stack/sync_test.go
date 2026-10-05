@@ -152,7 +152,7 @@ func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 	// Simulate feat-a having merged into the trunk: advance main to feat-a's tip
 	// (main is not checked out, so this is allowed).
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 
@@ -289,7 +289,7 @@ func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Checkout("feat-a"); err != nil {
@@ -458,7 +458,7 @@ func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "feat-a")
 	mkBranch(t, env, s, f, "feat-a", "feat-b")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 
@@ -483,7 +483,7 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 		f, s, env := newEnvState()
 		mkBranch(t, env, s, f, "main", "feat-a")
 		aTip, _ := f.RevParse("feat-a")
-		if err := f.ForceBranch("main", aTip); err != nil {
+		if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.Checkout("main"); err != nil {
@@ -525,7 +525,7 @@ func TestSyncPlanRejectsPrunedMainWorktreeOwnerFromLinkedWorktree(t *testing.T) 
 	mkBranch(t, env, s, f, "main", "feat-a")
 	mkBranch(t, env, s, f, "main", "feat-b")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	env.Git = mainOwnerFromLinkedGit(f, "feat-a", "feat-b")
@@ -605,7 +605,7 @@ func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", true, false); err != nil {
@@ -632,7 +632,7 @@ func TestSyncFastForwardsTrunkInItsOwnWorktree(t *testing.T) {
 	// Simulate feat-a merged into the trunk, and arm git's refusal to check the
 	// trunk out a second time so any stray Checkout(trunk) fails the test.
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
@@ -661,7 +661,7 @@ func TestSyncEndsDetachedWhenOrigPrunedAndTrunkOwnedElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
@@ -697,7 +697,7 @@ func TestSyncFailsWhenTrunkWorktreeDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	f.markWorktreeDirty("main")
@@ -764,7 +764,7 @@ func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
 	// feat-a merged into main AND main advanced past it, so feat-a prunes and
 	// the surviving feat-b needs (and gets) an in-place rebase.
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
@@ -839,7 +839,7 @@ func TestSyncNoFetchFallsBackToLocalTrunk(t *testing.T) {
 	// feat-a merged into the LOCAL trunk; no remote-tracking ref exists, so the
 	// prune basis falls back to it even though a remote is configured.
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 
@@ -895,7 +895,7 @@ func TestPruneDeletesMergedKeepsHEAD(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "feat-merged")
 	mkBranch(t, env, s, f, "main", "feat-live")
 	aTip, _ := f.RevParse("feat-merged")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Checkout("feat-live"); err != nil {
@@ -921,7 +921,7 @@ func TestPruneRefusesWhenCurrentBranchMerged(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Checkout("feat-a"); err != nil {
@@ -945,7 +945,7 @@ func TestPrunePlanListsWithoutDeleting(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 	aTip, _ := f.RevParse("feat-a")
-	if err := f.ForceBranch("main", aTip); err != nil {
+	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Checkout("main"); err != nil {
