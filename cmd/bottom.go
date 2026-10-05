@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"fmt"
+	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
@@ -36,7 +36,7 @@ func runBottom(args []string) error {
 		return navEmit(asJSON, s.Trunk, "at trunk")
 	}
 	if !s.IsTracked(cur) {
-		return fmt.Errorf("branch %q is not tracked by stacked", cur)
+		return stack.ErrNotTracked(cur)
 	}
 
 	b := s.BottomOf(cur)

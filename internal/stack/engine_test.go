@@ -2493,3 +2493,12 @@ func TestTrackAllBranchesSkipsTrackedAndTrunk(t *testing.T) {
 		t.Fatalf("Tracked = %v, want empty", res.Tracked)
 	}
 }
+
+// TestErrNotTrackedCanonicalText pins the single "branch %q is not tracked"
+// phrasing — engine and cmd both route through ErrNotTracked, so the contract
+// text lives here and only here.
+func TestErrNotTrackedCanonicalText(t *testing.T) {
+	if got := ErrNotTracked("feat-x").Error(); got != `branch "feat-x" is not tracked` {
+		t.Fatalf("ErrNotTracked text = %q", got)
+	}
+}

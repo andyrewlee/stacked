@@ -103,10 +103,10 @@ func Modify(env Env, s *State, message string, all, commit bool) (*OpResult, err
 		return nil, err
 	}
 	if cur == s.Trunk {
-		return nil, fmt.Errorf("refusing to modify the trunk branch %q", cur)
+		return nil, fmt.Errorf("cannot modify the trunk branch %q", cur)
 	}
 	if !s.IsTracked(cur) {
-		return nil, fmt.Errorf("branch %q is not tracked", cur)
+		return nil, ErrNotTracked(cur)
 	}
 	if all {
 		if err := g.Add(); err != nil {

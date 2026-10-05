@@ -445,7 +445,7 @@ func TestRestackGuards(t *testing.T) {
 	}
 	res = r.st("checkout", "ghost")
 	wantExit(t, res, 1)
-	wantStderrContains(t, res, "not a tracked branch")
+	wantStderrContains(t, res, `branch "ghost" is not tracked`)
 }
 
 // TestValidateRepairDrift forces drift by deleting a tracked branch behind st's

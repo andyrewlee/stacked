@@ -142,7 +142,7 @@ func openBranches(env stack.Env, state *stack.State, all bool) (branches []strin
 	case cur == state.Trunk:
 		return nil, "at trunk; nothing to open", nil
 	case !state.IsTracked(cur):
-		return nil, "", fmt.Errorf("branch %q is not tracked by stacked", cur)
+		return nil, "", stack.ErrNotTracked(cur)
 	}
 	return []string{cur}, "", nil
 }

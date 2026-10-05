@@ -207,7 +207,7 @@ func RestackPlan(env Env, s *State) (*OpResult, error) {
 		return nil, err
 	}
 	if start != s.Trunk && !s.IsTracked(start) {
-		return nil, fmt.Errorf("branch %q is not tracked", start)
+		return nil, ErrNotTracked(start)
 	}
 	preview, err := restackPlanAgainstWithWorktrees(env, s, start, tips)
 	if err != nil {
