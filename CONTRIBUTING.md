@@ -22,9 +22,11 @@ agreement checks, `fmt-check`, strict `golangci-lint`, `vet` (+ windows/plan9
 cross-vet), `build`, race tests, black-box e2e, a merged-coverage gate (≥75%),
 and the installer checks (`sh -n install.sh`, plus the goreleaser asset-parity
 and minisign signature-matrix scripts when those tools are installed —
-`CI_STRICT=1` makes them mandatory, e.g. before a release). A `check-shell`
-leg runs shellcheck over the shell scripts and hooks when it's installed
-(same optional/CI_STRICT contract). If it's green, you can commit.
+`CI_STRICT=1` makes them mandatory, and `make release` sets it itself so the
+publish path cannot skip them). A `check-shell` leg runs shellcheck over the
+shell scripts and hooks when it's installed (same optional/CI_STRICT
+contract), and `check-hooks` warns if the gate hooks aren't installed
+(`make release` requires them). If it's green, you can commit.
 
 The Makefile, `scripts/cover.sh`, and the git hooks assume a POSIX shell — on
 Windows run them under git-bash or WSL (the engine and tests themselves are
@@ -110,10 +112,12 @@ Releases are cut locally from a tag:
 ```sh
 git tag vX.Y.Z            # must match defaultVersion in cmd/root.go
 git push origin vX.Y.Z    # the GitHub release attaches to this tag
-make release              # build, sign, and publish (needs GITHUB_TOKEN and
+make release              # runs `make ci`, then the STRICT installer legs
+                          #  (CI_STRICT=1: goreleaser/minisign/shellcheck all
+                          #  required) and the hooks check, then builds, signs,
+                          #  and publishes (needs GITHUB_TOKEN and
                           #  MINISIGN_KEY_FILE; check-release-ready verifies the
-                          #  embedded pubkey actually pairs with the key file —
-                          #  and the pinned goreleaser + installer legs gate too)
+                          #  embedded pubkey actually pairs with the key file)
 make snapshot             # build the release artifacts without publishing
 ```
 
