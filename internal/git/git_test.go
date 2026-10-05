@@ -3195,3 +3195,73 @@ func TestLsTreeZ(t *testing.T) {
 		t.Fatal("LsTreeZ on a missing ref did not error")
 	}
 }
+
+// TestPublishedStates exercises the full published enum: a pushed-unchanged
+// branch reads current, a locally-advanced one stale, a locally-rewritten one
+// diverged, a never-pushed one missing, and a name with no local ref at all
+// unknown. Every read is a local ref probe — the test never touches the
+// remote's transport beyond push itself.
+func TestPublishedStates(t *testing.T) {
+	newRepo(t)
+	remoteDir := t.TempDir()
+	mustGit(t, "init", "-q", "--bare", remoteDir)
+	mustGit(t, "remote", "add", "origin", remoteDir)
+
+	mkBranch := func(name string) {
+		t.Helper()
+		mustGit(t, "checkout", "-q", "-b", name)
+		writeFile(t, name+".txt", name+"\n")
+		mustGit(t, "add", "-A")
+		mustGit(t, "commit", "-q", "-m", name)
+	}
+	push := func(name string) { mustGit(t, "push", "-q", "-u", "origin", name) }
+
+	mkBranch("feat-current")
+	push("feat-current")
+
+	mkBranch("feat-stale")
+	push("feat-stale")
+	writeFile(t, "stale2.txt", "more\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "-m", "stale2")
+
+	mkBranch("feat-diverged")
+	push("feat-diverged")
+	writeFile(t, "div2.txt", "rewrite\n")
+	mustGit(t, "add", "-A")
+	mustGit(t, "commit", "-q", "--amend", "--no-edit")
+
+	mkBranch("feat-missing")
+
+	states, err := PublishedStates("origin", []string{
+		"feat-current", "feat-stale", "feat-diverged", "feat-missing", "gone",
+	})
+	if err != nil {
+		t.Fatalf("PublishedStates: %v", err)
+	}
+	want := map[string]PublishedState{
+		"feat-current":  PublishedCurrent,
+		"feat-stale":    PublishedStale,
+		"feat-diverged": PublishedDiverged,
+		"feat-missing":  PublishedMissing,
+		"gone":          PublishedUnknown,
+	}
+	for name, w := range want {
+		if states[name] != w {
+			t.Errorf("PublishedStates[%s] = %q, want %q", name, states[name], w)
+		}
+	}
+	if len(states) != len(want) {
+		t.Fatalf("PublishedStates returned %d entries, want %d", len(states), len(want))
+	}
+
+	// An unconfigured remote has no tracking refs at all — everything local is
+	// missing, and the call still resolves without error.
+	states, err = PublishedStates("nonexistent", []string{"feat-current"})
+	if err != nil {
+		t.Fatalf("PublishedStates on missing remote: %v", err)
+	}
+	if states["feat-current"] != PublishedMissing {
+		t.Fatalf("missing remote gave %q, want missing", states["feat-current"])
+	}
+}

@@ -566,6 +566,7 @@ type statusPayload struct {
 	Role          string   `json:"role"`
 	Parent        string   `json:"parent"`
 	Tip           string   `json:"tip"`
+	Published     string   `json:"published"`
 	Children      []string `json:"children"`
 	NeedsRestack  *bool    `json:"needsRestack"`
 	WorktreeClean bool     `json:"worktreeClean"`
@@ -1009,12 +1010,13 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
-	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed", "prHints")
+	requireJSONObjectKeys(t, "submit --dry-run --json", out, "remote", "dryRun", "pushed", "prHints", "published")
 	type submitDryRunJSON struct {
-		Remote  string         `json:"remote"`
-		DryRun  bool           `json:"dryRun"`
-		Pushed  []string       `json:"pushed"`
-		PRHints []stack.PRHint `json:"prHints"`
+		Remote    string            `json:"remote"`
+		DryRun    bool              `json:"dryRun"`
+		Pushed    []string          `json:"pushed"`
+		Published map[string]string `json:"published"`
+		PRHints   []stack.PRHint    `json:"prHints"`
 	}
 	var got submitDryRunJSON
 	decodeStrictJSON(t, "submit --dry-run --json", out, &got)
@@ -1027,12 +1029,113 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 	if want := []string{"feat-a", "feat-b"}; !reflect.DeepEqual(got.Pushed, want) {
 		t.Fatalf("dry-run pushed = %v, want %v", got.Pushed, want)
 	}
+	// Nothing was ever pushed: every would-push branch reads missing.
+	wantPub := map[string]string{"feat-a": "missing", "feat-b": "missing"}
+	if !reflect.DeepEqual(got.Published, wantPub) {
+		t.Fatalf("dry-run published = %v, want %v", got.Published, wantPub)
+	}
 	wantHints := []stack.PRHint{{Head: "feat-a", Base: "main"}, {Head: "feat-b", Base: "feat-a"}}
 	if !reflect.DeepEqual(got.PRHints, wantHints) {
 		t.Fatalf("dry-run prHints = %+v, want %+v", got.PRHints, wantHints)
 	}
 	if refs := mustRun(t, "git", "--git-dir", remoteDir, "for-each-ref", "--format=%(refname)", "refs/heads"); refs != "" {
 		t.Fatalf("dry-run created remote refs:\n%s", refs)
+	}
+}
+
+// TestPublishedStatesAcrossSurfaces exercises the published enum end to end:
+// submit --dry-run reports every would-push branch's state against origin's
+// tracking refs, and status --json reports the checked-out branch's — all from
+// local refs, so the same fixture also proves no fetch happens (the stale
+// branch's remote-side advance is invisible until a fetch).
+func TestPublishedStatesAcrossSurfaces(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	mustRun(t, "git", "remote", "add", "origin", remoteDir)
+
+	mustCreate(t, "feat-current", "c.txt", "c\n", "c")
+	mustRun(t, "git", "push", "-q", "-u", "origin", "feat-current")
+
+	mustCreate(t, "feat-stale", "s.txt", "s\n", "s")
+	mustRun(t, "git", "push", "-q", "-u", "origin", "feat-stale")
+	mustRun(t, "git", "commit", "-q", "--allow-empty", "-m", "ahead")
+
+	mustCreate(t, "feat-diverged", "d.txt", "d\n", "d")
+	mustRun(t, "git", "push", "-q", "-u", "origin", "feat-diverged")
+	write(t, "d.txt", "rewritten\n")
+	mustRun(t, "git", "commit", "-q", "-a", "--amend", "--no-edit")
+
+	mustCreate(t, "feat-missing", "m.txt", "m\n", "m")
+	mustCheckout(t, "feat-missing")
+
+	out := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var sub submitResult
+	decodeStrictJSON(t, "submit --dry-run published", out, &sub)
+	want := map[string]git.PublishedState{
+		"feat-current":  git.PublishedCurrent,
+		"feat-stale":    git.PublishedStale,
+		"feat-diverged": git.PublishedDiverged,
+		"feat-missing":  git.PublishedMissing,
+	}
+	if !reflect.DeepEqual(sub.Published, want) {
+		t.Fatalf("submit published = %v, want %v", sub.Published, want)
+	}
+
+	mustCheckout(t, "feat-stale")
+	statusOut := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json: %v", err)
+		}
+	})
+	var p statusPayload
+	if err := json.Unmarshal([]byte(statusOut), &p); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, statusOut)
+	}
+	if p.Published != string(git.PublishedStale) {
+		t.Fatalf("status published = %q, want %q", p.Published, git.PublishedStale)
+	}
+
+	// Proof the reads were offline: drop every tracking ref under origin and
+	// status must report missing rather than fetching them back.
+	for _, ref := range strings.Fields(mustRun(t, "git", "for-each-ref", "--format=%(refname)", "refs/remotes")) {
+		mustRun(t, "git", "update-ref", "-d", ref)
+	}
+	statusOut = captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json after ref drop: %v", err)
+		}
+	})
+	var p2 statusPayload
+	if err := json.Unmarshal([]byte(statusOut), &p2); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, statusOut)
+	}
+	if p2.Published != string(git.PublishedMissing) {
+		t.Fatalf("status published after ref drop = %q, want %q (a fetch would have restored stale)", p2.Published, git.PublishedMissing)
+	}
+}
+
+func TestStatusPublishedAbsentWithoutRemote(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	out := captureStdout(t, func() {
+		if err := runStatus([]string{"--json"}); err != nil {
+			t.Fatalf("status --json: %v", err)
+		}
+	})
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatalf("status --json invalid: %v\n%s", err, out)
+	}
+	if _, ok := raw["published"]; ok {
+		t.Fatalf("status --json emitted published with no remote configured:\n%s", out)
 	}
 }
 

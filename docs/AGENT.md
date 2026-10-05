@@ -147,7 +147,7 @@ message.
   cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
   the sorted names, `omitempty` — since they cannot appear in the tree; text
   prints the same list as a `warning:` line advising `st repair`.
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, `tip` is the current branch's live tip (`omitempty`, absent on detached HEAD or a deleted ref), and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
+- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, `tip` is the current branch's live tip (`omitempty`, absent on detached HEAD or a deleted ref), and `needsRestack` is present only when it applies. `published` (`omitempty`) classifies the live tip against the branch's `refs/remotes/origin/<branch>` tracking ref: `current` (equal), `stale` (tracking ref is an ancestor — the branch is ahead; a submit is needed), `diverged` (tracking ref exists but is not an ancestor — the published history was rewritten locally), `missing` (no tracking ref — never pushed or pruned), or `unknown` (the comparison could not be made). It describes the last fetch or push only — never the server's current state — and is absent when no `origin` remote is configured or HEAD is detached. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
@@ -158,9 +158,14 @@ message.
   (trunk→current); `submit --all` pushes the whole tracked forest in
   dependency order (parents before children) and works from any branch,
   including trunk or detached HEAD. One shape for every outcome:
-  `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "summary", "failed" }`
+  `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "published", "summary", "failed" }`
   (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
-  `pushed` is empty and `summary` explains why). On successful non-trunk submits,
+  `pushed` is empty and `summary` explains why). Under `--dry-run`, `published`
+  (`omitempty`) maps each would-push branch to its state against the named
+  remote's `refs/remotes/<remote>/<branch>` tracking ref — `current`, `stale`,
+  `diverged`, `missing`, or `unknown`, same semantics as `status --json`'s
+  field — so the preview answers "is a submit needed" per branch without a
+  fetch. On successful non-trunk submits,
   `prHints` lists `{ "head", "base", "compareURL" }` objects so each stacked PR
   targets its stack parent; `compareURL` is present for known compare URL shapes
   (github.com, gitlab.com, and self-hosted hosts whose name carries a
