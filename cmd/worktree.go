@@ -62,8 +62,11 @@ func runWorktree(args []string) error {
 	if o.all {
 		switch {
 		case len(rest) == 0:
-			return worktreeAddAll(asJSON)
+			return worktreeAddAll(asJSON, o.dryRun)
 		case len(rest) == 1 && (rest[0] == "rm" || rest[0] == "remove"):
+			if o.dryRun {
+				return fmt.Errorf("worktree rm --all does not take --dry-run")
+			}
 			return worktreeRemoveAll(asJSON)
 		default:
 			return fmt.Errorf("worktree --all takes no arguments (except: rm --all)")
@@ -78,17 +81,23 @@ func runWorktree(args []string) error {
 		if len(rest) != 1 {
 			return fmt.Errorf("worktree ls takes no arguments")
 		}
+		if o.dryRun {
+			return fmt.Errorf("worktree ls does not take --dry-run (it is already read-only)")
+		}
 		return worktreeList(asJSON)
 	case "rm", "remove":
 		if len(rest) != 2 {
 			return fmt.Errorf("worktree rm requires exactly one branch name")
+		}
+		if o.dryRun {
+			return fmt.Errorf("worktree rm does not take --dry-run")
 		}
 		return worktreeRemove(rest[1], asJSON)
 	default:
 		if len(rest) != 1 {
 			return fmt.Errorf("worktree takes exactly one branch name")
 		}
-		return worktreeAdd(rest[0], asJSON)
+		return worktreeAdd(rest[0], asJSON, o.dryRun)
 	}
 }
 
@@ -117,8 +126,9 @@ func repoIdentifier() (key, root string, err error) {
 
 // worktreeAdd materializes a worktree for an existing tracked branch at the
 // canonical ~/.stacked/worktrees/<repo-key>/<encoded-branch> path, then copies
-// any .worktreeinclude matches into it.
-func worktreeAdd(branch string, asJSON bool) error {
+// any .worktreeinclude matches into it. --dry-run predicts the same outcome —
+// path and copied list — without touching disk.
+func worktreeAdd(branch string, asJSON, dryRun bool) error {
 	release, err := acquireLock()
 	if err != nil {
 		return err
@@ -133,17 +143,102 @@ func worktreeAdd(branch string, asJSON bool) error {
 		return stack.ErrNotTracked(branch)
 	}
 
-	created, err := materializeWorktree(branch)
+	// A branch mid-rebase in a detached worktree is invisible to the ownership
+	// lookup inside materializeWorktreeAt — refuse it up front with the same
+	// clarity the rm path gives, instead of leaking git's refusal.
+	wts, err := worktrees()
 	if err != nil {
 		return err
 	}
-	return emitWorktree(asJSON, branch, created.Path, created.Copied, created.Summary)
+	paused, err := stack.PausedRebaseOwners(newGitPort(), wts)
+	if err != nil {
+		return err
+	}
+	if pausedWT, ok := paused[branch]; ok {
+		return fmt.Errorf("cannot create worktree for %q: a rebase is in progress in its worktree %q; finish or abort it there first", branch, pausedWT.Path)
+	}
+
+	repo, root, err := repoIdentifier()
+	if err != nil {
+		return err
+	}
+	if dryRun {
+		created, err := previewWorktreeAdd(repo, root, branch, wts)
+		if err != nil {
+			return err
+		}
+		return emitWorktree(asJSON, branch, created.Path, created.Copied, created.Summary, true)
+	}
+	created, err := materializeWorktreeAt(repo, root, branch)
+	if err != nil {
+		return err
+	}
+	return emitWorktree(asJSON, branch, created.Path, created.Copied, created.Summary, false)
 }
 
 type materializedWorktree struct {
 	Path    string
 	Copied  []string
 	Summary string
+}
+
+// checkedOutInMainErr is the shared refusal for "branch already checked out in
+// the main worktree" — materializeWorktreeAt and its dry-run preview must say
+// it identically.
+func checkedOutInMainErr(branch, mainPath string) error {
+	return fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, mainPath, branch)
+}
+
+// previewWorktreeAdd computes what materializeWorktreeAt would do for branch —
+// its canonical path and the .worktreeinclude set it would copy — without
+// creating anything. It mirrors the same checks in the same order (existing
+// owner, main-worktree refusal, path, copy selection) so a dry run reports the
+// outcome the real run would have, including the collision refusal the copy
+// preflight would raise against the branch's tracked tree.
+func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (materializedWorktree, error) {
+	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
+		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, nil
+	}
+	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
+		return materializedWorktree{}, checkedOutInMainErr(branch, main.Path)
+	}
+
+	path, err := stack.WorktreePath(repo, branch)
+	if err != nil {
+		return materializedWorktree{}, err
+	}
+	candidates, err := selectWorktreeIncludes(root)
+	if err != nil {
+		return materializedWorktree{}, err
+	}
+	if len(candidates) > 0 {
+		// The destination does not exist yet; its tracked set is exactly the
+		// branch's tree — what git worktree add would materialize.
+		tracked, trackedSorted, err := gitTreePaths(branch)
+		if err != nil {
+			return materializedWorktree{}, err
+		}
+		if err := stack.RefuseWorktreeIncludeCollisions(path, candidates, tracked, trackedSorted); err != nil {
+			return materializedWorktree{}, fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
+		}
+	}
+	return materializedWorktree{Path: path, Copied: candidates, Summary: "would create worktree"}, nil
+}
+
+// gitTreePaths returns the tracked paths of a branch's tree — what a fresh
+// worktree created for it would contain — as the lookup set plus sorted list
+// RefuseWorktreeIncludeCollisions consumes.
+func gitTreePaths(branch string) (tracked map[string]bool, trackedSorted []string, err error) {
+	paths, err := git.LsTreeZ(branch)
+	if err != nil {
+		return nil, nil, err
+	}
+	tracked = make(map[string]bool, len(paths))
+	for _, p := range paths {
+		tracked[p] = true
+	}
+	sort.Strings(paths)
+	return tracked, paths, nil
 }
 
 // materializeWorktree resolves the repo identity itself — the single-shot
@@ -176,7 +271,7 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 	// instead of pointing the user at the main tree as if it were a dedicated
 	// worktree (or leaking git's "already used by worktree" error).
 	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
-		return materializedWorktree{}, fmt.Errorf("%q is checked out in the main worktree (%s); switch it to another branch there first to give %q its own worktree", branch, main.Path, branch)
+		return materializedWorktree{}, checkedOutInMainErr(branch, main.Path)
 	}
 
 	path, err := stack.WorktreePath(repo, branch)
@@ -488,8 +583,8 @@ func worktreeList(asJSON bool) error {
 }
 
 // emitWorktree renders the result of a create/already-exists worktree action.
-func emitWorktree(asJSON bool, branch, path string, copied []string, summary string) error {
-	payload := worktreeAllEntry{Branch: branch, Path: path, Copied: copied, Summary: summary}
+func emitWorktree(asJSON bool, branch, path string, copied []string, summary string, dryRun bool) error {
+	payload := worktreeAllEntry{Branch: branch, Path: path, Copied: copied, Summary: summary, DryRun: dryRun}
 	return emit(asJSON, payload, func() {
 		out("%s: %s -> %s\n", summary, sanitizeForTerminal(branch), sanitizeForTerminal(path))
 		if len(copied) > 0 {
@@ -511,6 +606,7 @@ type worktreeAllResult struct {
 	Created []worktreeAllEntry  `json:"created"`
 	Skipped []worktreeAllSkip   `json:"skipped,omitempty"`
 	Failed  *worktreeAllFailure `json:"failed,omitempty"`
+	DryRun  bool                `json:"dryRun,omitempty"`
 }
 
 type worktreeAllEntry struct {
@@ -518,6 +614,7 @@ type worktreeAllEntry struct {
 	Path    string   `json:"path"`
 	Copied  []string `json:"copied,omitempty"`
 	Summary string   `json:"summary"`
+	DryRun  bool     `json:"dryRun,omitempty"`
 }
 
 type worktreeAllSkip struct {
@@ -532,14 +629,28 @@ type worktreeAllFailure struct {
 
 // worktreeAddAll materializes a worktree for every tracked branch that lacks
 // one, in deterministic (sorted) order under a single lock. The branch checked
-// out in the main worktree is skipped (git cannot give it a second checkout);
-// branches that already own a worktree report their existing path.
-func worktreeAddAll(asJSON bool) error {
-	names, _, mainBranch, release, err := bulkWorktreeSetup()
+// out in the main worktree is skipped (git cannot give it a second checkout),
+// and so is every branch whose worktree sits paused mid-rebase — the same skip
+// rm --all resolves, so a paused agent's worktree does not halt the seeding
+// loop; branches that already own a worktree report their existing path.
+// --dry-run runs the same skip resolution and reports the predicted
+// path/copied rows (dryRun:true) without creating anything.
+func worktreeAddAll(asJSON, dryRun bool) error {
+	names, wts, mainBranch, release, err := bulkWorktreeSetup()
 	if err != nil {
 		return err
 	}
 	defer release()
+
+	// Worktrees paused mid-rebase list as detached — LinkedOwnerOf cannot see
+	// their target branch, and `git worktree add` for that branch would refuse
+	// (or worse, double-claim it mid-rebase). Resolve the pause set once up
+	// front and skip each paused branch by name, exactly as rm --all does.
+	paused, perr := stack.PausedRebaseOwners(newGitPort(), wts)
+	if perr != nil {
+		return perr
+	}
+
 	// The repo identity is loop-invariant; resolve its two rev-parse spawns
 	// once instead of per branch.
 	repo, root, err := repoIdentifier()
@@ -547,13 +658,22 @@ func worktreeAddAll(asJSON bool) error {
 		return err
 	}
 
-	result := worktreeAllResult{Created: []worktreeAllEntry{}}
+	result := worktreeAllResult{Created: []worktreeAllEntry{}, DryRun: dryRun}
 	for _, name := range names {
 		if name == mainBranch {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipCheckedOutMain})
 			continue
 		}
-		created, err := materializeWorktreeAt(repo, root, name)
+		if _, isPaused := paused[name]; isPaused {
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipRebaseInProgress})
+			continue
+		}
+		var created materializedWorktree
+		if dryRun {
+			created, err = previewWorktreeAdd(repo, root, name, wts)
+		} else {
+			created, err = materializeWorktreeAt(repo, root, name)
+		}
 		if err != nil {
 			// Emit the partial result (what succeeded plus the failing branch)
 			// before returning, mirroring submit's partial-failure contract; the

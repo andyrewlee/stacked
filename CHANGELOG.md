@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st worktree` add forms take `--dry-run`.** `st worktree <branch>
+  --dry-run` and `st worktree --all --dry-run` preview the worktree paths
+  and the `.worktreeinclude` files a real run would copy — reported under
+  `"dryRun": true` in `--json` — without creating anything; the read-only
+  and remove forms reject the flag. `st worktree --all` also now skips a
+  branch whose worktree sits paused mid-rebase ("a rebase is in progress
+  there", the same reason `rm --all` uses) instead of failing on git's own
+  refusal mid-loop, and `st worktree <branch>` refuses such a branch up
+  front.
 - **`st open` opens a branch's PR compare URL.** Bare `st open` spawns the
   platform opener (`open`/`xdg-open`/`rundll32`) once per URL for the current
   branch's compare URL; `--all` opens every tracked branch's. `--remote`

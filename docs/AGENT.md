@@ -149,7 +149,7 @@ message.
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
-- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip branches into `skipped` with a `reason`: `rm --all` reasons are "worktree has uncommitted changes", "checked out in the main worktree", "you are inside it", and "a rebase is in progress there"; `--all` skips the main worktree's branch the same way. `st shell install` emits a shell script, not JSON.
+- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }`; `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip branches into `skipped` with a `reason`: `rm --all` reasons are "worktree has uncommitted changes", "checked out in the main worktree", "you are inside it", and "a rebase is in progress there"; `--all` skips the main worktree's branch and every branch whose worktree sits paused mid-rebase the same way. The add forms take `--dry-run`: `st worktree <branch> --dry-run` returns the same payload plus `"dryRun": true`, and `st worktree --all --dry-run` the same aggregate plus `"dryRun": true` — predicting each row's `path` and `copied` (the `.worktreeinclude` selection a real run would make, including its collision refusals) without creating anything. `st shell install` emits a shell script, not JSON.
 - **`submit --json`** — `submit` pushes the current stack path
   (trunk→current); `submit --all` pushes the whole tracked forest in
   dependency order (parents before children) and works from any branch,
@@ -366,9 +366,12 @@ One stack, N agents, one worktree per branch:
    `path`. To seed every tracked branch at once: `st worktree --all --json`
    returns `{"created":[{"branch","path","copied":[],"summary"}],
    "skipped":[{"branch","reason"}],"failed":{"branch","error"}}` — the branch
-   checked out in the main worktree is skipped, adds stop at the first failure
-   (`failed`, non-zero exit; rerunning is safe — materialization is
-   idempotent).
+   checked out in the main worktree is skipped, a branch paused mid-rebase in
+   its worktree is skipped as "a rebase is in progress there", and adds stop
+   at the first hard failure (`failed`, non-zero exit; rerunning is safe —
+   materialization is idempotent). `st worktree --all --dry-run --json`
+   previews the same rows with `"dryRun": true` — each predicted `path` and
+   `copied` — without creating anything.
 2. **Observe.** `st log --json` carries, per node, `worktree` (the branch is
    claimed by that worktree), `dirty` (uncommitted work there), and
    `needsRestack`. A node with no `worktree` field is unclaimed.

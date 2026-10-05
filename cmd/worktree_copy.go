@@ -31,6 +31,47 @@ const worktreeIncludeFile = ".worktreeinclude"
 // decision rule — expansion, validation, ignore-gating, nested-drop, collision
 // preflight, destination safety — lives in stack's worktree_include.go.
 func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
+	candidates, err := selectWorktreeIncludes(srcRoot)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Destination preflight, all-or-nothing BEFORE the first copy: a later
+	// colliding entry must not leave earlier copies behind. Read-only: no
+	// destination directories are created here.
+	tracked, trackedSorted, err := gitTrackedPaths(dstRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := stack.RefuseWorktreeIncludeCollisions(dstRoot, candidates, tracked, trackedSorted); err != nil {
+		return nil, err
+	}
+
+	var copied []string
+	for _, rel := range candidates {
+		dst, err := stack.PrepareIncludeDestination(dstRoot, rel)
+		if err != nil {
+			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
+		}
+		if err := reflinkCopy(filepath.Join(srcRoot, rel), dst); err != nil {
+			return copied, err
+		}
+		copied = append(copied, rel)
+	}
+	return copied, nil
+}
+
+// selectWorktreeIncludes is the source-side half of the include pipeline —
+// read-only on srcRoot: manifest parse, glob expansion, validation, the
+// batched check-ignore probe, the nested-directory drop, and selection. It
+// returns the repo-relative entries a copy would carry (nil when the manifest
+// is absent or empty). The destination preflight and the copy itself belong
+// to copyWorktreeIncludes; the worktree --dry-run preview consumes this half
+// against a destination that does not exist yet.
+func selectWorktreeIncludes(srcRoot string) ([]string, error) {
 	manifest := filepath.Join(srcRoot, worktreeIncludeFile)
 	data, err := os.ReadFile(manifest)
 	if err != nil {
@@ -73,37 +114,9 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	// skipped by the loop and must NOT suppress its gitignored descendants.
 	entries = stack.DropNestedIncludeDirs(srcRoot, entries, ignored)
 
-	// Phase 1 — select the entries that would actually copy. The gates are the
-	// same as before (exists in source, gitignored, contained in the repo);
-	// nothing is written to the destination in this phase.
-	candidates, err := stack.SelectWorktreeIncludes(srcRoot, entries, ignored)
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 2 — destination preflight, all-or-nothing BEFORE the first copy:
-	// a later colliding entry must not leave earlier copies behind. Read-only:
-	// no destination directories are created here.
-	tracked, trackedSorted, err := gitTrackedPaths(dstRoot)
-	if err != nil {
-		return nil, err
-	}
-	if err := stack.RefuseWorktreeIncludeCollisions(dstRoot, candidates, tracked, trackedSorted); err != nil {
-		return nil, err
-	}
-
-	var copied []string
-	for _, rel := range candidates {
-		dst, err := stack.PrepareIncludeDestination(dstRoot, rel)
-		if err != nil {
-			return copied, fmt.Errorf(".worktreeinclude path %q: %w", rel, err)
-		}
-		if err := reflinkCopy(filepath.Join(srcRoot, rel), dst); err != nil {
-			return copied, err
-		}
-		copied = append(copied, rel)
-	}
-	return copied, nil
+	// Select the entries that would actually copy. The gates: exists in
+	// source, gitignored, contained in the repo.
+	return stack.SelectWorktreeIncludes(srcRoot, entries, ignored)
 }
 
 // gitTrackedPaths returns the destination worktree's tracked paths as a

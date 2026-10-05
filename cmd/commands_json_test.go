@@ -1460,7 +1460,7 @@ func TestCompletionShells(t *testing.T) {
 // hand-maintained map, deduped and sorted.
 func TestCommandCompletions(t *testing.T) {
 	toks := commandCompletions(byName["worktree"])
-	want := []string{"--all", "--json", "list", "ls", "remove", "rm"}
+	want := []string{"--all", "--dry-run", "--json", "list", "ls", "remove", "rm"}
 	if !reflect.DeepEqual(toks, want) {
 		t.Fatalf("worktree completions = %v, want %v", toks, want)
 	}

@@ -20,13 +20,29 @@ func LsFilesZ(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitNUL(out), nil
+}
+
+// LsTreeZ returns the paths rev's tree tracks, recursively, parsed from one
+// `git ls-tree -r -z --name-only rev` — the set a fresh `git worktree add` of
+// that rev would materialize (gitlinks included, by name). It answers the
+// tracked set of a worktree that does not exist yet.
+func LsTreeZ(rev string) ([]string, error) {
+	out, err := run("ls-tree", "-r", "-z", "--name-only", rev)
+	if err != nil {
+		return nil, fmt.Errorf("git ls-tree %s: %w", rev, err)
+	}
+	return splitNUL(out), nil
+}
+
+func splitNUL(out string) []string {
 	var paths []string
 	for _, p := range strings.Split(out, "\x00") {
 		if p != "" {
 			paths = append(paths, p)
 		}
 	}
-	return paths, nil
+	return paths
 }
 
 // CheckIgnored reports which of rels (paths relative to root) git ignores,
