@@ -132,18 +132,22 @@ message.
   commit inside the created worktree afterward.
 - **`log --json`** — a recursive tree rooted at the trunk:
   ```json
-  { "name": "main", "current": false, "needsRestack": false,
+  { "name": "main", "tip": "…", "current": false, "needsRestack": false,
     "children": [ { "name": "feat-a", "parent": "main", "parentSHA": "…",
-                    "current": true, "needsRestack": false, "topCommit": "add a", "children": [] } ] }
+                    "tip": "…", "current": true, "needsRestack": false,
+                    "topCommit": "add a", "children": [] } ] }
   ```
-  In a multi-worktree repo each node may also carry `worktree` (the on-disk path
+  `tip` is the branch's LIVE tip SHA (`omitempty` — absent when the ref is
+  gone, which is itself the drift signal); `parentSHA` is the recorded base.
+  `tip` vs `parentSHA` answers "did this branch move since the stack recorded
+  it" in one poll. In a multi-worktree repo each node may also carry `worktree` (the on-disk path
   of the linked worktree the branch lives in) and `dirty` (true when that
   worktree has uncommitted changes); both are `omitempty`, so single-tree output
   is unchanged. When tracked branches are unreachable from the trunk (a parent
   cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
   the sorted names, `omitempty` — since they cannot appear in the tree; text
   prints the same list as a `warning:` line advising `st repair`.
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
+- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, `tip` is the current branch's live tip (`omitempty`, absent on detached HEAD or a deleted ref), and `needsRestack` is present only when it applies. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
   name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
   worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).

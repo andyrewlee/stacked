@@ -13,7 +13,9 @@ var updateGolden = flag.Bool("update", false, "update golden files")
 
 var (
 	ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
-	shaRE  = regexp.MustCompile(`"parentSHA": "[0-9a-f]{40}"`)
+	// SHA-valued fields whose contents are commit-dependent (non-deterministic
+	// across runs): parentSHA (the recorded base) and tip (the live tip).
+	shaRE = regexp.MustCompile(`"(parentSHA|tip)": "[0-9a-f]{40}"`)
 )
 
 // golden compares got against testdata/<name>.golden, or rewrites it under
@@ -66,7 +68,7 @@ func TestGoldenLogJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "add a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "add b")
 	out := captureStdout(t, func() { _ = runLog([]string{"--json"}) })
-	golden(t, "log_json", shaRE.ReplaceAllString(out, `"parentSHA": "<sha>"`))
+	golden(t, "log_json", shaRE.ReplaceAllString(out, `"$1": "<sha>"`))
 }
 
 func TestGoldenStatusJSON(t *testing.T) {
@@ -74,5 +76,5 @@ func TestGoldenStatusJSON(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "add a")
 	out := captureStdout(t, func() { _ = runStatus([]string{"--json"}) })
-	golden(t, "status_json", out)
+	golden(t, "status_json", shaRE.ReplaceAllString(out, `"$1": "<sha>"`))
 }

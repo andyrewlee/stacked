@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`st log --json` and `st status --json` report the live tip SHA.** Each
+  `log` node and the `status` payload carry `tip` (`omitempty`) — the live
+  ref tip from the same batched probe the render already ran, versus the
+  recorded base in `parentSHA`. Absent when the ref is gone, which is itself
+  the drift signal an orchestrator polls for.
 - **`st worktree` add forms take `--dry-run`.** `st worktree <branch>
   --dry-run` and `st worktree --all --dry-run` preview the worktree paths
   and the `.worktreeinclude` files a real run would copy — reported under

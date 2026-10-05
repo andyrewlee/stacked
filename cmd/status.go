@@ -93,6 +93,18 @@ func runStatus(args []string) error {
 		return err
 	}
 
+	// The current branch's live tip — one batched cat-file probe — lets a
+	// poller spot external ref movement without its own rev-parse. Empty when
+	// HEAD is detached or the ref is gone.
+	tip := ""
+	if cur != "" {
+		tips, err := git.TipsFor([]string{cur})
+		if err != nil {
+			return err
+		}
+		tip = tips[cur]
+	}
+
 	// In a multi-worktree repo, report where the current branch lives. Gated so
 	// single-tree output is byte-for-byte unchanged (worktreePath stays "").
 	worktreePath := ""
@@ -110,6 +122,7 @@ func runStatus(args []string) error {
 			Trunk            string   `json:"trunk"`
 			Role             string   `json:"role"`
 			Parent           string   `json:"parent,omitempty"`
+			Tip              string   `json:"tip,omitempty"`
 			Children         []string `json:"children"`
 			NeedsRestack     *bool    `json:"needsRestack,omitempty"`
 			WorktreeClean    bool     `json:"worktreeClean"`
@@ -117,7 +130,7 @@ func runStatus(args []string) error {
 			RebaseBranch     string   `json:"rebaseBranch,omitempty"`
 			ConflictedFiles  []string `json:"conflictedFiles,omitempty"`
 			Worktree         string   `json:"worktree,omitempty"`
-		}{cur, s.Trunk, role, parent, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
+		}{cur, s.Trunk, role, parent, tip, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err

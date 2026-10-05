@@ -120,6 +120,11 @@ func TestLogTextAndJSON(t *testing.T) {
 	if b.ParentSHA == "" {
 		t.Fatalf("feat-b should carry a parentSHA: %+v", b)
 	}
+	// tip is the LIVE ref — parentSHA's sibling (the recorded base), not the
+	// same SHA.
+	if want := mustRun(t, "git", "rev-parse", "feat-b"); b.Tip != want || b.Tip == b.ParentSHA {
+		t.Fatalf("feat-b tip = %q, want live tip %q (parentSHA %q)", b.Tip, want, b.ParentSHA)
+	}
 	if b.TopCommit != "b" {
 		t.Fatalf("feat-b topCommit = %q, want b", b.TopCommit)
 	}
@@ -560,6 +565,7 @@ type statusPayload struct {
 	Branch        string   `json:"branch"`
 	Role          string   `json:"role"`
 	Parent        string   `json:"parent"`
+	Tip           string   `json:"tip"`
 	Children      []string `json:"children"`
 	NeedsRestack  *bool    `json:"needsRestack"`
 	WorktreeClean bool     `json:"worktreeClean"`
@@ -594,6 +600,9 @@ func TestStatusTextAndJSON(t *testing.T) {
 	}
 	if p.Branch != "feat-a" || p.Role != "tracked" || p.Parent != "main" {
 		t.Fatalf("status payload wrong: %+v", p)
+	}
+	if want := mustRun(t, "git", "rev-parse", "feat-a"); p.Tip != want {
+		t.Fatalf("status tip = %q, want live feat-a tip %q", p.Tip, want)
 	}
 	if len(p.Children) != 1 || p.Children[0] != "feat-b" {
 		t.Fatalf("status children wrong: %+v", p.Children)

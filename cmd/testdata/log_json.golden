@@ -1,5 +1,6 @@
 {
   "name": "main",
+  "tip": "<sha>",
   "current": false,
   "needsRestack": false,
   "children": [
@@ -7,6 +8,7 @@
       "name": "feat-a",
       "parent": "main",
       "parentSHA": "<sha>",
+      "tip": "<sha>",
       "current": false,
       "needsRestack": false,
       "topCommit": "add a",
@@ -15,6 +17,7 @@
           "name": "feat-b",
           "parent": "feat-a",
           "parentSHA": "<sha>",
+          "tip": "<sha>",
           "current": true,
           "needsRestack": false,
           "topCommit": "add b",

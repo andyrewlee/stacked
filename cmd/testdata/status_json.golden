@@ -3,6 +3,7 @@
   "trunk": "main",
   "role": "tracked",
   "parent": "main",
+  "tip": "<sha>",
   "children": [],
   "needsRestack": false,
   "worktreeClean": true
