@@ -3119,6 +3119,21 @@ func TestGitEnvExtraEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestRunInteractiveScrubsEnv pins the call site, not just the filter:
+// RunInteractive (the interactive rebase spawn) must apply gitEnv like every
+// other spawn, so repo-routing variables exported by a hook or by hand cannot
+// redirect the one spawn that rewrites history. Each plant independently
+// breaks the unscrubbed spawn — GIT_DIR resolves a non-repo, and
+// GIT_CONFIG_COUNT without its key/value pairs is malformed config.
+func TestRunInteractiveScrubsEnv(t *testing.T) {
+	newRepo(t)
+	t.Setenv("GIT_DIR", "/tmp/foreign-repo")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	if err := RunInteractive("status", "--porcelain"); err != nil {
+		t.Fatalf("RunInteractive with planted GIT_DIR/GIT_CONFIG_COUNT: %v — the spawn must see the scrubbed env, not os.Environ()", err)
+	}
+}
+
 // TestCheckIgnoreStdinSlashForm pins the wire contract at the builder level:
 // whatever native form a rel arrives in, check-ignore's stdin sees git's
 // slash-separated pathspec form, NUL-separated with a trailing NUL. The

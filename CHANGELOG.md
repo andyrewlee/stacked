@@ -157,6 +157,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **Interactive rebases inherit the scrubbed git environment.** `st restack`,
+  `st onto`, and the other rebase-driving commands spawn `git rebase`
+  interactively; that one spawn missed the repo-routing environment scrub
+  every other git call applies, so exported `GIT_DIR`-family variables (or
+  git-set `GIT_QUARANTINE_PATH` inside a hook) could redirect the rebase at
+  another repository or inject config into it.
 - **The installer validates the tarball before trusting it.** `install.sh`
   now lists the archive and refuses any member that would write outside the
   extract directory (absolute or `..` paths), then verifies `st` itself is a

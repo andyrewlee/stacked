@@ -110,6 +110,7 @@ func RunInteractive(args ...string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = gitEnv()
 	if err := spawnRun(cmd); err != nil {
 		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
