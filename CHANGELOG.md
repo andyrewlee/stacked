@@ -178,6 +178,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **The exit-5 lock-contention error names its remedy.** `ErrLocked` now reads
+  "another st command is running in this repository (retry when it finishes,
+  or set ST_LOCK_WAIT to wait)" — matching the other top-failure errors that
+  spell out what to do next. The JSON `"locked"` code is unchanged.
 - **`make check-tools` fails fast when `bash` is absent.** `scripts/cover.sh`,
   the `check-install` scripts, and both git hooks are `#!/usr/bin/env bash`,
   so a bash-less environment previously died mid-run instead of at the tool
