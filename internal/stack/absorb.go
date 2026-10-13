@@ -78,6 +78,14 @@ func AbsorbPlan(env Env, s *State) (*AbsorbResult, error) {
 	return res, nil
 }
 
+// blameOutcome is one fanned-out blame probe's result for a distinct staged
+// file — the porcelain line map, or the error a serial pass would have
+// returned at that file's first consult.
+type blameOutcome struct {
+	lines map[int]git.BlameLine
+	err   error
+}
+
 // absorbPlan is AbsorbPlan plus the resolved current branch, so Absorb can
 // reuse it without a second CurrentBranch read.
 func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
@@ -153,7 +161,33 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 	// the advisory lock, and this pass performs no mutation). Keyed on file
 	// alone only because every lookup is at HEAD; if a future caller blames
 	// other revs or sub-ranges, key on (file, rev, range).
-	blameByFile := map[string]map[int]git.BlameLine{}
+	//
+	// The distinct files' blames are independent read-only probes — fan them
+	// out in first-seen hunk order and consult each outcome in that same
+	// order, so a failure reports at exactly the hunk a serial memoized pass
+	// would have reached first. Files whose hunks are all pure additions are
+	// never consulted, so they never join the fan-out either.
+	blameByFile := map[string]blameOutcome{}
+	{
+		var files []string
+		seen := map[string]bool{}
+		for _, h := range hunks {
+			if h.OldN == 0 || seen[h.File] {
+				continue
+			}
+			seen[h.File] = true
+			files = append(files, h.File)
+		}
+		outcomes := make([]blameOutcome, len(files))
+		_ = git.ParallelProbes(len(files), func(i int) error {
+			lines, berr := g.BlamePorcelain(files[i], "HEAD")
+			outcomes[i] = blameOutcome{lines: lines, err: berr}
+			return nil // deferred: the hunk loop surfaces each error at its consult
+		})
+		for i, f := range files {
+			blameByFile[f] = outcomes[i]
+		}
+	}
 	for _, h := range hunks {
 		lines := hunkLines(h)
 		if h.OldN == 0 {
@@ -162,14 +196,11 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 			res.Refused = append(res.Refused, refusedHunk{File: h.File, Lines: lines, Reason: "pure addition; use st modify"})
 			continue
 		}
-		blame, ok := blameByFile[h.File]
-		if !ok {
-			blame, err = g.BlamePorcelain(h.File, "HEAD")
-			if err != nil {
-				return nil, "", fmt.Errorf("blame %q: %w", h.File, err)
-			}
-			blameByFile[h.File] = blame
+		outcome := blameByFile[h.File]
+		if outcome.err != nil {
+			return nil, "", fmt.Errorf("blame %q: %w", h.File, outcome.err)
 		}
+		blame := outcome.lines
 		// Beyond ownership, every old line's provenance must carry IDENTITY
 		// coordinates: the apply lands a -U0 patch on the owning commit's
 		// tree at the HEAD line numbers, so a line whose OriginalLine or

@@ -196,13 +196,40 @@ func checkedOutInMainErr(branch, mainPath string) error {
 // outcome the real run would have, including the collision refusal the copy
 // preflight would raise against the branch's tracked tree.
 func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (materializedWorktree, error) {
-	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
-		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, nil
-	}
-	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
-		return materializedWorktree{}, checkedOutInMainErr(branch, main.Path)
+	if mw, handled, err := worktreeAddPrecheck(wts, branch); handled || err != nil {
+		return mw, err
 	}
 	return previewWorktreeShape(repo, root, branch, branch)
+}
+
+// worktreeAddPrecheck is the shared head of the add paths — the real
+// materializeWorktreeAt and its dry-run previews answer the same two
+// ownership questions identically before any per-branch work.
+func worktreeAddPrecheck(wts []git.Worktree, branch string) (mw materializedWorktree, handled bool, err error) {
+	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
+		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, true, nil
+	}
+	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
+		return materializedWorktree{}, false, checkedOutInMainErr(branch, main.Path)
+	}
+	return materializedWorktree{}, false, nil
+}
+
+// previewWorktreeAddSelected is previewWorktreeAdd for the worktree --all
+// dry run: the same checks in the same order, then the predicted shape from
+// the batch-resolved include selection and the branch's fanned-out tree
+// listing.
+func previewWorktreeAddSelected(repo, branch string, wts []git.Worktree, candidates []string, listing treeListing) (materializedWorktree, error) {
+	if mw, handled, err := worktreeAddPrecheck(wts, branch); handled || err != nil {
+		return mw, err
+	}
+	path, err := stack.WorktreePath(repo, branch)
+	if err != nil {
+		return materializedWorktree{}, err
+	}
+	return previewWorktreeShapeSelected(path, candidates, func() (map[string]bool, []string, error) {
+		return listing.tracked, listing.trackedSorted, listing.err
+	})
 }
 
 // previewWorktreeShape predicts the canonical path and .worktreeinclude copies
@@ -218,10 +245,22 @@ func previewWorktreeShape(repo, root, branch, treeRef string) (materializedWorkt
 	if err != nil {
 		return materializedWorktree{}, err
 	}
+	return previewWorktreeShapeSelected(path, candidates, func() (map[string]bool, []string, error) {
+		return gitTreePaths(treeRef)
+	})
+}
+
+// previewWorktreeShapeSelected is the shape computation with the canonical
+// path and the include selection already resolved and the destination tree
+// supplied by treeFor — the single-shot preview resolves all three itself;
+// the worktree --all dry run shares the selection and supplies a listing
+// fanned out for the whole batch. The tree probe still runs only when the
+// selection is non-empty, exactly where the serial pass ran it.
+func previewWorktreeShapeSelected(path string, candidates []string, treeFor func() (map[string]bool, []string, error)) (materializedWorktree, error) {
 	if len(candidates) > 0 {
 		// The destination does not exist yet; its tracked set is exactly the
 		// tree git worktree add would materialize.
-		tracked, trackedSorted, err := gitTreePaths(treeRef)
+		tracked, trackedSorted, err := treeFor()
 		if err != nil {
 			return materializedWorktree{}, err
 		}
@@ -230,6 +269,16 @@ func previewWorktreeShape(repo, root, branch, treeRef string) (materializedWorkt
 		}
 	}
 	return materializedWorktree{Path: path, Copied: candidates, Summary: "would create worktree"}, nil
+}
+
+// treeListing is one branch's fanned-out `git ls-tree` result for the
+// worktree --all dry run: the tracked-path set plus sorted list the collision
+// preflight consumes, or the probe error a serial pass would have surfaced at
+// that branch.
+type treeListing struct {
+	tracked       map[string]bool
+	trackedSorted []string
+	err           error
 }
 
 // gitTreePaths returns the tracked paths of a branch's tree — what a fresh
@@ -264,6 +313,16 @@ func materializeWorktree(branch string) (materializedWorktree, error) {
 // idempotency and main-worktree checks, cache invalidation, include-copy
 // rollback — is unchanged and still runs per call.
 func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, error) {
+	return materializeWorktreeAtIncludes(repo, root, branch, nil, false)
+}
+
+// materializeWorktreeAtIncludes additionally takes the include selection
+// resolved once for the whole --all batch. resolved distinguishes a
+// legitimately-empty selection from the not-yet-resolved single-shot call:
+// resolving at the copy point keeps that path's error ordering unchanged —
+// a malformed manifest still surfaces only after the ownership checks, never
+// before an "already exists" answer.
+func materializeWorktreeAtIncludes(repo, root, branch string, candidates []string, resolved bool) (materializedWorktree, error) {
 	wts, err := worktrees()
 	if err != nil {
 		return materializedWorktree{}, err
@@ -289,7 +348,12 @@ func materializeWorktreeAt(repo, root, branch string) (materializedWorktree, err
 		return materializedWorktree{}, fmt.Errorf("creating worktree for %q: %w", branch, err)
 	}
 
-	copied, err := copyWorktreeIncludes(root, path)
+	var copied []string
+	if resolved {
+		copied, err = copySelectedWorktreeIncludes(root, path, candidates)
+	} else {
+		copied, err = copyWorktreeIncludes(root, path)
+	}
 	if err != nil {
 		copyErr := fmt.Errorf("copying .worktreeinclude into %q: %w", path, err)
 		removeErr := removeWorktreePath(path, true)
@@ -665,6 +729,49 @@ func worktreeAddAll(asJSON, dryRun bool) error {
 		return err
 	}
 
+	// The .worktreeinclude selection reads only the source root's manifest
+	// and ignore state — loop-invariant, so resolve it once. Semantic change:
+	// a malformed manifest now fails the whole --all up front, before any
+	// worktree exists, instead of mid-loop after earlier branches already
+	// materialized.
+	candidates, err := selectWorktreeIncludes(root)
+	if err != nil {
+		return err
+	}
+
+	// Under --dry-run each surviving branch's tracked-tree listing is an
+	// independent read-only `git ls-tree` — fan the probes out, then read
+	// the outcomes in names order so rows and the first reported error match
+	// a serial pass. The real run cannot share the listing: its collision
+	// preflight reads the freshly-created worktree's own index, not the
+	// branch's tree.
+	var listings map[string]treeListing
+	if dryRun && len(candidates) > 0 {
+		var targets []string
+		for _, name := range names {
+			if name == mainBranch {
+				continue
+			}
+			if _, isPaused := paused[name]; isPaused {
+				continue
+			}
+			if _, owned := stack.LinkedOwnerOf(wts, name); owned {
+				continue
+			}
+			targets = append(targets, name)
+		}
+		listings = make(map[string]treeListing, len(targets))
+		results := make([]treeListing, len(targets))
+		_ = git.ParallelProbes(len(targets), func(i int) error {
+			tracked, trackedSorted, terr := gitTreePaths(targets[i])
+			results[i] = treeListing{tracked: tracked, trackedSorted: trackedSorted, err: terr}
+			return nil // deferred: the loop surfaces each error at its branch
+		})
+		for i, name := range targets {
+			listings[name] = results[i]
+		}
+	}
+
 	result := worktreeAllResult{Created: []worktreeAllEntry{}, DryRun: dryRun}
 	for _, name := range names {
 		if name == mainBranch {
@@ -677,9 +784,9 @@ func worktreeAddAll(asJSON, dryRun bool) error {
 		}
 		var created materializedWorktree
 		if dryRun {
-			created, err = previewWorktreeAdd(repo, root, name, wts)
+			created, err = previewWorktreeAddSelected(repo, name, wts, candidates, listings[name])
 		} else {
-			created, err = materializeWorktreeAt(repo, root, name)
+			created, err = materializeWorktreeAtIncludes(repo, root, name, candidates, true)
 		}
 		if err != nil {
 			// Emit the partial result (what succeeded plus the failing branch)

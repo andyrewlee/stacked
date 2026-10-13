@@ -35,6 +35,13 @@ func copyWorktreeIncludes(srcRoot, dstRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return copySelectedWorktreeIncludes(srcRoot, dstRoot, candidates)
+}
+
+// copySelectedWorktreeIncludes is copyWorktreeIncludes with the source-side
+// selection already resolved — worktree --all resolves it once for the whole
+// batch instead of once per destination.
+func copySelectedWorktreeIncludes(srcRoot, dstRoot string, candidates []string) ([]string, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}

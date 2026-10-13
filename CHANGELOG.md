@@ -130,10 +130,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 - **Independent read-only git probes run concurrently.** `st log`'s
-  merge-base checks, `track --all`'s parent inference, and the
-  merge-containment sweeps in prune/sync now fan out through a bounded
+  merge-base checks, `track --all`'s parent inference and trunk-pick
+  merge-base checks, `st absorb`'s per-file blame reads, the
+  merge-containment sweeps in prune/sync, and `st worktree --all
+  --dry-run`'s per-branch tree listings now fan out through a bounded
   parallel probe helper instead of serial `git` spawns; output ordering
-  is unchanged.
+  and the first reported error are unchanged. `st worktree --all` also
+  resolves the `.worktreeinclude` selection once up front, so a malformed
+  manifest now fails the whole batch before the first worktree exists.
 - **Mutating commands spawn fewer git probes.** The command-layer git port
   (`cmd/gitenv.go`) memoizes `CurrentBranch` and `RepoRoot` per port
   instance — `st modify` asks `rev-parse --abbrev-ref HEAD` once instead of
