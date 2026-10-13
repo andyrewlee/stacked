@@ -468,6 +468,72 @@ func TestAtomicWriteFileRenameFailure(t *testing.T) {
 	}
 }
 
+// The temp file must be fsynced BEFORE the rename publishes it: syncing after
+// the rename would leave the window where the directory entry is durable but
+// the bytes are still in the page cache. The sync seam observes the ordering —
+// at sync time the destination must still hold the old content (or not exist).
+func TestAtomicWriteFileSyncsBeforeRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	if err := atomicWriteFile(path, []byte("old\n")); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	syncs := 0
+	orig := syncFile
+	syncFile = func(f *os.File) error {
+		syncs++
+		got, _ := os.ReadFile(path)
+		if string(got) != "old\n" {
+			t.Errorf("sync observed destination %q mid-write — sync ran after the rename", got)
+		}
+		return orig(f)
+	}
+	t.Cleanup(func() { syncFile = orig })
+
+	if err := atomicWriteFile(path, []byte("new\n")); err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+	if syncs != 1 {
+		t.Fatalf("syncFile calls = %d, want exactly 1", syncs)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new\n" {
+		t.Fatalf("final content = %q, want %q", got, "new\n")
+	}
+}
+
+// A failed fsync must surface, clean the temp file, and leave the target
+// untouched — the rename must never run on unflushed data.
+func TestAtomicWriteFileSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.txt")
+	if err := atomicWriteFile(path, []byte("old\n")); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	boom := errors.New("sync exploded")
+	orig := syncFile
+	syncFile = func(f *os.File) error { return boom }
+	t.Cleanup(func() { syncFile = orig })
+
+	err := atomicWriteFile(path, []byte("new\n"))
+	if err == nil || !strings.Contains(err.Error(), "sync temp file") {
+		t.Fatalf("error = %v, want sync temp file failure", err)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "old\n" {
+		t.Fatalf("original = %q, %v; want untouched %q", got, readErr, "old\n")
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("leftover temp file after failed sync: %s", e.Name())
+		}
+	}
+}
+
 // TestDecodeStateBranchNameIntegrity pins the key/name invariant at the single
 // entry point all serialized state flows through (state file AND undo journal
 // snapshots): a map key disagreeing with its recorded Name is corruption that
