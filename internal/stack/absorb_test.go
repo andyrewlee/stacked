@@ -1439,17 +1439,18 @@ func (w *absorbBuildBarrier) LandAmendedTip(branch, oldTip, newTip string) error
 // failNthBuildGit wraps a Git port so the nth BuildAmendedTip call returns
 // err — failing an absorb amend's side-effect-free half, which must abort
 // the op before ANY ref moves (unlike failNthAmendGit's land failure, which
-// leaves earlier amends persisted).
+// leaves earlier amends persisted). calls is atomic: Absorb fans the builds
+// out across ParallelProbes workers (lands stay serial, so failNthAmendGit's
+// plain counter is fine).
 type failNthBuildGit struct {
 	Git
-	n     int
+	n     int64
 	err   error
-	calls int
+	calls atomic.Int64
 }
 
 func (w *failNthBuildGit) BuildAmendedTip(branch string, patch []byte) (string, string, error) {
-	w.calls++
-	if w.calls == w.n {
+	if w.calls.Add(1) == w.n {
 		return "", "", w.err
 	}
 	return w.Git.BuildAmendedTip(branch, patch)
