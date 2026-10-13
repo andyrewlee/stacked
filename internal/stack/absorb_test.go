@@ -1533,3 +1533,76 @@ func TestAbsorbBuildFailureLandsNothing(t *testing.T) {
 		t.Fatalf("checkpoints = %d, want 0 (nothing landed)", c.calls)
 	}
 }
+
+// TestAbsorbPlanBlameFanOut pins the distinct-file blame fan-out: one probe
+// per distinct staged file no matter how many hunks it has, a failure
+// surfaces at the first-seen hunk's file — exactly where a serial memoized
+// pass would have failed — and a file whose hunks are all pure additions is
+// never probed at all.
+func TestAbsorbPlanBlameFanOut(t *testing.T) {
+	t.Run("one probe per distinct file across hunks", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{
+			{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+			{File: "f.txt", OldStart: 3, OldN: 1, NewStart: 3, NewN: 1},
+			{File: "g.txt", OldStart: 5, OldN: 1, NewStart: 5, NewN: 1},
+		}
+		f.blame = map[string]map[int]git.BlameLine{
+			"f.txt": {2: blameID(tips["a"], 2, "f.txt"), 3: blameID(tips["a"], 3, "f.txt")},
+			"g.txt": {5: blameID(tips["b"], 5, "g.txt")},
+		}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Absorbed) != 3 {
+			t.Fatalf("absorbed = %+v, want 3 hunks attributed", res.Absorbed)
+		}
+		if got := f.calls["BlamePorcelain"]; got != 2 {
+			t.Fatalf("BlamePorcelain calls = %d, want 2 (one per distinct file)", got)
+		}
+	})
+
+	t.Run("first-seen file's blame error wins", func(t *testing.T) {
+		f, s, env, _ := absorbEnv(t)
+		// z.txt's hunk is staged first although it sorts last — the surfaced
+		// error must follow hunk order, not name or probe-completion order.
+		f.stagedHunks = []git.Hunk{
+			{File: "z.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+			{File: "a.txt", OldStart: 3, OldN: 1, NewStart: 3, NewN: 1},
+		}
+		f.blameErr = map[string]error{
+			"z.txt": errors.New("z blame exploded"),
+			"a.txt": errors.New("a blame exploded"),
+		}
+
+		_, err := AbsorbPlan(env, s)
+		if err == nil || !strings.Contains(err.Error(), `blame "z.txt"`) {
+			t.Fatalf("AbsorbPlan error = %v, want the first-seen file's blame failure", err)
+		}
+	})
+
+	t.Run("pure-addition files are never probed", func(t *testing.T) {
+		f, s, env, tips := absorbEnv(t)
+		f.stagedHunks = []git.Hunk{
+			{File: "new.txt", OldStart: 0, OldN: 0, NewStart: 1, NewN: 3},
+			{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1},
+		}
+		f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tips["a"], 2, "f.txt")}}
+		// A blame failure on the pure-addition file must never surface: the
+		// serial consult never reached it, so the fan-out must not run it.
+		f.blameErr = map[string]error{"new.txt": errors.New("must not be probed")}
+
+		res, err := AbsorbPlan(env, s)
+		if err != nil {
+			t.Fatalf("AbsorbPlan: %v", err)
+		}
+		if len(res.Refused) != 1 || res.Refused[0].File != "new.txt" {
+			t.Fatalf("refused = %+v, want the pure addition refused", res.Refused)
+		}
+		if got := f.calls["BlamePorcelain"]; got != 1 {
+			t.Fatalf("BlamePorcelain calls = %d, want 1 — the pure-addition file is never probed", got)
+		}
+	})
+}

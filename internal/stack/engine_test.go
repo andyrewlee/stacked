@@ -2557,6 +2557,52 @@ func TestTrackAllBranchesFallbacks(t *testing.T) {
 	}
 }
 
+// TestTrackAllBranchesMergeBaseFanOut pins the trunk-picked merge-base
+// fan-out: exactly one probe per trunk-parented candidate, and the skip
+// notes fold back in sorted-name order no matter how the probes complete.
+func TestTrackAllBranchesMergeBaseFanOut(t *testing.T) {
+	f, s, env := newEnvState()
+	mkUntracked(t, f, "main", "feat")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	// Two orphans — zz sorts after aa — both lack a merge base with the
+	// trunk; their notes must come back in sorted-name order, not probe
+	// order.
+	f.commits["r0"] = &fakeCommit{id: "r0", subject: "unrelated", content: map[string]bool{}}
+	if err := f.CreateBranchAt("zz-orphan", "r0"); err != nil {
+		t.Fatal(err)
+	}
+	f.commits["r1"] = &fakeCommit{id: "r1", subject: "unrelated2", content: map[string]bool{}}
+	if err := f.CreateBranchAt("aa-orphan", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := f.calls["MergeBase"]
+
+	res, err := TrackAllBranches(env, s)
+	if err != nil {
+		t.Fatalf("track --all: %v", err)
+	}
+	// Three trunk-picked candidates cost one fanned-out probe each — feat
+	// shares history (probe succeeds and it is adopted), the two orphans
+	// probe-and-skip — plus feat's adopt-time baseSHA compute at TrackBranch.
+	if got := f.calls["MergeBase"] - callsBefore; got != 4 {
+		t.Fatalf("MergeBase calls = %d, want 4 (3 trunk-check probes + feat's adopt-time base)", got)
+	}
+	if len(res.Notes) != 2 {
+		t.Fatalf("Notes = %v, want two orphan skips", res.Notes)
+	}
+	if !strings.Contains(res.Notes[0], "aa-orphan") || !strings.Contains(res.Notes[1], "zz-orphan") {
+		t.Fatalf("Notes = %v, want orphan skips in sorted-name order", res.Notes)
+	}
+	if b, ok := s.Get("feat"); !ok || b.Parent != "main" {
+		t.Fatalf("feat = %+v tracked=%v, want tracked under main", b, ok)
+	}
+}
+
 // TestTrackAllBranchesSkipsTrackedAndTrunk: already-tracked branches and the
 // trunk are never re-adopted; an empty untracked set is a clean no-op result.
 func TestTrackAllBranchesSkipsTrackedAndTrunk(t *testing.T) {

@@ -77,10 +77,12 @@ type fakeGit struct {
 	linkedWorktrees map[string]string
 	// stagedHunks/stagedUnsupported/blame are the canned inputs for the
 	// absorb attribution: DiffCachedHunks returns stagedHunks plus
-	// stagedUnsupported; BlamePorcelain returns blame[file].
+	// stagedUnsupported; BlamePorcelain returns blame[file], or blameErr[file]
+	// to fail one file's probe while the rest succeed.
 	stagedHunks       []git.Hunk
 	stagedUnsupported []git.UnsupportedRecord
 	blame             map[string]map[int]git.BlameLine
+	blameErr          map[string]error
 	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
 	// makes AmendTipWithPatch fail like a patch that does not apply to the
 	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
@@ -429,12 +431,16 @@ func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error)
 	return f.stagedHunks, f.stagedUnsupported, nil
 }
 
-// BlamePorcelain returns the canned per-file blame a test set on blame. The
-// rev is ignored: engine tests only ever blame HEAD.
+// BlamePorcelain returns the canned per-file blame a test set on blame, or the
+// per-file error in blameErr. The rev is ignored: engine tests only ever blame
+// HEAD.
 func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.fail("BlamePorcelain"); err != nil {
+		return nil, err
+	}
+	if err := f.blameErr[file]; err != nil {
 		return nil, err
 	}
 	return f.blame[file], nil

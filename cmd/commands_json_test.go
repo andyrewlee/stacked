@@ -2173,6 +2173,117 @@ func TestWorktreeAllJSONAggregateAndIdempotency(t *testing.T) {
 	}
 }
 
+// TestWorktreeAllDryRunIncludesJSON pins the bulk dry-run's fanned-out tree
+// listings: each branch's predicted copied set matches what the real run then
+// copies, nothing materializes under --dry-run, and the rows stay in branch
+// order.
+func TestWorktreeAllDryRunIncludesJSON(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	write(t, ".gitignore", "secret.env\n")
+	write(t, ".worktreeinclude", "secret.env\n")
+	write(t, "secret.env", "TOKEN=1\n")
+	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
+	mustRun(t, "git", "commit", "-q", "-m", "worktree config")
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	type allResult struct {
+		Created []struct {
+			Branch  string   `json:"branch"`
+			Path    string   `json:"path"`
+			Copied  []string `json:"copied"`
+			Summary string   `json:"summary"`
+		} `json:"created"`
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+		Failed *struct {
+			Branch string `json:"branch"`
+			Error  string `json:"error"`
+		} `json:"failed"`
+		DryRun bool `json:"dryRun"`
+	}
+
+	out := captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("worktree --all --dry-run: %v", err)
+		}
+	})
+	var dry allResult
+	decodeStrictJSON(t, "worktree --all --dry-run", out, &dry)
+	if !dry.DryRun || len(dry.Created) != 2 || len(dry.Skipped) != 0 || dry.Failed != nil {
+		t.Fatalf("dry run = %+v, want 2 predicted rows, dryRun true", dry)
+	}
+	for i, want := range []string{"feat-a", "feat-b"} {
+		row := dry.Created[i]
+		if row.Branch != want || row.Summary != "would create worktree" {
+			t.Fatalf("dry created[%d] = %+v, want %s predicted", i, row, want)
+		}
+		if !reflect.DeepEqual(row.Copied, []string{"secret.env"}) {
+			t.Fatalf("dry created[%d] copied = %v, want [secret.env]", i, row.Copied)
+		}
+		if _, err := os.Stat(row.Path); !os.IsNotExist(err) {
+			t.Fatalf("dry run materialized %s", row.Path)
+		}
+	}
+
+	// Parity: the real run copies exactly what the dry run predicted, in the
+	// same branch order.
+	out = captureStdout(t, func() {
+		if err := runWorktree([]string{"--all", "--json"}); err != nil {
+			t.Fatalf("worktree --all: %v", err)
+		}
+	})
+	var real allResult
+	decodeStrictJSON(t, "worktree --all", out, &real)
+	if len(real.Created) != 2 || real.Failed != nil {
+		t.Fatalf("real run = %+v, want 2 created", real)
+	}
+	for i := range real.Created {
+		if real.Created[i].Branch != dry.Created[i].Branch ||
+			real.Created[i].Path != dry.Created[i].Path ||
+			!reflect.DeepEqual(real.Created[i].Copied, dry.Created[i].Copied) {
+			t.Fatalf("real created[%d] = %+v, dry predicted %+v", i, real.Created[i], dry.Created[i])
+		}
+		if _, err := os.Stat(filepath.Join(real.Created[i].Path, "secret.env")); err != nil {
+			t.Fatalf("secret.env not copied into %s: %v", real.Created[i].Path, err)
+		}
+	}
+}
+
+// TestWorktreeAllManifestErrorFailsUpFront pins the hoisted selection: a
+// malformed .worktreeinclude fails the whole --all before the first branch
+// materializes, rather than surfacing mid-loop after earlier branches
+// already exist.
+func TestWorktreeAllManifestErrorFailsUpFront(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	write(t, ".worktreeinclude", "dist/[\n")
+	resetProcCaches()
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runWorktree([]string{"--all"})
+	})
+	if runErr == nil || !strings.Contains(runErr.Error(), "dist/[") {
+		t.Fatalf("worktree --all = %v, want the manifest error naming the line", runErr)
+	}
+	// Nothing materialized: the main worktree is still the only one.
+	list := mustRun(t, "git", "worktree", "list", "--porcelain")
+	if n := strings.Count(list, "worktree "); n != 1 {
+		t.Fatalf("git worktree list shows %d worktrees, want only the main one:\n%s", n, list)
+	}
+}
+
 // TestWorktreeAllSkipsCurrentBranch pins decision 2: the branch checked out in
 // the main worktree is a skip with a reason, never an error.
 func TestWorktreeAllSkipsCurrentBranch(t *testing.T) {

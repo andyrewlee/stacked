@@ -113,6 +113,23 @@ func trackAllPlan(g Git, s *State) (parents map[string]string, notes []string, u
 		return nil, nil, 0, err
 	}
 	parents = make(map[string]string, len(names))
+	// The trunk-picked candidates' merge-base checks are independent
+	// read-only probes — fan them out over the same ParallelProbes bound and
+	// fold the results in sorted-name order below so the orphan notes land
+	// exactly where a serial pass put them.
+	var trunkIdx []int
+	for i, p := range picks {
+		if p == s.Trunk {
+			trunkIdx = append(trunkIdx, i)
+		}
+	}
+	mbErrs := make([]error, len(names))
+	_ = git.ParallelProbes(len(trunkIdx), func(j int) error {
+		i := trunkIdx[j]
+		_, err := g.MergeBase(branchTipRef(s.Trunk), branchTipRef(names[i]))
+		mbErrs[i] = err
+		return nil // non-fatal: folded in names order below
+	})
 	for i, name := range names {
 		parent := picks[i]
 		if parent == s.Trunk {
@@ -120,7 +137,7 @@ func trackAllPlan(g Git, s *State) (parents map[string]string, notes []string, u
 			// branch also shares no history with the trunk (an orphan like
 			// gh-pages) there is no base to record; skip it rather than fail
 			// the whole adoption.
-			if _, err := g.MergeBase(branchTipRef(s.Trunk), branchTipRef(name)); err != nil {
+			if mbErrs[i] != nil {
 				notes = append(notes, fmt.Sprintf("skipped %s: no common commit history with %s", name, s.Trunk))
 				continue
 			}
