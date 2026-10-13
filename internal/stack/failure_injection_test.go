@@ -1263,14 +1263,18 @@ func TestRestackInWorktreeAbortProbeFailure(t *testing.T) {
 	f.commit("advance-main")
 	f.rebaseErr["a"] = errors.New("rebase exploded")
 	f.rebaseAbortErr = errors.New("abort exploded")
-	// The skip-gate probe (call 1) passes; the rollback confirmation (call 2)
-	// dies, so the pause state is unconfirmable.
+	// The skip-gate probe (call 1) passes; the ownership confirmation (call 2)
+	// dies, so the pause state is unconfirmable — and an unconfirmable rebase
+	// is never aborted.
 	f.failAfter["RebaseInProgressIn"] = 1
 	f.failErr["RebaseInProgressIn"] = errors.New("probe dead")
 
 	_, err := Restack(env, s)
-	if err == nil || !strings.Contains(err.Error(), "additionally failed to abort the paused rebase") {
-		t.Fatalf("Restack = %v, want the unconfirmable abort failure composed", err)
+	if err == nil || !strings.Contains(err.Error(), "additionally failed to verify the paused rebase") {
+		t.Fatalf("Restack = %v, want the unconfirmable verification composed", err)
+	}
+	if f.calls["RebaseAbortIn"] != 0 {
+		t.Fatal("an unconfirmable rebase must never be aborted")
 	}
 }
 
