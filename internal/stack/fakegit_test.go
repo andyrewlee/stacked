@@ -119,6 +119,13 @@ type fakeGit struct {
 	// worktree's Path sees not-inside; set it to an owner's Path to exercise
 	// the you-are-inside-it refusals.
 	repoRoot string
+	// mainBranch overrides the branch Worktrees reports for the main
+	// worktree. The zero value keeps the single-worktree shorthand — the
+	// caller stands in the main worktree, so f.head doubles as main's
+	// branch. Tests that put the caller inside a linked worktree (repoRoot)
+	// set this to whatever main actually holds, since f.head is always the
+	// CALLER's HEAD.
+	mainBranch string
 
 	// failErr forces method-level errors beyond the dedicated maps: the key
 	// is the method name (e.g. "RebaseInProgress", "MergeBase"). failAfter
@@ -567,9 +574,9 @@ func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
 	}
 	var list []git.Worktree
 	main := git.Worktree{Path: "."}
-	if f.head != "" {
-		main.Branch = f.head
-		main.Head = f.branches[f.head]
+	if mb := f.mainWTBranch(); mb != "" {
+		main.Branch = mb
+		main.Head = f.branches[mb]
 	} else {
 		main.Detached = true
 		main.Head = f.detachedAt
@@ -619,6 +626,28 @@ func (f *fakeGit) knownWorktreeDir(dir string) bool {
 	return ok
 }
 
+// mainWTBranch is the branch the MAIN worktree reports in Worktrees — the
+// mainBranch override when set (caller in a linked worktree), else f.head,
+// preserving the single-worktree shorthand.
+func (f *fakeGit) mainWTBranch() string {
+	if f.mainBranch != "" {
+		return f.mainBranch
+	}
+	return f.head
+}
+
+// callerLinkedBranch returns the branch checked out in the linked worktree
+// the caller's cwd sits in (repoRoot), or "" when the caller is in the main
+// worktree or a paused/detached one.
+func (f *fakeGit) callerLinkedBranch() string {
+	for branch, path := range f.linkedWorktrees {
+		if path == f.repoRoot {
+			return branch
+		}
+	}
+	return ""
+}
+
 // RebaseOntoIn models an owner-driven rebase: it replays the branch's commits
 // like RebaseOnto but, crucially, does NOT move f.head — the rebase happens in
 // another worktree, leaving the main worktree's HEAD untouched. A branch armed
@@ -636,7 +665,7 @@ func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) erro
 	if owner, ok := f.linkedWorktrees[branch]; ok && owner != dir {
 		return fmt.Errorf("cannot rebase branch %q checked out at %q", branch, owner)
 	}
-	if branch == f.head && dir != "" && dir != "." && (f.repoRoot == "" || dir != f.repoRoot) {
+	if branch == f.mainWTBranch() && dir != "" && dir != "." && (f.repoRoot == "" || dir != f.repoRoot) {
 		return fmt.Errorf("cannot rebase branch %q checked out in the main worktree", branch)
 	}
 	if f.conflictNext[branch] || f.conflictEvery[branch] {
@@ -773,11 +802,23 @@ func (f *fakeGit) Checkout(name string) error {
 	if _, ok := f.branches[name]; !ok {
 		return fmt.Errorf("no such branch %q", name)
 	}
-	if dir, ok := f.linkedWorktrees[name]; ok {
+	// git allows one checkout per branch: refuse when a DIFFERENT worktree
+	// holds name (checking out the caller's own worktree's branch is a
+	// no-op). mainWTBranch covers the main worktree's checkout.
+	if dir, ok := f.linkedWorktrees[name]; ok && dir != f.repoRoot {
 		return fmt.Errorf("branch %q is already checked out at %q", name, dir)
+	}
+	if name == f.mainWTBranch() && f.callerLinkedBranch() != "" {
+		return fmt.Errorf("branch %q is already checked out in the main worktree", name)
 	}
 	if err := f.checkoutErr[name]; err != nil {
 		return err
+	}
+	// A checkout inside a linked worktree retargets THAT worktree's HEAD:
+	// the branch it previously owned is freed for deletion elsewhere.
+	if cur := f.callerLinkedBranch(); cur != "" {
+		delete(f.linkedWorktrees, cur)
+		f.linkedWorktrees[name] = f.repoRoot
 	}
 	f.head = name
 	f.detachedAt = ""
@@ -853,6 +894,9 @@ func (f *fakeGit) DeleteBranch(name string, force bool) error {
 func (f *fakeGit) deleteBranch(name string, force bool) error {
 	if name == f.head {
 		return fmt.Errorf("cannot delete the current branch %q", name)
+	}
+	if name == f.mainWTBranch() && f.callerLinkedBranch() != "" {
+		return fmt.Errorf("cannot delete branch %q checked out in the main worktree", name)
 	}
 	if _, ok := f.linkedWorktrees[name]; ok {
 		// git refuses to delete a branch checked out in another worktree; the

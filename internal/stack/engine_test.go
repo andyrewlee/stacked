@@ -639,10 +639,9 @@ func TestDeleteRefusesWhenCwdInsideOwnerWorktree(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
 	f.addWorktree("/wt/b", "b")
-	f.repoRoot = "/wt/b"                    // the caller stands inside b's worktree…
-	if err := f.Checkout("a"); err != nil { // …while main is checked out on a
-		t.Fatal(err)
-	}
+	f.repoRoot = "/wt/b" // the caller stands inside b's worktree…
+	f.head = "b"         // …on b (the caller's HEAD)…
+	f.mainBranch = "a"   // …while the main worktree is checked out on a
 
 	_, err := Delete(env, s, "b", true)
 	if err == nil || !strings.Contains(err.Error(), "you are inside it") {

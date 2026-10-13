@@ -157,6 +157,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`st fold` works inside the folded branch's own worktree.** The op asked
+  its worktree-release helper to tear down the caller's own worktree — the
+  one place it can never run — so every fold of a worktree-owned branch
+  refused with an unreachable remedy ("run from the main worktree"). Fold
+  now relies on its own checkout of the parent to free the folded branch;
+  the worktree ends up owning the parent.
 - **A panicking git probe no longer exits as a fake conflict.** `ParallelProbes`
   workers ran unrecovered, so a panic killed the process with Go's runtime
   exit 2 — the code the agent contract reserves for a paused rebase. Panics
