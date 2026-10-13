@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // setupCascade builds main -> feat-a where feat-a is checked out in a linked
@@ -162,6 +164,99 @@ func TestRestackCascadeConflictRollsBack(t *testing.T) {
 	// The owner worktree's rebase was aborted (not left paused).
 	if inProgress, _ := f.RebaseInProgress(); inProgress {
 		t.Fatal("the owner worktree's rebase should have been aborted, not left paused")
+	}
+}
+
+// restackInWorktreeFixture drives restackInWorktree directly with a stale
+// pre-flight verdict (clean + unpaused) — modeling the window where the
+// disposition probe ran before a foreign actor armed a rebase in the owner.
+func restackInWorktreeFixture(t *testing.T) (*fakeGit, *State, Env, *Branch, git.Worktree, map[string]wtVerdict) {
+	t.Helper()
+	f, s, env := setupCascade(t)
+	b, _ := s.Get("feat-a")
+	owner := git.Worktree{Path: "/wt/feat-a", Branch: "feat-a"}
+	verdicts := map[string]wtVerdict{"/wt/feat-a": {clean: true}}
+	return f, s, env, b, owner, verdicts
+}
+
+// TestRestackInWorktreeNeverAbortsForeignRebase pins the rollback gate: when
+// the spawned rebase fails and a rebase is now paused in the owner whose
+// head-name is NOT the spawned branch, it is a foreign rebase that snuck in
+// after the snapshot — aborting it would destroy someone else's work.
+func TestRestackInWorktreeNeverAbortsForeignRebase(t *testing.T) {
+	f, s, env, b, owner, verdicts := restackInWorktreeFixture(t)
+	f.rebaseErr["feat-a"] = errors.New("a rebase is already in progress")
+	f.rebaseInWT["/wt/feat-a"] = true            // a foreign rebase that snuck in
+	f.rebaseHeadInWT["/wt/feat-a"] = "other-ref" // …on a different branch
+
+	_, err := s.restackInWorktree(env, "feat-a", b, f.branches["main"], owner, verdicts)
+	if err == nil || !strings.Contains(err.Error(), "rebasing \"feat-a\" in its worktree") {
+		t.Fatalf("restackInWorktree = %v, want the rebase failure", err)
+	}
+	if !strings.Contains(err.Error(), "did not start") {
+		t.Fatalf("the error must report the untouched foreign rebase: %v", err)
+	}
+	if f.calls["RebaseAbortIn"] != 0 {
+		t.Fatal("RebaseAbortIn must never run on a foreign rebase")
+	}
+	if !f.rebaseInWT["/wt/feat-a"] {
+		t.Fatal("the foreign rebase was destroyed")
+	}
+}
+
+// TestRestackInWorktreeAbortsOwnPausedRebase: when the paused rebase's
+// head-name IS the spawned branch, the rebase is provably st's own spawn that
+// paused on conflict — the rollback aborts it as before.
+func TestRestackInWorktreeAbortsOwnPausedRebase(t *testing.T) {
+	f, s, env, b, owner, verdicts := restackInWorktreeFixture(t)
+	f.conflictOn("feat-a") // st's own spawn conflicts and pauses in the owner
+
+	_, err := s.restackInWorktree(env, "feat-a", b, f.branches["main"], owner, verdicts)
+	if err == nil || !strings.Contains(err.Error(), "rebasing \"feat-a\" in its worktree") {
+		t.Fatalf("restackInWorktree = %v, want the rebase failure", err)
+	}
+	if f.calls["RebaseAbortIn"] != 1 {
+		t.Fatalf("RebaseAbortIn = %d calls, want 1 (st's own paused rebase is rolled back)", f.calls["RebaseAbortIn"])
+	}
+	if f.rebaseInWT["/wt/feat-a"] {
+		t.Fatal("st's own paused rebase should have been aborted")
+	}
+}
+
+// TestRestackInWorktreeNoPausedRebaseSkipsAbort: when the spawn fails and NO
+// rebase is paused in the owner, there is nothing to roll back — the abort
+// must not even be attempted.
+func TestRestackInWorktreeNoPausedRebaseSkipsAbort(t *testing.T) {
+	f, s, env, b, owner, verdicts := restackInWorktreeFixture(t)
+	f.rebaseErr["feat-a"] = errors.New("spawn refused")
+
+	_, err := s.restackInWorktree(env, "feat-a", b, f.branches["main"], owner, verdicts)
+	if err == nil || !strings.Contains(err.Error(), "rebasing \"feat-a\" in its worktree") {
+		t.Fatalf("restackInWorktree = %v, want the rebase failure", err)
+	}
+	if f.calls["RebaseAbortIn"] != 0 {
+		t.Fatal("no paused rebase → no abort attempt")
+	}
+}
+
+// TestRestackInWorktreeUnidentifiableRebaseSkipsAbort: a paused rebase whose
+// head-name cannot be read is ambiguous — it could be foreign. The
+// conservative choice is to leave it and report, never to abort.
+func TestRestackInWorktreeUnidentifiableRebaseSkipsAbort(t *testing.T) {
+	f, s, env, b, owner, verdicts := restackInWorktreeFixture(t)
+	f.rebaseErr["feat-a"] = errors.New("spawn refused")
+	f.rebaseInWT["/wt/feat-a"] = true
+	f.failErr["RebaseHeadNameIn"] = errors.New("head-name unreadable")
+
+	_, err := s.restackInWorktree(env, "feat-a", b, f.branches["main"], owner, verdicts)
+	if err == nil {
+		t.Fatal("an unidentifiable paused rebase must still surface the failure")
+	}
+	if f.calls["RebaseAbortIn"] != 0 {
+		t.Fatal("an unidentifiable rebase must never be aborted")
+	}
+	if !f.rebaseInWT["/wt/feat-a"] {
+		t.Fatal("the ambiguous rebase was destroyed")
 	}
 }
 

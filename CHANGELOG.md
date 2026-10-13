@@ -157,6 +157,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **A failed cross-worktree restack no longer aborts a foreign rebase.** The
+  rollback after `git rebase` failed in a linked worktree ran unconditionally;
+  an external rebase that started between the pre-flight probe and the spawn
+  could be destroyed. `st` now aborts only when the paused rebase's head-name
+  proves it is the one it started — a foreign or unidentifiable rebase is
+  left untouched and reported.
 - **`st continue` verifies a pending reparent before promoting it.** When the
   paused rebase's head-name matched the recorded branch, the record's target
   was stamped unconditionally — a stale record plus a foreign rebase on the

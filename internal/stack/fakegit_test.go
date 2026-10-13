@@ -673,7 +673,8 @@ func (f *fakeGit) RebaseOntoIn(dir string, newBase, oldBase, branch string) erro
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
 		f.rebaseOldBase = f.resolve(oldBase)
-		f.rebaseInWT[dir] = true // the paused rebase lives in dir
+		f.rebaseInWT[dir] = true       // the paused rebase lives in dir
+		f.rebaseHeadInWT[dir] = branch // git's head-name records the branch
 		f.rebaseWT = dir
 		return fmt.Errorf("conflict rebasing %q", branch)
 	}
@@ -1191,7 +1192,8 @@ func (f *fakeGit) RebaseOnto(newBase, oldBase, branch string) error {
 		f.rebaseBranch = branch
 		f.rebaseNewBase = f.resolve(newBase)
 		f.rebaseOldBase = f.resolve(oldBase)
-		f.rebaseInWT["."] = true // the main worktree owns this rebase
+		f.rebaseInWT["."] = true       // the main worktree owns this rebase
+		f.rebaseHeadInWT["."] = branch // head-name records the branch
 		f.rebaseWT = "."
 		return fmt.Errorf("conflict rebasing %q", branch)
 	}

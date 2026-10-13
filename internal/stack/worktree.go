@@ -271,6 +271,26 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 		// Roll back the owner worktree's rebase so it is never left paused; the
 		// main process's continue/abort operate on the cwd and could not finish it.
 		rebaseErr := fmt.Errorf("rebasing %q in its worktree %q: %w (resolve it there, then re-run)", name, owner.Path, err)
+		// …but abort ONLY a rebase this spawn provably started: the disposition
+		// verdict above was a snapshot, and a foreign rebase can begin in the
+		// owner between the probe and the spawn. Aborting a rebase this process
+		// did not start must never happen — the head-name file identifies ours
+		// (st's spawn is `git rebase --onto <tip> <base> <name>`, so head-name
+		// records name). The residual ambiguity — a foreign rebase on the SAME
+		// branch name appearing in the same window — is accepted: it would need
+		// the branch checked out there plus identical timing.
+		inRebase, probeErr := env.Git.RebaseInProgressIn(owner.Path)
+		if probeErr != nil {
+			return false, AlsoFailed(rebaseErr, fmt.Sprintf("verify the paused rebase in %q belongs to this command; resolve it there", owner.Path), probeErr)
+		}
+		if !inRebase {
+			return false, rebaseErr // the spawn failed before pausing anything
+		}
+		if headName, hnErr := env.Git.RebaseHeadNameIn(owner.Path); hnErr != nil || headName != name {
+			// A foreign (or unidentifiable) rebase paused in the owner — leave
+			// it intact; the user resolves it in that worktree.
+			return false, fmt.Errorf("%w (a rebase is in progress in %q that this command did not start; it was left untouched)", rebaseErr, owner.Path)
+		}
 		if abortErr := env.Git.RebaseAbortIn(owner.Path); abortErr != nil {
 			// Decide by probe, not the error's wording — git's stderr is for
 			// humans, never control flow. When no rebase is left paused the
