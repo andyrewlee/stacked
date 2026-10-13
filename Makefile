@@ -307,18 +307,31 @@ cover:
 	COVERAGE_MIN=$(COVERAGE_MIN) ./scripts/cover.sh
 
 # Install the repo git hooks (fast loop pre-commit, full loop pre-push).
+# With extensions.worktreeConfig set, plain `git config` writes
+# config.worktree — hooks land for only this worktree — so warn when it is on.
 hooks:
 	git config core.hooksPath .githooks
 	chmod +x .githooks/*
+	@echo "hooks: core.hooksPath=.githooks (pre-commit = make test-fast, pre-push = make ci)"; \
+	if [ "$$(git config extensions.worktreeConfig || true)" = "true" ]; then \
+		echo "warn: extensions.worktreeConfig is set — core.hooksPath landed in config.worktree (this worktree only; other worktrees have no gate)"; \
+	fi
 
 # Verify the hooks are actually installed — `make hooks` runs once and a fresh
 # clone or `git config --unset` silently removes the only gate. Warn by
 # default (a contributor may deliberately opt out); HOOKS_REQUIRED=1 — used by
 # `make release` — fails, because an unprotected tag push must not publish.
+# The path is relative and resolves per-worktree, so also probe that
+# .githooks/ exists at THIS worktree's commit — a worktree checked out at a
+# pre-hooks commit runs nothing, silently.
 check-hooks:
 	@got=$$(git config core.hooksPath || true); \
 	if [ "$$got" != ".githooks" ]; then \
 		msg="core.hooksPath='$$got' — the make ci gate is absent (run 'make hooks')"; \
+		if [ "$${HOOKS_REQUIRED:-0}" = "1" ]; then echo "$$msg" >&2; exit 1; \
+		else echo "warn: $$msg"; fi; \
+	elif [ ! -d .githooks ]; then \
+		msg="core.hooksPath=.githooks but .githooks/ is absent at this worktree's commit — hooks silently cannot run"; \
 		if [ "$${HOOKS_REQUIRED:-0}" = "1" ]; then echo "$$msg" >&2; exit 1; \
 		else echo "warn: $$msg"; fi; \
 	else \

@@ -178,6 +178,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`make hooks`/`check-hooks` surface worktree-shaped gaps.** `make hooks`
+  now confirms what it wrote and warns when `extensions.worktreeConfig`
+  scoped the config to this worktree only; `check-hooks` warns (or fails under
+  `HOOKS_REQUIRED=1`) when `core.hooksPath` resolves to a `.githooks/` that
+  doesn't exist at the worktree's commit — the two ways the only quality gate
+  could silently not run.
 - **`make snapshot` rehearses the real release pipeline.** It ran
   `goreleaser build` — binaries only — while the docs described building "the
   release artifacts". It now runs `goreleaser release --snapshot --clean`
