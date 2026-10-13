@@ -1456,6 +1456,81 @@ func TestContinueDoesNotAdoptStalePendingReparent(t *testing.T) {
 	}
 }
 
+// TestContinueDoesNotPromotePendingReparentOnOntoMismatch: the head-name arm
+// must verify like the empty-head-name arm does. A stale record naming the
+// same branch plus a foreign rebase paused on it must stamp the rebase's
+// ACTUAL target (truth for the cascade), warn, and keep the record for
+// `st repair` — never promote the recorded parent/target.
+func TestContinueDoesNotPromotePendingReparentOnOntoMismatch(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "main", "z") // unrelated tip for the foreign onto
+	b, _ := s.Get("b")
+	oldBase := b.ParentSHA
+
+	s.PendingReparent = &PendingReparent{Branch: "b", Parent: "c", ParentSHA: "deadbeef"}
+	// A foreign rebase paused on b whose onto is NOT the recorded target.
+	f.rebaseActive = true
+	f.rebaseBranch = "b"
+	f.rebaseNewBase = f.branches["z"] // ≠ pending.ParentSHA, unrelated to parent a
+	f.rebaseOldBase = oldBase
+	f.rebaseInWT["."] = true
+	f.rebaseWT = "."
+
+	res, err := Continue(env, s)
+	if err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	if s.PendingReparent == nil {
+		t.Fatal("the mismatched pending reparent must be kept for `st repair`, not cleared")
+	}
+	if b.Parent != "a" {
+		t.Fatalf("b parent = %q, want a — the recorded reparent target must not be promoted", b.Parent)
+	}
+	var foreign bool
+	for _, n := range res.Notes {
+		if strings.Contains(n, "was not headed for recorded parent") {
+			foreign = true
+		}
+	}
+	if !foreign {
+		t.Fatalf("notes = %v, want the foreign-rebase warning", res.Notes)
+	}
+	// The stamped truth lets the cascade reconcile b onto its recorded parent.
+	if needs, _ := s.NeedsRestack(f, "b"); needs {
+		t.Fatal("after continue + cascade, b should be reconciled onto its parent")
+	}
+}
+
+// TestContinueFailsWhenPendingReparentTargetUnreadable: a head-name match is
+// not a license to promote — when the onto probe fails, continue must error
+// (leaving the rebase paused) rather than stamp the recorded target blindly.
+func TestContinueFailsWhenPendingReparentTargetUnreadable(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	s.PendingReparent = &PendingReparent{Branch: "b", Parent: "c", ParentSHA: "deadbeef"}
+	f.rebaseActive = true
+	f.rebaseBranch = "b"
+	f.rebaseNewBase = f.branches["a"]
+	f.rebaseInWT["."] = true
+	f.rebaseWT = "."
+	f.rebaseOntoErr = errors.New("onto unreadable")
+
+	_, err := Continue(env, s)
+	if err == nil || !strings.Contains(err.Error(), "reading the paused rebase's target") {
+		t.Fatalf("continue = %v, want the onto-read error", err)
+	}
+	if inProgress, _ := f.RebaseInProgress(); !inProgress {
+		t.Fatal("the failed read must leave the rebase paused, not continue it")
+	}
+	if s.PendingReparent == nil {
+		t.Fatal("the pending reparent must survive the refused continue")
+	}
+}
+
 // TestContinueStampsAncestorTarget is the regression pin for the legit case:
 // when the recorded parent moved forward while the rebase was paused, the
 // rebase's recorded target is an ancestor of the live parent tip — it must
