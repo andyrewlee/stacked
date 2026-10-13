@@ -214,6 +214,11 @@ func (s *State) Save() error {
 	return atomicWriteFile(path, append(data, '\n'))
 }
 
+// syncFile is the temp-file fsync seam: tests substitute it to prove the
+// ordering (sync before rename) and the error contract. Production always
+// runs (*os.File).Sync; nothing outside _test.go may assign it.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
 // atomicWriteFile writes data to path so a reader never observes a half-written
 // file and the result survives an OS/power crash: it writes a temporary file in
 // the same directory, fsyncs it, renames it over path (rename is atomic within a
@@ -242,7 +247,7 @@ func atomicWriteFile(path string, data []byte) error {
 	// make the rename durable while the new file's bytes are still in the page
 	// cache, so a power loss could resurrect a zero-length or partial file —
 	// exactly the truncated mix the rename is meant to rule out.
-	if err := tmp.Sync(); err != nil {
+	if err := syncFile(tmp); err != nil {
 		tmp.Close()
 		return fmt.Errorf("sync temp file: %w", err)
 	}

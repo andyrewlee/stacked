@@ -32,6 +32,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 	s := &State{Trunk: "main", Branches: map[string]*Branch{}}
 	env := Env{Git: f}
 	nameSeq := 0
+	casArms := 0 // steps whose undo ran the PostRefs compare-and-swap arm
 
 	for step := 0; step < steps; step++ {
 		tracked := s.BranchNames()
@@ -307,6 +308,15 @@ func runModel(t *testing.T, seed int64, steps int) {
 		if err := op(); err != nil {
 			t.Fatalf("step %d: %s: %v", step, label, err)
 		}
+		// Stamp PostRefs the way FinalizeUndo does so the undo below exercises
+		// the CAS arm (production mutators always run FinalizeUndo; the oracle
+		// bypassed it and silently covered only the unconditional restore).
+		if tips, err := f.Tips(); err == nil {
+			entry.PostRefs = postRefsFor(entry, tips, true, createdBranchesSinceTips(entry, tips, true))
+		}
+		if entry.PostRefs != nil {
+			casArms++
+		}
 		if _, err := Undo(env, s, entry, false); err != nil {
 			t.Fatalf("step %d: undo %s: %v", step, label, err)
 		}
@@ -343,6 +353,9 @@ func runModel(t *testing.T, seed int64, steps int) {
 		if len(res.Restacked) != 0 {
 			t.Fatalf("step %d: restack not idempotent, rebased %v", step, res.Restacked)
 		}
+	}
+	if casArms == 0 {
+		t.Fatal("the undo oracle never exercised the PostRefs CAS arm — stamping must have drifted from FinalizeUndo")
 	}
 }
 
