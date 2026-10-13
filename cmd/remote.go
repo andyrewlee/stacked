@@ -43,7 +43,7 @@ func requireRemote(p *cachedPort, name string) error {
 // the caller's port so an earlier remoteExists check is not re-probed.
 func resolveTrunkRef(p *cachedPort, remote, trunk string) (ref string, remoteResolved bool) {
 	if p.remoteExists(remote) {
-		remoteRef := "refs/remotes/" + remote + "/" + trunk
+		remoteRef := git.RemoteTrackingRef(remote, trunk)
 		if _, err := p.RevParse(remoteRef); err == nil {
 			return remoteRef, true
 		}

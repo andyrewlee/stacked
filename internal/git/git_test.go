@@ -624,11 +624,43 @@ func TestUpdateRefsCas(t *testing.T) {
 			t.Fatal("all-zeros delete value accepted")
 		}
 	})
+
+	t.Run("hostile inputs refused before exec", func(t *testing.T) {
+		// A flag-like ref name is refused before any exec.
+		if err := UpdateRefsCas(map[string]RefUpdate{
+			"--evil": {New: first},
+		}); err == nil {
+			t.Fatal("UpdateRefsCas accepted a flag-like ref name")
+		}
+		// A ref name carrying whitespace would corrupt the stdin grammar.
+		if err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/a b": {New: first},
+		}); err == nil {
+			t.Fatal("UpdateRefsCas accepted a whitespace-carrying ref name")
+		}
+		// Directive injection: a New value carrying a newline + a forged
+		// directive must be refused before exec — and the forged delete must
+		// NOT fire.
+		otherBefore := mustGit(t, "rev-parse", "refs/heads/other")
+		err := UpdateRefsCas(map[string]RefUpdate{
+			"refs/heads/main": {New: first + "\ndelete refs/heads/other"},
+		})
+		if err == nil {
+			t.Fatal("UpdateRefsCas accepted a newline-injected value")
+		}
+		if got, _ := RevParse("other"); got != otherBefore {
+			t.Fatalf("other = %q after injected batch, want untouched %q (forged delete fired?)", got, otherBefore)
+		}
+		// Empty input is a no-op.
+		if err := UpdateRefsCas(nil); err != nil {
+			t.Fatalf("UpdateRefsCas(nil): %v", err)
+		}
+	})
 }
 
-// TestShellRefUpdateWrappers exercises the Shell passthroughs for the
-// ref-update helpers — the undo path moved to UpdateRefsCas, so the
-// unconditional single/batch wrappers need their own coverage anchor.
+// TestShellRefUpdateWrappers exercises the Shell passthrough for the
+// single-ref update helper — the batch side moved to UpdateRefsCas, whose
+// coverage lives in TestUpdateRefsCas.
 func TestShellRefUpdateWrappers(t *testing.T) {
 	newRepo(t)
 	first := mustGit(t, "rev-parse", "HEAD")
@@ -636,7 +668,6 @@ func TestShellRefUpdateWrappers(t *testing.T) {
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "c")
 	second := mustGit(t, "rev-parse", "HEAD")
-	mustGit(t, "branch", "other", first)
 
 	sh := Shell{}
 	if err := sh.UpdateRef("refs/heads/main", first); err != nil {
@@ -645,17 +676,11 @@ func TestShellRefUpdateWrappers(t *testing.T) {
 	if got, _ := RevParse("main"); got != first {
 		t.Fatalf("main = %s, want %s", got, first)
 	}
-	if err := sh.UpdateRefs(map[string]string{
-		"refs/heads/main":  second,
-		"refs/heads/other": second,
-	}); err != nil {
-		t.Fatalf("Shell.UpdateRefs: %v", err)
+	if err := sh.UpdateRef("refs/heads/main", second); err != nil {
+		t.Fatalf("Shell.UpdateRef (second move): %v", err)
 	}
 	if got, _ := RevParse("main"); got != second {
 		t.Fatalf("main = %s, want %s", got, second)
-	}
-	if got, _ := RevParse("other"); got != second {
-		t.Fatalf("other = %s, want %s", got, second)
 	}
 }
 
@@ -2206,79 +2231,6 @@ func TestCheckBranchName(t *testing.T) {
 	}
 }
 
-// TestUpdateRefs pins the batch wrapper: one invocation moves every ref, a
-// missing ref is created (undo's branch resurrection), a bad batch moves
-// NOTHING (git applies --stdin as one transaction), flag-like names are
-// refused before exec, and empty input is a no-op.
-func TestUpdateRefs(t *testing.T) {
-	newRepo(t)
-	base := mustGit(t, "rev-parse", "HEAD")
-	writeFile(t, "next.txt", "next\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "next")
-	tip := mustGit(t, "rev-parse", "HEAD")
-	mustGit(t, "branch", "-q", "one", base)
-	mustGit(t, "branch", "-q", "two", base)
-
-	if err := UpdateRefs(map[string]string{
-		"refs/heads/one":         tip,
-		"refs/heads/two":         tip,
-		"refs/heads/resurrected": base, // does not exist yet: update creates it
-	}); err != nil {
-		t.Fatalf("UpdateRefs: %v", err)
-	}
-	for _, ref := range []string{"one", "two"} {
-		if got := mustGit(t, "rev-parse", "refs/heads/"+ref); got != tip {
-			t.Fatalf("%s = %q, want %q", ref, got, tip)
-		}
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/resurrected"); got != base {
-		t.Fatalf("resurrected = %q, want created at %q", got, base)
-	}
-
-	// Transactionality: a batch with one bogus SHA moves zero refs.
-	err := UpdateRefs(map[string]string{
-		"refs/heads/one": base,
-		"refs/heads/two": "0123456789012345678901234567890123456789",
-	})
-	if err == nil {
-		t.Fatal("UpdateRefs with a bogus SHA succeeded")
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/one"); got != tip {
-		t.Fatalf("one = %q after failed batch, want untouched %q", got, tip)
-	}
-
-	// A flag-like ref name is refused before any exec.
-	if err := UpdateRefs(map[string]string{"--evil": base}); err == nil {
-		t.Fatal("UpdateRefs accepted a flag-like ref name")
-	}
-	// Empty input is a no-op.
-	if err := UpdateRefs(nil); err != nil {
-		t.Fatalf("UpdateRefs(nil): %v", err)
-	}
-
-	// Directive injection: a value carrying a newline + a forged second
-	// directive must be refused before exec — and, crucially, the forged
-	// delete must NOT fire. (Pre--z framing, this deleted refs/heads/two.)
-	err = UpdateRefs(map[string]string{
-		"refs/heads/one": base + "\ndelete refs/heads/two",
-	})
-	if err == nil {
-		t.Fatal("UpdateRefs accepted a newline-injected value")
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/two"); got != tip {
-		t.Fatalf("two = %q after injected batch, want untouched %q (forged delete fired?)", got, tip)
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/one"); got != tip {
-		t.Fatalf("one = %q after injected batch, want untouched %q", got, tip)
-	}
-
-	// A ref key with embedded whitespace is refused before exec.
-	if err := UpdateRefs(map[string]string{"refs/heads/a b": base}); err == nil {
-		t.Fatal("UpdateRefs accepted a whitespace-carrying ref name")
-	}
-}
-
 // TestDiffCachedHunks pins the -U0 section parser: the classify-or-refuse
 // contract means every staged change is either a text Hunk or an
 // UnsupportedRecord, across edits, deletions, binary, mode, rename,
@@ -2519,11 +2471,12 @@ func TestDiffCachedHunks(t *testing.T) {
 	})
 }
 
-// TestAmendTipWithPatch pins the temp-index amend: a staged patch captured on
-// one branch lands in ANOTHER branch's tip without any checkout, preserving
-// the tip's parent, author, and message; a patch that does not apply leaves
-// the repository (and the caller's index) untouched.
-func TestAmendTipWithPatch(t *testing.T) {
+// TestBuildAndLandAmendedTip pins the temp-index amend: a staged patch
+// captured on one branch builds into ANOTHER branch's tip without any
+// checkout, preserving the tip's parent, author, and message; Land moves the
+// ref compare-and-swapped on the tip the build read; a patch that does not
+// apply leaves the repository (and the caller's index) untouched.
+func TestBuildAndLandAmendedTip(t *testing.T) {
 	newRepo(t)
 	// target owns shared.txt line 2; top adds only its own file, so the staged
 	// patch's context lines are identical in top's and target's trees.
@@ -2552,15 +2505,25 @@ func TestAmendTipWithPatch(t *testing.T) {
 		t.Fatalf("DiffCachedPatchFor(all) = %d bytes, %v; want a non-empty patch", len(patch), err)
 	}
 
-	newTip, err := AmendTipWithPatch("target", patch)
+	newTip, builtOn, err := BuildAmendedTip("target", patch)
 	if err != nil {
-		t.Fatalf("AmendTipWithPatch: %v", err)
+		t.Fatalf("BuildAmendedTip: %v", err)
 	}
 	if newTip == oldTip {
-		t.Fatal("AmendTipWithPatch returned the old tip; nothing was amended")
+		t.Fatal("BuildAmendedTip returned the old tip; nothing was amended")
+	}
+	if builtOn != oldTip {
+		t.Fatalf("BuildAmendedTip built on %s, want the read tip %s", builtOn, oldTip)
+	}
+	// The build is side-effect-free: the ref has not moved yet.
+	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != oldTip {
+		t.Fatalf("target = %s after build, want untouched %s until Land", got, oldTip)
+	}
+	if err := LandAmendedTip("target", builtOn, newTip); err != nil {
+		t.Fatalf("LandAmendedTip: %v", err)
 	}
 	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
-		t.Fatalf("target = %s, want the returned tip %s", got, newTip)
+		t.Fatalf("target = %s, want the landed tip %s", got, newTip)
 	}
 	if got := mustGit(t, "rev-parse", newTip+"^"); got != oldParent {
 		t.Fatalf("amended parent = %s, want %s (amend in place, not a new commit on top)", got, oldParent)
@@ -2584,18 +2547,18 @@ func TestAmendTipWithPatch(t *testing.T) {
 
 	// A patch that does not apply to target's tree fails cleanly: ref untouched.
 	garbage := []byte("diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1,3 +1,3 @@\n-nope\n-lines\n-mismatch\n+x\n+y\n+z\n")
-	if _, err := AmendTipWithPatch("target", garbage); err == nil {
-		t.Fatal("AmendTipWithPatch with a non-applying patch succeeded")
+	if _, _, err := BuildAmendedTip("target", garbage); err == nil {
+		t.Fatal("BuildAmendedTip with a non-applying patch succeeded")
 	}
 	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
-		t.Fatalf("target = %s after failed apply, want untouched %s", got, newTip)
+		t.Fatalf("target = %s after failed build, want untouched %s", got, newTip)
 	}
 }
 
-// TestAmendTipWithPatchMergeTip pins the multi-parent path: amending a
-// branch whose tip is a merge commit preserves BOTH parents (the -p loop),
-// the subject, and the merged content.
-func TestAmendTipWithPatchMergeTip(t *testing.T) {
+// TestBuildAmendedTipMergeTip pins the multi-parent path: amending a branch
+// whose tip is a merge commit preserves BOTH parents (the -p loop), the
+// subject, and the merged content.
+func TestBuildAmendedTipMergeTip(t *testing.T) {
 	newRepo(t)
 	writeFile(t, "shared.txt", "one\ntwo\nthree\n")
 	mustGit(t, "add", "-A")
@@ -2626,9 +2589,12 @@ func TestAmendTipWithPatchMergeTip(t *testing.T) {
 	}
 	mustGit(t, "reset", "-q", "--hard", "HEAD")
 
-	newTip, err := AmendTipWithPatch("main", patch)
+	newTip, builtOn, err := BuildAmendedTip("main", patch)
 	if err != nil {
-		t.Fatalf("AmendTipWithPatch on a merge tip: %v", err)
+		t.Fatalf("BuildAmendedTip on a merge tip: %v", err)
+	}
+	if err := LandAmendedTip("main", builtOn, newTip); err != nil {
+		t.Fatalf("LandAmendedTip on a merge tip: %v", err)
 	}
 	newParents := strings.Fields(mustGit(t, "rev-list", "--parents", "-n1", newTip))[1:]
 	if len(newParents) != 2 || newParents[0] != oldParents[0] || newParents[1] != oldParents[1] {
@@ -2642,9 +2608,9 @@ func TestAmendTipWithPatchMergeTip(t *testing.T) {
 	}
 }
 
-// TestAmendTipWithPatchRootTip pins the root-commit refusal: a branch whose
-// tip has no parent errors out with the ref untouched.
-func TestAmendTipWithPatchRootTip(t *testing.T) {
+// TestBuildAmendedTipRootTip pins the root-commit refusal: a branch whose
+// tip has no parent errors out at build time with the ref untouched.
+func TestBuildAmendedTipRootTip(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "checkout", "-q", "--orphan", "lone")
 	writeFile(t, "lone.txt", "alone\n")
@@ -2653,19 +2619,19 @@ func TestAmendTipWithPatchRootTip(t *testing.T) {
 	tip := mustGit(t, "rev-parse", "refs/heads/lone")
 
 	patch := []byte("diff --git a/lone.txt b/lone.txt\n--- a/lone.txt\n+++ b/lone.txt\n@@ -1 +1 @@\n-alone\n+company\n")
-	if _, err := AmendTipWithPatch("lone", patch); err == nil || !strings.Contains(err.Error(), "root commit") {
-		t.Fatalf("AmendTipWithPatch on a root tip = %v, want the root-commit refusal", err)
+	if _, _, err := BuildAmendedTip("lone", patch); err == nil || !strings.Contains(err.Error(), "root commit") {
+		t.Fatalf("BuildAmendedTip on a root tip = %v, want the root-commit refusal", err)
 	}
 	if got := mustGit(t, "rev-parse", "refs/heads/lone"); got != tip {
-		t.Fatalf("lone = %s after refused amend, want untouched %s", got, tip)
+		t.Fatalf("lone = %s after refused build, want untouched %s", got, tip)
 	}
 }
 
 // TestUpdateRefCompareAndSwap pins the update-ref old-value semantics that
-// AmendTipWithPatch's final `update-ref ref newTip tip` relies on: a swap
-// whose expected old value is stale FAILS and moves nothing. (The mid-call
-// race itself cannot be staged deterministically; this is the invariant the
-// CAS depends on.)
+// LandAmendedTip's `update-ref ref newTip tip` relies on: a swap whose
+// expected old value is stale FAILS and moves nothing. (The mid-call race
+// itself cannot be staged deterministically; this is the invariant the CAS
+// depends on.)
 func TestUpdateRefCompareAndSwap(t *testing.T) {
 	newRepo(t)
 	staleTip := mustGit(t, "rev-parse", "HEAD")

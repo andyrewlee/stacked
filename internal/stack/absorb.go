@@ -278,7 +278,7 @@ func absorbPlan(env Env, s *State) (*AbsorbResult, string, error) {
 
 // Absorb applies the attribution plan when every staged hunk attributed to
 // a tracked tip and nothing was refused. Each target branch's tip is amended
-// with ONLY its own hunks via AmendTipWithPatch — a temp-index amend that
+// with ONLY its own hunks via BuildAmendedTip+LandAmendedTip — a temp-index amend that
 // touches no worktree, so the user's edits are safely in commits before any
 // destructive step — then ONE upstack cascade from the lowest amended target
 // restacks everything above it and HEAD returns to the starting branch. All

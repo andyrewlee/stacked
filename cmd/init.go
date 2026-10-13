@@ -90,7 +90,7 @@ type initResult struct {
 // detectTrunk determines the trunk branch name. It prefers the remote default
 // branch (origin/HEAD), then the current branch, and finally "main".
 func detectTrunk() string {
-	if ref, err := git.Run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+	if ref, err := git.Run("symbolic-ref", "--quiet", "--short", git.RemoteTrackingRef("origin", "HEAD")); err == nil {
 		if name := strings.TrimPrefix(strings.TrimSpace(ref), "origin/"); name != "" {
 			return name
 		}

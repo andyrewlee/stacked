@@ -423,31 +423,7 @@ func formatHunkHeader(oldStart, oldN, newStart, newN int) string {
 	return fmt.Sprintf("@@ -%s +%s @@", rng(oldStart, oldN), rng(newStart, newN))
 }
 
-// AmendTipWithPatch rewrites branch's tip commit to also contain patch,
-// without touching any worktree or the real index: the patch is applied to
-// the tip's tree in a throwaway temporary index, a new tree and commit are
-// built with plumbing (write-tree/commit-tree, preserving the tip's author,
-// date, message, and parents), and the branch ref is moved with a
-// compare-and-swap on the old tip. On any failure — including "patch does not
-// apply to that tree" — the repository is untouched. Returns the new tip SHA.
-//
-// The two halves are also exposed separately: BuildAmendedTip is everything
-// up to the ref move (side-effect-free — its throwaway GIT_INDEX_FILE keeps
-// concurrent builds isolated), and LandAmendedTip is the compare-and-swap.
-// A multi-target absorb fans the builds out and lands serially so its
-// per-target recovery checkpoints still name only landed amends.
-func AmendTipWithPatch(branch string, patch []byte) (string, error) {
-	newTip, oldTip, err := BuildAmendedTip(branch, patch)
-	if err != nil {
-		return "", err
-	}
-	if err := LandAmendedTip(branch, oldTip, newTip); err != nil {
-		return "", err
-	}
-	return newTip, nil
-}
-
-// BuildAmendedTip computes the amended commit AmendTipWithPatch would land:
+// BuildAmendedTip computes the tip commit amended to also contain patch:
 // the tip's metadata, the patch applied to the tip's tree in a throwaway
 // index, and commit-tree preserving author/date/message/parents. It writes
 // objects only — never a ref, the real index, or a worktree — so builds for
@@ -515,8 +491,8 @@ func BuildAmendedTip(branch string, patch []byte) (newTip, oldTip string, err er
 
 // LandAmendedTip moves branch's ref to newTip, compare-and-swapped on oldTip
 // — the value BuildAmendedTip read — so a branch that moved since its build
-// fails instead of being clobbered. It is the only mutating half of
-// AmendTipWithPatch.
+// fails instead of being clobbered. It is the only mutating half of the
+// amend.
 func LandAmendedTip(branch, oldTip, newTip string) error {
 	if err := validRefArg("branch", branch); err != nil {
 		return err

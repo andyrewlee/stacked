@@ -32,7 +32,7 @@ func (RemoteShell) FastForward(trunk, remote, ownerDir string, checkedOutHere bo
 		}
 	}
 	localTrunk := LocalBranchNameRef(trunk)
-	upstream := "refs/remotes/" + remote + "/" + trunk
+	upstream := RemoteTrackingRef(remote, trunk)
 	upToDate, err := IsAncestor(upstream, localTrunk)
 	if err != nil {
 		return "", fmt.Errorf("compare %q with %q: %w", trunk, upstream, err)
@@ -235,6 +235,14 @@ const (
 	PublishedUnknown PublishedState = "unknown"
 )
 
+// RemoteTrackingRef returns branch's remote-tracking ref under remote —
+// refs/remotes/<remote>/<branch>. The remote-tracking counterpart of
+// LocalBranchNameRef: every refs/remotes/ assembly goes through here so the
+// layout lives in exactly one place.
+func RemoteTrackingRef(remote, branch string) string {
+	return "refs/remotes/" + remote + "/" + branch
+}
+
 // RemoteTrackingTips lists refs/remotes/<remote>/<branch> → SHA in one
 // for-each-ref invocation, keyed by the branch part. The map is the remote's
 // tracking-ref cache — what the last fetch or push recorded, not live server
@@ -243,7 +251,7 @@ func RemoteTrackingTips(remote string) (map[string]string, error) {
 	if err := validRefArg("remote", remote); err != nil {
 		return nil, err
 	}
-	prefix := "refs/remotes/" + remote + "/"
+	prefix := RemoteTrackingRef(remote, "")
 	out, err := Run("for-each-ref", "--format=%(refname) %(objectname)", prefix)
 	if err != nil {
 		return nil, err

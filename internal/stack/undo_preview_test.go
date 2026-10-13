@@ -14,11 +14,11 @@ import (
 // guard increments it), so the assertion is: the preview made zero of them.
 var undoPreviewMutators = []string{
 	"Checkout", "CheckoutDetach", "CreateBranch", "CreateBranchAt",
-	"DeleteBranch", "DeleteBranches", "ForceBranch", "UpdateRef", "UpdateRefs",
+	"DeleteBranch", "DeleteBranches", "ForceBranch", "UpdateRef",
 	"ResetSoft", "Commit", "AmendNoEdit", "AmendMessage", "Add",
 	"RenameBranch", "RebaseOnto", "RebaseOntoIn", "RebaseAbort",
 	"RebaseAbortIn", "RebaseContinue", "WorktreeRemove",
-	"AmendTipWithPatch", "ResetHardIn",
+	"ResetHardIn",
 }
 
 // callsSnapshot captures the fake's fail-instrumented call counts so a test

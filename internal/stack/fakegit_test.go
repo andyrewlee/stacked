@@ -84,7 +84,7 @@ type fakeGit struct {
 	blame             map[string]map[int]git.BlameLine
 	blameErr          map[string]error
 	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
-	// makes AmendTipWithPatch fail like a patch that does not apply to the
+	// makes BuildAmendedTip fail like a patch that does not apply to the
 	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
 	// calls ("" = the current worktree) so tests can pin the absorb sequence.
 	stagedPatch []byte
@@ -134,7 +134,7 @@ type fakeGit struct {
 	// delays the failure until the method has been called more than N times,
 	// modeling "first probe OK, second probe dies" windows. calls counts
 	// every invocation of a fail-instrumented method (so tests can assert a
-	// method was never reached, e.g. calls["UpdateRefs"] == 0).
+	// method was never reached, e.g. calls["UpdateRefsCas"] == 0).
 	//
 	// Convention: every new port method gets an `f.fail("Method")` guard at
 	// its top, so future failure-path tests never need a bespoke knob.
@@ -460,20 +460,6 @@ func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][
 		patches[target] = f.stagedPatch
 	}
 	return patches, nil
-}
-
-// AmendTipWithPatch models the temp-index amend: the branch's tip is replaced
-// by a new commit with the same parent and subject (patch content is not
-// modeled — real application is proven by the git-level and e2e tests).
-func (f *fakeGit) AmendTipWithPatch(branch string, patch []byte) (string, error) {
-	newTip, oldTip, err := f.BuildAmendedTip(branch, patch)
-	if err != nil {
-		return "", err
-	}
-	if err := f.LandAmendedTip(branch, oldTip, newTip); err != nil {
-		return "", err
-	}
-	return newTip, nil
 }
 
 // BuildAmendedTip models the side-effect-free half: the new commit object is
@@ -978,28 +964,6 @@ func (f *fakeGit) UpdateRef(ref, sha string) error {
 		return fmt.Errorf("unknown revision %q", sha)
 	}
 	f.branches[name] = id
-	return nil
-}
-
-// UpdateRefs mirrors the shell's transactional contract: every SHA must
-// resolve before any ref moves.
-func (f *fakeGit) UpdateRefs(updates map[string]string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.fail("UpdateRefs"); err != nil {
-		return err
-	}
-	resolved := map[string]string{}
-	for ref, sha := range updates {
-		id := f.resolve(sha)
-		if id == "" {
-			return fmt.Errorf("unknown revision %q", sha)
-		}
-		resolved[strings.TrimPrefix(ref, "refs/heads/")] = id
-	}
-	for name, id := range resolved {
-		f.branches[name] = id
-	}
 	return nil
 }
 

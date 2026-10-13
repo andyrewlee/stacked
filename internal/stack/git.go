@@ -40,11 +40,6 @@ type Git interface {
 	DeleteBranches(names []string, force bool) error
 	ForceBranch(name, ref string) error
 	UpdateRef(ref, sha string) error
-	// UpdateRefs applies every ref->SHA update as ONE transaction: on any
-	// failure no ref moves (all or nothing — the fake and the shell must both
-	// honor this). An update creates a missing ref, which is what resurrects
-	// pruned branches on undo.
-	UpdateRefs(updates map[string]string) error
 	// UpdateRefsCas applies every ref update as ONE compare-and-swap
 	// transaction: each ref moves only if it currently holds the update's Old
 	// expectation ("" = unverified, zero oid = must not exist, oid = must
@@ -131,14 +126,8 @@ type Git interface {
 	// hunks — assembled from ONE `diff --cached` capture so absorb's
 	// per-target loop does not rerun the full-index diff.
 	DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][]byte, error)
-	// AmendTipWithPatch rewrites branch's tip commit to also contain patch via
-	// a temporary-index amend (read-tree/apply --cached/write-tree/commit-tree)
-	// that touches no worktree and preserves the tip's author, message, and
-	// parents. On any failure — including a patch that does not apply to that
-	// tree — the repository is untouched. Returns the new tip SHA.
-	AmendTipWithPatch(branch string, patch []byte) (string, error)
-	// BuildAmendedTip is AmendTipWithPatch's side-effect-free half: it
-	// computes the amended tip (and the tip it was built on) without moving
+	// BuildAmendedTip computes a tip amended to also contain patch (and the
+	// tip it was built on) without moving
 	// any ref, index, or worktree — safe to run concurrently across
 	// branches. LandAmendedTip performs the compare-and-swap ref move. Absorb
 	// fans builds out and lands serially so each recovery checkpoint names

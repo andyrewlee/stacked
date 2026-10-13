@@ -190,34 +190,6 @@ func TestConformanceCreateBranchShowsUpInTips(t *testing.T) {
 	})
 }
 
-func TestConformanceUpdateRefsIsAllOrNothing(t *testing.T) {
-	runConformance(t, func(d *confDriver) {
-		if err := d.g.CreateBranch("a"); err != nil {
-			d.t.Fatalf("CreateBranch: %v", err)
-		}
-		if err := d.g.Checkout("main"); err != nil { // CreateBranch is checkout -b
-			d.t.Fatalf("checkout main: %v", err)
-		}
-		d.commit("m2") // advance main so 'a' visibly lags
-		aTip, mainTip := d.tip("a"), d.tip("main")
-		// One batch member cannot resolve ("missing" is not an object name on
-		// either impl) — the port contract says NO ref may move.
-		err := d.g.UpdateRefs(map[string]string{
-			"refs/heads/a": mainTip,
-			"refs/heads/b": "missing",
-		})
-		if err == nil {
-			d.t.Fatal("UpdateRefs with an unresolvable member must fail")
-		}
-		if got := d.tip("a"); got != aTip {
-			d.t.Fatalf("a's tip moved in a failed batch: %q -> %q", aTip, got)
-		}
-		if d.g.BranchExists("b") {
-			d.t.Fatal("the failed batch still created b")
-		}
-	})
-}
-
 func TestConformanceUpdateRefsCasHonorsExpectations(t *testing.T) {
 	runConformance(t, func(d *confDriver) {
 		if err := d.g.CreateBranch("a"); err != nil {
@@ -1012,43 +984,6 @@ func TestConformanceAbsorbSurface(t *testing.T) {
 	})
 }
 
-// AmendTipWithPatch amends a branch's tip through a temporary index — no
-// checkout, no worktree touch.
-func TestConformanceAmendTipWithPatch(t *testing.T) {
-	runConformance(t, func(d *confDriver) {
-		if err := d.g.CreateBranch("a"); err != nil {
-			d.t.Fatalf("CreateBranch: %v", err)
-		}
-		if err := d.g.Checkout("a"); err != nil {
-			d.t.Fatalf("checkout a: %v", err)
-		}
-		d.commit("a1")
-		aTip := d.tip("a")
-
-		var patch []byte
-		if d.fake != nil {
-			patch = []byte("content not modeled")
-		} else {
-			confWrite(d.t, "base.txt", "base\nextra line\n")
-			patch = []byte(confGit(d.t, "diff"))
-			confGit(d.t, "checkout", "--", "base.txt")
-		}
-		newTip, err := d.g.AmendTipWithPatch("a", patch)
-		if err != nil {
-			d.t.Fatalf("AmendTipWithPatch: %v", err)
-		}
-		if newTip == "" || newTip == aTip {
-			d.t.Fatalf("AmendTipWithPatch returned %q, want a new tip SHA", newTip)
-		}
-		if got := d.tip("a"); got != newTip {
-			d.t.Fatalf("a's tip = %s, want the amended %s", got, newTip)
-		}
-		if head, err := d.g.CurrentBranch(); err != nil || head != "a" {
-			d.t.Fatalf("CurrentBranch = (%q, %v); the temp-index amend must not move HEAD", head, err)
-		}
-	})
-}
-
 // BuildAmendedTip + LandAmendedTip split the amend across the mutation
 // boundary: the build computes a new tip and reports the tip it read, moving
 // nothing; the land is a compare-and-swap on that read — a branch that moved
@@ -1247,7 +1182,7 @@ func TestConformanceRemote(t *testing.T) {
 // "new method ⇒ new row" contract, enforced mechanically.
 func TestConformancePortCoverageGuard(t *testing.T) {
 	covered := map[string]bool{
-		"Add": true, "AmendMessage": true, "AmendNoEdit": true, "AmendTipWithPatch": true,
+		"Add": true, "AmendMessage": true, "AmendNoEdit": true,
 		"BuildAmendedTip": true, "LandAmendedTip": true,
 		"BlamePorcelain": true, "BranchExists": true, "ChangesContainedIn": true,
 		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitRange": true,
@@ -1261,7 +1196,7 @@ func TestConformancePortCoverageGuard(t *testing.T) {
 		"RebaseInProgressIn": true, "RebaseOnto": true, "RebaseOntoIn": true,
 		"RenameBranch": true, "RepoRoot": true, "RebaseOntoSHA": true,
 		"ResetHardIn": true, "ResetSoft": true, "RevParse": true, "Tips": true,
-		"TipsFor": true, "UpdateRef": true, "UpdateRefs": true, "UpdateRefsCas": true,
+		"TipsFor": true, "UpdateRef": true, "UpdateRefsCas": true,
 		"WorktreeRemove": true, "Worktrees": true,
 		// Remote
 		"Exists": true, "FastForward": true, "Fetch": true,
