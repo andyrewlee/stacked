@@ -25,6 +25,11 @@ esac
 # actionable message instead of inside goreleaser's template expansion.
 : "${MINISIGN_KEY_FILE:?MINISIGN_KEY_FILE must point at the minisign secret key file the .goreleaser.yaml signs: pipe reads}"
 
+# goreleaser's release pipe publishes through the GitHub API — probe the token
+# at preflight instead of discovering it missing mid-publish, after the full
+# gate and artifact build have already run.
+: "${GITHUB_TOKEN:?GITHUB_TOKEN must be set — the goreleaser release pipe publishes via the GitHub API}"
+
 # minisign is mandatory on the publish path: the signs: pipe shells out to it,
 # and the pairing rehearsal below is the only proof the key is usable — a
 # skip here is a skipped proof, not a missing optional check.
