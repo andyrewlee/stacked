@@ -178,6 +178,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`install.sh` no longer reports failure after a successful `sudo mv`.** The
+  trailing post-install `chmod +x` ran unprivileged against a now-root-owned
+  file and could only fail — the mode is set `0755` in the temp dir before
+  `mv` and survives it, so the line bought nothing.
 - **`make check-git-version` compares all three version components.** The
   installed git is now checked as major.minor.patch against the floor (a
   `git version` with no patch counts as 0), matching the runtime's
