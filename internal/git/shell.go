@@ -35,9 +35,8 @@ func (Shell) DeleteBranch(name string, force bool) error { return DeleteBranch(n
 func (Shell) DeleteBranches(names []string, force bool) error {
 	return DeleteBranches(names, force)
 }
-func (Shell) ForceBranch(name, ref string) error         { return ForceBranch(name, ref) }
-func (Shell) UpdateRef(ref, sha string) error            { return UpdateRef(ref, sha) }
-func (Shell) UpdateRefs(updates map[string]string) error { return UpdateRefs(updates) }
+func (Shell) ForceBranch(name, ref string) error { return ForceBranch(name, ref) }
+func (Shell) UpdateRef(ref, sha string) error    { return UpdateRef(ref, sha) }
 func (Shell) UpdateRefsCas(updates map[string]RefUpdate) error {
 	return UpdateRefsCas(updates)
 }
@@ -98,10 +97,6 @@ func (Shell) BlamePorcelain(file, rev string) (map[int]BlameLine, error) {
 
 func (Shell) DiffCachedPatchesFor(want map[string][]Hunk) (map[string][]byte, error) {
 	return DiffCachedPatchesFor(want)
-}
-
-func (Shell) AmendTipWithPatch(branch string, patch []byte) (string, error) {
-	return AmendTipWithPatch(branch, patch)
 }
 
 func (Shell) BuildAmendedTip(branch string, patch []byte) (newTip, oldTip string, err error) {

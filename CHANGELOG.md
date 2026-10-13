@@ -129,6 +129,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer surface in diagnostics.
 
 ### Changed
+- **The git port drops its superseded methods.** `UpdateRefs` (unconditional
+  batch) and `AmendTipWithPatch` (build+land fused) survived only as dead
+  surface after `UpdateRefsCas` and `BuildAmendedTip`/`LandAmendedTip`
+  replaced them — removing them shrinks the fake/conformance maintenance
+  load. Remote-tracking refs are also built by one `git.RemoteTrackingRef`
+  helper everywhere instead of hand-assembled `refs/remotes/...` strings.
 - **Independent read-only git probes run concurrently.** `st log`'s
   merge-base checks, `track --all`'s parent inference and trunk-pick
   merge-base checks, `st absorb`'s per-file blame reads, the
@@ -161,6 +167,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`make check-git-version` compares all three version components.** The
+  installed git is now checked as major.minor.patch against the floor (a
+  `git version` with no patch counts as 0), matching the runtime's
+  three-part `MinVersion` — previously the patch digit was silently dropped.
+  A new pin row also requires the runtime floor's patch to stay 0, so a
+  nonzero-patch floor cannot be declared while the documented floor is
+  two-part.
+- **`make snapshot` and `make release` refuse early when goreleaser is
+  absent.** The pin check deliberately tolerates a missing binary for
+  non-release work, so `make snapshot` passed its gate and then died on a
+  bare `goreleaser: command not found` (exit 127); both targets now run a
+  presence check first and report the pinned version to install.
 - **`st worktree rm` reports a dirty worktree instead of leaking git's
   fatal.** Single-branch removal now runs the same dirty pre-check `rm
   --all` uses, and all four removal paths share one eligibility verdict —

@@ -22,7 +22,7 @@ GIT_MIN_VERSION := 2.17
 # `make ci` is the single source of truth for the closed feedback loop.
 .DEFAULT_GOAL := ci
 
-.PHONY: ci ci-checks build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-release-version check-release-ready check-install check-hooks golden test test-fast e2e cover hooks clean release snapshot
+.PHONY: ci ci-checks build install fmt fmt-check vet vet-cross lint check-deps check-lint-version check-go-version check-git-version check-tools check-shell check-golangci check-goreleaser-version check-goreleaser-present check-release-version check-release-ready check-install check-hooks golden test test-fast e2e cover hooks clean release snapshot
 
 # THE gate: there is no remote CI — this Makefile is the whole pipeline.
 # The pin/tool checks run serially first (seconds each), then the read-only
@@ -131,21 +131,24 @@ check-go-version:
 # cannot silently leave the docs or the runtime check behind (the same hazard
 # check-lint-version/check-go-version guard).
 check-git-version:
-	@have=$$(git version 2>/dev/null | sed -nE 's/.*git version ([0-9]+)\.([0-9]+)(\.[0-9]+)?.*/\1.\2/p'); \
-	if [ -z "$$have" ]; then \
+	@set -- $$(git version 2>/dev/null | sed -nE 's/.*git version ([0-9]+)\.([0-9]+)(\.([0-9]+))?.*/\1 \2 \4/p'); \
+	if [ -z "$${1:-}" ]; then \
 		echo "cannot parse 'git version' output"; \
 		exit 1; \
 	fi; \
-	ok=$$(printf '%s\n%s\n' "$(GIT_MIN_VERSION)" "$$have" | sort -t. -k1,1n -k2,2n | head -1); \
-	if [ "$$ok" != "$(GIT_MIN_VERSION)" ]; then \
-		echo "git $$have is below the required floor $(GIT_MIN_VERSION)"; \
+	have="$$1.$$2.$${3:-0}"; floor="$(GIT_MIN_VERSION).0"; \
+	ok=$$(printf '%s\n%s\n' "$$floor" "$$have" | sort -t. -k1,1n -k2,2n -k3,3n | head -1); \
+	if [ "$$ok" != "$$floor" ]; then \
+		echo "git $$have is below the required floor $$floor"; \
 		exit 1; \
 	fi; \
-	echo "git floor: $$have >= $(GIT_MIN_VERSION)"; \
+	echo "git floor: $$have >= $$floor"; \
 	scripts/check-pins.sh "git floor pin" "$(GIT_MIN_VERSION)" \
 		README.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
 		CONTRIBUTING.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
-		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}$$/\1.\2/'
+		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}$$/\1.\2/' && \
+	scripts/check-pins.sh "git floor patch pin" "0" \
+		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{[0-9]+, [0-9]+, ([0-9]+)}$$/\1/'
 
 # The GoReleaser pin lives in GORELEASER_VERSION (Makefile) — it is the version
 # release tooling installs. Its major must match the .goreleaser.yaml config
@@ -169,6 +172,15 @@ check-goreleaser-version:
 		echo "goreleaser pin: $(GORELEASER_VERSION) installed; .goreleaser.yaml schema v$$cfg matches"; \
 	else \
 		echo "goreleaser pin: $(GORELEASER_VERSION); .goreleaser.yaml schema v$$cfg matches (binary not installed — fine for non-release work)"; \
+	fi
+
+# check-goreleaser-version tolerates a missing binary for non-release work, but
+# snapshot/release actually INVOKE goreleaser — without this gate they would
+# pass the pin check and die mid-recipe on a bare command-not-found (127).
+check-goreleaser-present:
+	@if ! command -v goreleaser >/dev/null 2>&1; then \
+		echo "goreleaser is required for this target (pinned at $(GORELEASER_VERSION); install per CONTRIBUTING)"; \
+		exit 1; \
 	fi
 
 # Inventory of every external tool the build/release/install paths touch
@@ -336,7 +348,7 @@ check-release-ready:
 # required, not skipped) and the hooks check (an unprotected tag push must
 # not publish). An unpinned toolchain or an asset/signature contract the
 # installer rejects is caught before `goreleaser release` runs, not mid-publish.
-release: check-release-version check-goreleaser-version
+release: check-release-version check-goreleaser-version check-goreleaser-present
 	$(MAKE) ci
 	CI_STRICT=1 $(MAKE) check-install check-shell check-release-ready
 	HOOKS_REQUIRED=1 $(MAKE) check-hooks
@@ -344,5 +356,5 @@ release: check-release-version check-goreleaser-version
 
 # Build release artifacts locally without publishing (dry run). Snapshots use
 # the same schema the release reads, so the pin gates this path as well.
-snapshot: check-goreleaser-version
+snapshot: check-goreleaser-version check-goreleaser-present
 	goreleaser build --snapshot --clean

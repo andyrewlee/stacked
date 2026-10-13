@@ -189,7 +189,7 @@ func TestOntoConflictSaveFailAbortFail(t *testing.T) {
 }
 
 // TestUndoStateSaveFailureRefsAlreadyRestored pins the post-transaction save
-// arm: Undo restores every recorded ref in ONE UpdateRefs batch BEFORE it
+// arm: Undo restores every recorded ref in ONE UpdateRefsCas batch BEFORE it
 // assigns/persists the snapshot, so when env.save() fails the refs are already
 // restored (the error must say so), in-memory metadata is the snapshot, the
 // simulated persisted state keeps the post-operation bytes, and retrying the

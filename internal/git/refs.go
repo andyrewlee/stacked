@@ -1,6 +1,6 @@
 // refs.go — branch/ref resolution and mutation: existence probes, tip
 // reads, ancestry/merge-base checks, checkout, create/delete/rename, and the
-// scoped-update plumbing (UpdateRef/UpdateRefs) the engine checkpoints with.
+// scoped-update plumbing (UpdateRef/UpdateRefsCas) the engine checkpoints with.
 package git
 
 import (
@@ -532,48 +532,6 @@ func UpdateRef(ref, sha string) error {
 	}
 	_, err := Run("update-ref", "--", ref, sha)
 	return err
-}
-
-// UpdateRefs sets every ref in updates to its SHA in a single
-// `git update-ref -z --stdin` invocation. git applies the batch as one
-// transaction: on any failure no ref is updated. An `update` directive
-// creates a missing ref, which is what resurrects pruned branches on undo.
-// Empty input is a no-op.
-//
-// The batch is NUL-framed (-z) and both refs and values are rejected if they
-// carry whitespace/control bytes: the inputs come from the undo journal,
-// which the threat model treats as potentially hostile, and a newline in a
-// space/LF-framed record would inject a second directive into the
-// transaction (the argv-framed single-ref UpdateRef never had that problem).
-func UpdateRefs(updates map[string]string) error {
-	if len(updates) == 0 {
-		return nil
-	}
-	refs := make([]string, 0, len(updates))
-	for ref, val := range updates {
-		if err := validRefArg("ref", ref); err != nil {
-			return err
-		}
-		if hasControlOrSpace(ref) {
-			return fmt.Errorf("ref %q contains whitespace or control bytes", ref)
-		}
-		if hasControlOrSpace(val) {
-			return fmt.Errorf("update value for %q contains whitespace or control bytes", ref)
-		}
-		refs = append(refs, ref)
-	}
-	sort.Strings(refs) // deterministic batch for tests and debuggability
-	var b strings.Builder
-	for _, ref := range refs {
-		// -z record grammar: update SP <ref> NUL <newvalue> NUL <oldvalue> NUL.
-		// The old-oid field must be PRESENT mid-batch (omitting it makes git
-		// consume the next record as the old value) but EMPTY, which means "no
-		// verification" — same semantics as the old newline form, verified
-		// against real git: empty old-oid updates existing refs and creates
-		// missing ones.
-		fmt.Fprintf(&b, "update %s\x00%s\x00\x00", ref, updates[ref])
-	}
-	return runUpdateRefsStdin(b.String())
 }
 
 // RefUpdate is one ref change in a compare-and-swap batch. New is the object

@@ -780,7 +780,7 @@ func TestUndoTrunkSnapshotRejected(t *testing.T) {
 }
 
 // A failure of the batched ref restore inside Undo must surface as the wrapped
-// "restoring branch refs" error, and — because UpdateRefs is transactional —
+// "restoring branch refs" error, and — because UpdateRefsCas is transactional —
 // leave every ref where it was (no partial restore). The state swap/save runs
 // only after a successful batch, so post-modify metadata is untouched and no
 // Save call happens.
@@ -805,7 +805,7 @@ func TestUndoRefRestoreFailure(t *testing.T) {
 	}
 
 	// Corrupt one recorded ref to a SHA the fake cannot resolve, so Undo's
-	// batched UpdateRefs fails on it.
+	// batched UpdateRefsCas fails on it.
 	entry.Refs["a"] = "0123456789012345678901234567890123456789"
 
 	saves := 0
