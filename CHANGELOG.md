@@ -161,6 +161,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`st worktree rm` reports a dirty worktree instead of leaking git's
+  fatal.** Single-branch removal now runs the same dirty pre-check `rm
+  --all` uses, and all four removal paths share one eligibility verdict —
+  the reason texts stay byte-identical.
 - **A failed cross-worktree restack no longer aborts a foreign rebase.** The
   rollback after `git rebase` failed in a linked worktree ran unconditionally;
   an external rebase that started between the pre-flight probe and the spawn

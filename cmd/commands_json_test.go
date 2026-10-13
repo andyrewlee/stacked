@@ -2580,6 +2580,52 @@ func TestWorktreeRemoveAllSkipsDirty(t *testing.T) {
 	}
 }
 
+// TestWorktreeRemoveDirtyRefusesPolitely pins the single-rm parity fix: a
+// dirty linked worktree refuses with the same friendly reason rm --all
+// skips on — it no longer leaks git's own "contains modified or untracked
+// files" fatal.
+func TestWorktreeRemoveDirtyRefusesPolitely(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetProcCaches()
+	if err := runWorktree([]string{"--all"}); err != nil {
+		t.Fatalf("worktree --all: %v", err)
+	}
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aPath := ""
+	for _, wt := range wts {
+		if wt.Branch == "feat-a" {
+			aPath = wt.Path
+		}
+	}
+	if aPath == "" {
+		t.Fatalf("feat-a worktree not found in %+v", wts)
+	}
+	if err := os.WriteFile(filepath.Join(aPath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runWorktree([]string{"rm", "feat-a"})
+	if err == nil {
+		t.Fatal("worktree rm on a dirty worktree succeeded; want the friendly refusal")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") || !strings.Contains(err.Error(), "st worktree rm feat-a") {
+		t.Fatalf("rm error = %v, want the friendly dirty refusal", err)
+	}
+	if strings.Contains(err.Error(), "fatal") {
+		t.Fatalf("rm error leaks git's fatal: %v", err)
+	}
+	if _, statErr := os.Stat(aPath); statErr != nil {
+		t.Fatalf("dirty worktree was removed: %v", statErr)
+	}
+}
+
 // TestWorktreeRemoveAllIdempotent: a rerun with nothing left removes nothing
 // and exits cleanly.
 func TestWorktreeRemoveAllIdempotent(t *testing.T) {
