@@ -1419,6 +1419,33 @@ func TestPausedRebaseInLinkedWorktreeBlocksMutations(t *testing.T) {
 		t.Fatalf("worktree list missing the detached paused entry:\n%s", out)
 	}
 
+	// `st log --json` still annotates feat-a through the pause — the detached
+	// row resolves back to its branch via the rebase head-name, carrying the
+	// path, dirty, the paused flag and the conflicted paths the pause waits
+	// on (plan 008).
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("decode log json: %v\n%s", err, out)
+	}
+	feat := findNode(&root, "feat-a")
+	if feat == nil || !feat.Paused || !feat.Dirty {
+		t.Fatalf("feat-a lost its pause annotation in log --json: %+v\n%s", feat, out)
+	}
+	wantWT, _ := filepath.EvalSymlinks(wt)
+	if gotWT, _ := filepath.EvalSymlinks(feat.Worktree); gotWT != wantWT {
+		t.Fatalf("feat-a worktree = %q, want %q", feat.Worktree, wantWT)
+	}
+	foundConflict := false
+	for _, f := range feat.ConflictedFiles {
+		if f == "a.txt" {
+			foundConflict = true
+		}
+	}
+	if !foundConflict {
+		t.Fatalf("feat-a conflictedFiles = %v, want a.txt:\n%s", feat.ConflictedFiles, out)
+	}
+
 	// `st delete` from the main worktree refuses upfront, naming the branch
 	// and its paused worktree — and removes nothing.
 	res := r.st("delete", "feat-a")

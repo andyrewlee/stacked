@@ -559,6 +559,128 @@ func TestLogJSONDoesNotAnnotateMainWorktreeBranch(t *testing.T) {
 	}
 }
 
+// TestLogJSONPausedRebaseWorktree pins the plan-008 contract: a tracked branch
+// paused mid-rebase in a LINKED worktree lists detached under `git worktree
+// list`, but log --json must still annotate the owning branch — resolved
+// through the rebase head-name — with its path, dirty state, the paused flag,
+// and the conflicted paths the pause is waiting on. That is the one fleet
+// state an orchestrator most needs to see without per-worktree `st status`.
+func TestLogJSONPausedRebaseWorktree(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	mustCheckout(t, "main")
+	write(t, "a.txt", "diverged\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
+
+	wt, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
+	}
+	resetProcCaches()
+
+	jsonOut := captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json: %v", err)
+		}
+	})
+	var root logNode
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	var node *logNode
+	for _, c := range root.Children {
+		if c.Name == "feat-a" {
+			node = c
+		}
+	}
+	if node == nil {
+		t.Fatalf("log tree missing feat-a:\n%s", jsonOut)
+	}
+	if !sameExistingPath(node.Worktree, wt.Path) {
+		t.Fatalf("paused branch worktree = %q, want %q", node.Worktree, wt.Path)
+	}
+	if !node.Paused {
+		t.Fatalf("paused branch did not report paused:true:\n%s", jsonOut)
+	}
+	if !node.Dirty {
+		t.Fatal("paused worktree is conflicted-dirty; want dirty:true")
+	}
+	foundConflict := false
+	for _, f := range node.ConflictedFiles {
+		if f == "a.txt" {
+			foundConflict = true
+		}
+	}
+	if !foundConflict {
+		t.Fatalf("conflictedFiles = %v, want a.txt", node.ConflictedFiles)
+	}
+	if node.Locked {
+		t.Fatal("unlocked worktree reported locked")
+	}
+
+	// A `git worktree lock` on the paused worktree surfaces as `locked` on the
+	// same node — the hold plan 007's restack/removal gates honor.
+	mustRun(t, "git", "worktree", "lock", wt.Path)
+	resetProcCaches()
+	jsonOut = captureStdout(t, func() {
+		if err := runLog([]string{"--json"}); err != nil {
+			t.Fatalf("log --json after lock: %v", err)
+		}
+	})
+	root = logNode{}
+	if err := json.Unmarshal([]byte(jsonOut), &root); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonOut)
+	}
+	node = nil
+	for _, c := range root.Children {
+		if c.Name == "feat-a" {
+			node = c
+		}
+	}
+	if node == nil || !node.Locked || !node.Paused {
+		t.Fatalf("locked paused worktree = %+v, want locked+paused", node)
+	}
+}
+
+// TestLogTextPausedRebaseWorktree covers the text render of the same state:
+// the branch keeps its worktree tag, now with `paused` appended.
+func TestLogTextPausedRebaseWorktree(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+
+	mustCheckout(t, "main")
+	write(t, "a.txt", "diverged\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
+
+	wt, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
+	}
+	resetProcCaches()
+
+	out := captureStdout(t, func() {
+		if err := runLog(nil); err != nil {
+			t.Fatalf("log: %v", err)
+		}
+	})
+	if !strings.Contains(out, "paused") {
+		t.Fatalf("text log lost the pause signal for feat-a:\n%s", out)
+	}
+}
+
 // --- status ----------------------------------------------------------------
 
 type statusPayload struct {

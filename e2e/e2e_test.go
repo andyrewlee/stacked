@@ -366,15 +366,17 @@ func wantStderrContains(t *testing.T, res result, sub string) {
 // --- JSON shapes (mirror cmd/log.go and cmd/status.go) ----------------------
 
 type logNode struct {
-	Name         string     `json:"name"`
-	Parent       string     `json:"parent"`
-	ParentSHA    string     `json:"parentSHA"`
-	Current      bool       `json:"current"`
-	NeedsRestack bool       `json:"needsRestack"`
-	TopCommit    string     `json:"topCommit"`
-	Worktree     string     `json:"worktree"`
-	Dirty        bool       `json:"dirty"`
-	Children     []*logNode `json:"children"`
+	Name            string     `json:"name"`
+	Parent          string     `json:"parent"`
+	ParentSHA       string     `json:"parentSHA"`
+	Current         bool       `json:"current"`
+	NeedsRestack    bool       `json:"needsRestack"`
+	TopCommit       string     `json:"topCommit"`
+	Worktree        string     `json:"worktree"`
+	Dirty           bool       `json:"dirty"`
+	Paused          bool       `json:"paused"`
+	ConflictedFiles []string   `json:"conflictedFiles"`
+	Children        []*logNode `json:"children"`
 }
 
 type statusJSON struct {

@@ -120,7 +120,26 @@ func checkIgnored(root, rel string) bool {
 // -z) is intentional: Run() trims and every parser here splits on "\n", so a NUL
 // stream would leave a stray empty field.
 func UnmergedFiles() ([]string, error) {
-	out, err := Run("diff", "--name-only", "--diff-filter=U")
+	return unmergedFilesIn("")
+}
+
+// UnmergedFilesIn is UnmergedFiles for the worktree at dir — the per-path probe
+// `st log` runs against a worktree paused mid-rebase, where the conflicted
+// files live. It exists so a read-only render can name them without driving
+// `st status` inside each one.
+func UnmergedFilesIn(dir string) ([]string, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("worktree dir is empty")
+	}
+	return unmergedFilesIn(dir)
+}
+
+func unmergedFilesIn(dir string) ([]string, error) {
+	args := []string{"diff", "--name-only", "--diff-filter=U"}
+	if dir != "" {
+		args = append([]string{"-C", dir}, args...)
+	}
+	out, err := Run(args...)
 	if err != nil {
 		return nil, err
 	}
