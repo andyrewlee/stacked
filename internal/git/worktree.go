@@ -339,6 +339,34 @@ func WorktreeAdd(path, branch string) error {
 	return err
 }
 
+// WorktreeLock marks the worktree at path locked (`git worktree lock`),
+// optionally recording reason as the lock's explanation. A locked worktree
+// cannot be removed or pruned; st's own gates additionally treat it as a
+// hold — never rebased into or torn down while locked. `--reason` exists at
+// the documented Git 2.17 floor.
+func WorktreeLock(path, reason string) error {
+	if path == "" {
+		return fmt.Errorf("worktree path is empty")
+	}
+	args := []string{"worktree", "lock"}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	args = append(args, "--", path)
+	_, err := Run(args...)
+	return err
+}
+
+// WorktreeUnlock clears the lock on the worktree at path (`git worktree
+// unlock`).
+func WorktreeUnlock(path string) error {
+	if path == "" {
+		return fmt.Errorf("worktree path is empty")
+	}
+	_, err := Run("worktree", "unlock", "--", path)
+	return err
+}
+
 // WorktreeRemove removes the linked worktree at path. When force is true the
 // worktree is removed even if it has uncommitted changes.
 func WorktreeRemove(path string, force bool) error {

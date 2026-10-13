@@ -23,6 +23,8 @@ import (
 // can leave a different branch checked out in a worktree), and the cmd
 // layer's direct calls go through helpers that own the reset —
 // addWorktreePath/removeWorktreePath for `git worktree add`/`remove`,
+// setWorktreeLock for `git worktree lock`/`unlock` (the Locked flag lives on
+// the memoized entries, so a lock flip must force a re-list),
 // checkoutAndReset for the one direct checkout, moveCwdAndReset for the one
 // off-port HEAD move (prepareUndoCreatedWorktrees' os.Chdir into the main
 // worktree). The one surgical exception is noteWorktreeAdded, reached only
@@ -125,6 +127,19 @@ func addWorktreePath(path, branch string) error {
 // removeWorktreePath runs git.WorktreeRemove then invalidates.
 func removeWorktreePath(path string, force bool) error {
 	err := git.WorktreeRemove(path, force)
+	resetProcCaches()
+	return err
+}
+
+// setWorktreeLock runs git.WorktreeLock/Unlock then invalidates — the Locked
+// flag lives on the memoized entries, so a lock flip must force a re-list.
+func setWorktreeLock(path, reason string, lock bool) error {
+	var err error
+	if lock {
+		err = git.WorktreeLock(path, reason)
+	} else {
+		err = git.WorktreeUnlock(path)
+	}
 	resetProcCaches()
 	return err
 }

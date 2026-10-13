@@ -1420,3 +1420,32 @@ func TestUndoDeletesDoomedInOneBatch(t *testing.T) {
 		t.Fatal("undo returned no summary")
 	}
 }
+
+// A locked unrecorded worktree must refuse, leaving both the worktree and the
+// branch in place — the standing hold outranks undo's created-worktree
+// teardown, same as dirty.
+func TestUndoCreateRefusesLockedUnrecordedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/unrecorded", "b")
+	f.markWorktreeLocked("/wt/unrecorded")
+
+	_, err := Undo(env, s, entry, false)
+	if err == nil || !strings.Contains(err.Error(), "is locked") {
+		t.Fatalf("undo error = %v, want locked-worktree refusal", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("failed undo removed the locked worktree")
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("failed undo deleted the branch anyway")
+	}
+}

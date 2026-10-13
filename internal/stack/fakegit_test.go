@@ -98,6 +98,10 @@ type fakeGit struct {
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
+	// lockedWT marks worktrees (by path) as locked, so Worktrees reports
+	// Locked like `git worktree list` does and the gates can model a held
+	// worktree — linked or paused-detached alike.
+	lockedWT map[string]bool
 	// rebaseInWT marks worktree dirs (the Path Worktrees reports — "." is the
 	// main worktree) with a paused rebase, whether st-armed or armed directly
 	// by the test as a foreign rebase st must not touch. rebaseWT records
@@ -575,10 +579,10 @@ func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
 	}
 	list = append(list, main)
 	for branch, path := range f.linkedWorktrees {
-		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch]})
+		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch], Locked: f.lockedWT[path]})
 	}
 	for path := range f.pausedLinkedWorktrees {
-		list = append(list, git.Worktree{Path: path, Detached: true, Head: f.detachedAt})
+		list = append(list, git.Worktree{Path: path, Detached: true, Head: f.detachedAt, Locked: f.lockedWT[path]})
 	}
 	return list, nil
 }
@@ -598,6 +602,15 @@ func (f *fakeGit) markWorktreeDirty(branch string) {
 		f.dirtyWT = map[string]bool{}
 	}
 	f.dirtyWT[branch] = true
+}
+
+// markWorktreeLocked marks the worktree at path locked, so Worktrees reports
+// Locked — the fake's `git worktree lock` equivalent.
+func (f *fakeGit) markWorktreeLocked(path string) {
+	if f.lockedWT == nil {
+		f.lockedWT = map[string]bool{}
+	}
+	f.lockedWT[path] = true
 }
 
 // knownWorktreeDir reports whether dir names a worktree git would accept for
@@ -767,13 +780,17 @@ func (f *fakeGit) RepoRoot() (string, error) {
 }
 
 // WorktreeRemove tears down the linked worktree at dir, mirroring git's refusal
-// to remove a dirty worktree without --force. It deregisters the branch so a
-// follow-up DeleteBranch no longer hits "checked out in another worktree".
+// to remove a dirty worktree without --force or a locked worktree at all. It
+// deregisters the branch so a follow-up DeleteBranch no longer hits "checked
+// out in another worktree".
 func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.fail("WorktreeRemove"); err != nil {
 		return err
+	}
+	if f.lockedWT[dir] {
+		return fmt.Errorf("cannot remove a locked working tree %q", dir)
 	}
 	for branch, path := range f.linkedWorktrees {
 		if path != dir {

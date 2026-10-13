@@ -18,6 +18,10 @@ const (
 	// RemovalInsideCaller — removing the worktree would delete the
 	// process's own cwd.
 	RemovalInsideCaller
+	// RemovalLocked — the worktree is locked (git worktree lock). A lock is
+	// a standing hold: whatever it was set for, the worktree must not be
+	// torn down until it is unlocked.
+	RemovalLocked
 	// RemovalPausedRebase — a rebase is in progress inside the worktree.
 	RemovalPausedRebase
 	// RemovalDirty — uncommitted changes; in-progress work is never
@@ -25,21 +29,25 @@ const (
 	RemovalDirty
 )
 
-// RemovalProbes supplies the per-worktree probe answers
+// RemovalProbes supplies the per-worktree answers
 // ClassifyWorktreeRemoval evaluates. Each getter is invoked lazily, only
 // when the gates before it passed — a single-shot path passes the live
 // probe, rm --all's bounded fan-out passes a closure over its precomputed
 // slots, and a nil getter means the site does not run that gate at all:
 // the engine's release path has no paused gate (a paused worktree
 // classifies through its dirty index, as it always did), and undo's
-// cleanup answers "clean" from its own precomputed plan slots.
+// cleanup answers "clean" from its own precomputed plan slots. Locked is
+// not a probe — the flag arrives already parsed on the caller's
+// git.Worktree entry.
 type RemovalProbes struct {
+	Locked bool
 	Paused func(path string) (bool, error)
 	Clean  func(path string) (bool, error)
 }
 
 // ClassifyWorktreeRemoval evaluates the removal gates for the worktree at
-// ownerPath in canonical order — main-owner, inside-cwd, paused, dirty —
+// ownerPath in canonical order — main-owner, inside-cwd, locked, paused,
+// dirty —
 // and returns the first failing verdict, or RemovalOK when all pass. The
 // caller resolved the owner itself (LinkedOwnerOf for the rm paths,
 // OwnerOf for the engine's release — they differ on whether the main
@@ -58,6 +66,9 @@ func ClassifyWorktreeRemoval(g Git, ownerPath, mainPath string, probes RemovalPr
 		return RemovalOK, err
 	} else if within {
 		return RemovalInsideCaller, nil
+	}
+	if probes.Locked {
+		return RemovalLocked, nil
 	}
 	if probes.Paused != nil {
 		paused, err := probes.Paused(ownerPath)

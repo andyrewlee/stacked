@@ -66,6 +66,7 @@ type undoDoomed struct {
 	name      string
 	owner     string
 	dirty     bool
+	locked    bool
 	mismatch  bool
 	isCurrent bool
 	// Checkout-target resolution for the current-doomed case, computed against
@@ -254,6 +255,7 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 		d := &p.doomed[i]
 		if owner, ok := LinkedOwnerOf(p.wts, d.name); ok {
 			d.owner = owner.Path
+			d.locked = owner.Locked
 			if recorded := entry.CreatedWorktrees[d.name]; recorded != "" && !sameWorktreePath(owner.Path, recorded) {
 				d.mismatch = true
 			} else {
@@ -315,7 +317,7 @@ func (p *undoPlan) blocked() bool {
 		return true
 	}
 	for _, d := range p.doomed {
-		if d.mismatch || d.dirty || (d.isCurrent && !d.targetLive && !d.targetRec) {
+		if d.mismatch || d.locked || d.dirty || (d.isCurrent && !d.targetLive && !d.targetRec) {
 			return true
 		}
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1534,5 +1535,140 @@ func TestWorktreeDryRunRejectsNonAddForms(t *testing.T) {
 		if err := runWorktree(args); err == nil || !strings.Contains(err.Error(), "--dry-run") {
 			t.Fatalf("runWorktree(%v) = %v, want a --dry-run rejection", args, err)
 		}
+	}
+}
+
+// TestWorktreeLockUnlock exercises the hold verbs end to end against real git:
+// lock marks the worktree (ls reports locked), rm refuses it and rm --all
+// skips it, unlock clears it and rm proceeds. The verbs exist because agents
+// should not need raw git to hold a worktree.
+func TestWorktreeLockUnlock(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	created, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	resetProcCaches()
+
+	if err := worktreeLock("feat-a", "agent holding", false); err != nil {
+		t.Fatalf("worktreeLock: %v", err)
+	}
+	// ls reports the lock. git's listing canonicalizes paths (macOS resolves
+	// /var → /private/var), so compare the resolved form.
+	wantPath, _ := filepath.EvalSymlinks(created.Path)
+	wts, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees: %v", err)
+	}
+	sawLocked := false
+	for _, wt := range wts {
+		gotPath, _ := filepath.EvalSymlinks(wt.Path)
+		if gotPath == wantPath {
+			sawLocked = wt.Locked
+		}
+	}
+	if !sawLocked {
+		t.Fatalf("worktrees() = %+v, want %q locked", wts, created.Path)
+	}
+
+	// Idempotent lock is a report, not an error.
+	if err := worktreeLock("feat-a", "", false); err != nil {
+		t.Fatalf("re-lock of a locked worktree: %v", err)
+	}
+
+	// Single rm refuses, naming the unlock.
+	rmErr := worktreeRemove("feat-a", false)
+	if rmErr == nil || !strings.Contains(rmErr.Error(), "locked") ||
+		!strings.Contains(rmErr.Error(), "st worktree unlock feat-a") {
+		t.Fatalf("worktreeRemove on locked = %v, want the locked refusal", rmErr)
+	}
+	// rm --all skips it under the locked reason.
+	if err := worktreeRemoveAll(false); err != nil {
+		t.Fatalf("worktreeRemoveAll: %v", err)
+	}
+	if _, statErr := os.Stat(created.Path); statErr != nil {
+		t.Fatalf("rm --all removed a locked worktree: %v", statErr)
+	}
+
+	// Unlock then rm proceeds.
+	if err := worktreeUnlock("feat-a", false); err != nil {
+		t.Fatalf("worktreeUnlock: %v", err)
+	}
+	// Idempotent unlock is a report, not an error.
+	if err := worktreeUnlock("feat-a", false); err != nil {
+		t.Fatalf("re-unlock of an unlocked worktree: %v", err)
+	}
+	if err := worktreeRemove("feat-a", false); err != nil {
+		t.Fatalf("worktreeRemove after unlock: %v", err)
+	}
+}
+
+// TestWorktreeLockRefusals pins the resolution edges: an untracked branch, a
+// branch with no worktree, and the main-worktree checkout (git cannot lock it)
+// each get their own refusal instead of git's raw fatal.
+func TestWorktreeLockRefusals(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	if err := worktreeLock("ghost", "", false); err == nil || !strings.Contains(err.Error(), "not tracked") {
+		t.Fatalf("lock untracked = %v, want not-tracked refusal", err)
+	}
+	if err := worktreeLock("feat-a", "", false); err == nil || !strings.Contains(err.Error(), "no worktree") {
+		t.Fatalf("lock worktree-less = %v, want no-worktree refusal", err)
+	}
+	if err := worktreeLock("main", "", false); err == nil || !strings.Contains(err.Error(), "main worktree") {
+		t.Fatalf("lock main = %v, want the main-worktree refusal", err)
+	}
+}
+
+// TestWorktreeRemoveAllSkipReasonLocked pins the JSON contract row: a locked
+// worktree skips under reason "worktree is locked" while clean siblings are
+// removed.
+func TestWorktreeRemoveAllSkipReasonLocked(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	locked, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree feat-a: %v", err)
+	}
+	if _, err := materializeWorktree("feat-b"); err != nil {
+		t.Fatalf("materializeWorktree feat-b: %v", err)
+	}
+	if err := git.WorktreeLock(locked.Path, ""); err != nil {
+		t.Fatalf("WorktreeLock: %v", err)
+	}
+	resetProcCaches()
+
+	got := captureStdout(t, func() {
+		if err := worktreeRemoveAll(true); err != nil {
+			t.Fatalf("worktreeRemoveAll: %v", err)
+		}
+	})
+	var res worktreeRemoveAllResult
+	if err := json.Unmarshal([]byte(got), &res); err != nil {
+		t.Fatalf("unmarshal %q: %v", got, err)
+	}
+	if len(res.Removed) != 1 || res.Removed[0].Branch != "feat-b" {
+		t.Fatalf("removed = %+v, want [feat-b]", res.Removed)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Branch != "feat-a" || res.Skipped[0].Reason != wtSkipLocked {
+		t.Fatalf("skipped = %+v, want feat-a/%q", res.Skipped, wtSkipLocked)
 	}
 }
