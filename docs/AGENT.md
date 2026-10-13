@@ -48,7 +48,8 @@ Branch on the exit code; do not parse messages.
 Every subcommand except `__complete` and `completion` and `shell` accepts `--json`
 (`__complete` is the hidden completion endpoint, not a user command). The built-ins `help`,
 `-h`/`--help`, `version`, and `-v`/`--version` also accept `--json`. Successful
-JSON output is a single indented object on **stdout**. On failure, `--json`
+JSON output is a single indented JSON value on **stdout** — an object, except
+`st worktree ls --json`, which returns an array. On failure, `--json`
 writes a structured envelope to **stderr** and the process still exits with the
 code above:
 
@@ -453,6 +454,9 @@ One stack, N agents, one worktree per branch:
   workflow; `--json` emits `{ "steps": [ "…", … ], "docs": "…" }` where `steps`
   is the same annotated command list text mode prints and `docs` points at
   `st help <command>` for per-command usage.
+- `ST_DEBUG=1 st <cmd>` writes one stderr line per git spawn (the argv and
+  its cwd) — the fastest way to see which probes a command actually ran when
+  diagnosing a slow call.
 
 ### Internal: `st __complete`
 
@@ -478,6 +482,10 @@ Candidate policy: `checkout`/`co` → trunk + tracked branches; `onto`/`move` �
 tracked + trunk minus the current branch's subtree; `track` → untracked local
 branches, or tracked + trunk when completing `--parent`'s value; `worktree`/`wt`
 → tracked branches lacking a linked worktree, or — after `rm`/`remove` —
-branches owning one; `delete` and `untrack` → tracked branches; `rename` →
+branches owning one; `delete`, `untrack`, and `commits` → tracked branches;
+`rename` →
 tracked + trunk on the first positional (the new-name positional completes
 nothing). All other commands and positions emit nothing.
+
+`ST_COMPLETE_BIN` overrides the binary the generated hooks invoke — point it
+at a build under test instead of the installed `st`.

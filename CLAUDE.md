@@ -90,7 +90,7 @@ e2e/                 black-box tests driving the real binary as a subprocess
    `NewFlagSet: frobFlagSet`. `Run` and `st help --json` then build the flags from
    the same constructor, so the declared-flags contract in `docs/AGENT.md` can't drift.
 4. If it has interesting CLI output, add a golden test (`cmd/golden_test.go`,
-   regenerate with `go test ./cmd -run Golden -update`).
+   regenerate with `make golden` — the timeout-guarded invocation).
 5. If the command takes a positional branch name, set the `Completion` field
    on the `Command` registration so `st __complete` (and the generated shell
    hooks) offer branch names — `completeCandidates` exercises it in tests

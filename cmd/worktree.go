@@ -14,7 +14,7 @@ func init() {
 		Name:       "worktree",
 		Aliases:    []string{"wt"},
 		Summary:    "Materialize, list, or remove a branch's own worktree",
-		Usage:      "st worktree <branch> | --all | ls|list | rm|remove <branch> | rm --all [--json]",
+		Usage:      "st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
 		SubVerbs:   []string{"list", "ls", "remove", "rm"},
