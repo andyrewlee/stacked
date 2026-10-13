@@ -178,6 +178,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`scripts/check-pins.sh` can no longer pass silently.** A malformed spec row
+  (or no rows at all) now exits non-zero instead of printing a vacuous
+  "consistent across", and every matching declaration in each file is compared
+  — previously only the first was checked, so a second stale pin was
+  invisible. The git-floor doc rows' grep now matches the requirement
+  sentence's `**Git N.NN+**` shape specifically, so feature-version mentions
+  (the `2.31+` recommendation, the `2.26+` rebase note) aren't misread as
+  floor declarations.
 - **`install.sh` no longer reports failure after a successful `sudo mv`.** The
   trailing post-install `chmod +x` ran unprivileged against a now-root-owned
   file and could only fail — the mode is set `0755` in the temp dir before

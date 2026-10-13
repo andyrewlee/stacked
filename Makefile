@@ -144,8 +144,8 @@ check-git-version:
 	fi; \
 	echo "git floor: $$have >= $$floor"; \
 	scripts/check-pins.sh "git floor pin" "$(GIT_MIN_VERSION)" \
-		README.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
-		CONTRIBUTING.md 'Git [0-9]+\.[0-9]+\+' 's/^Git ([0-9.]+)\+$$/\1/' \
+		README.md 'and \*\*Git [0-9]+\.[0-9]+\+\*\*' 's/^and \*\*Git ([0-9.]+)\+\*\*$$/\1/' \
+		CONTRIBUTING.md 'and \*\*Git [0-9]+\.[0-9]+\+\*\*' 's/^and \*\*Git ([0-9.]+)\+\*\*$$/\1/' \
 		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{([0-9]+), ([0-9]+), [0-9]+}$$/\1.\2/' && \
 	scripts/check-pins.sh "git floor patch pin" "0" \
 		internal/git/git.go 'MinVersion = \[3\]int\{[0-9, ]+\}' 's/^MinVersion = \[3\]int{[0-9]+, [0-9]+, ([0-9]+)}$$/\1/'
