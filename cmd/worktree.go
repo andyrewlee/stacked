@@ -404,16 +404,30 @@ func worktreeRemove(branch string, asJSON bool) error {
 	}
 	// Removing the worktree the caller is standing in would delete this
 	// process's own cwd; a paused rebase inside the target would be destroyed
-	// with it. Both refuse up front rather than letting git fail partway.
-	if within, err := stack.CwdWithinWorktree(newGitPort(), wt.Path); err != nil {
+	// with it; and a dirty worktree refuses up front — the same gates rm
+	// --all skips on, here rendered as hard errors rather than leaking git's
+	// own fatal. All three share the removal classifier's canonical order.
+	port := newGitPort()
+	verdict, err := stack.ClassifyWorktreeRemoval(port, wt.Path, "", stack.RemovalProbes{
+		Paused: func(path string) (bool, error) {
+			paused, perr := port.RebaseInProgressIn(path)
+			if perr != nil {
+				return false, fmt.Errorf("checking worktree %q for a paused rebase: %w", path, perr)
+			}
+			return paused, nil
+		},
+		Clean: port.IsCleanIn,
+	})
+	if err != nil {
 		return err
-	} else if within {
-		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
 	}
-	if inProgress, err := git.RebaseInProgressIn(wt.Path); err != nil {
-		return fmt.Errorf("checking worktree %q for a paused rebase: %w", wt.Path, err)
-	} else if inProgress {
+	switch verdict {
+	case stack.RemovalInsideCaller:
+		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
+	case stack.RemovalPausedRebase:
 		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
+	case stack.RemovalDirty:
+		return fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, wt.Path, branch)
 	}
 	if removeErr := removeWorktreePath(wt.Path, false); removeErr != nil {
 		return fmt.Errorf("removing worktree for %q: %w", branch, removeErr)
@@ -563,28 +577,26 @@ func worktreeRemoveAll(asJSON bool) error {
 			continue // no worktree to remove
 		}
 		// Never remove the worktree the caller is standing in (it would delete
-		// the process's cwd) or one holding a paused rebase — both are skips,
-		// like the dirty check, not hard failures.
-		if within, err := stack.CwdWithinWorktree(p, wt.Path); err != nil {
-			result.Failed = &worktreeAllFailure{Branch: name, Error: err.Error()}
-			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), err)
-		} else if within {
+		// the process's cwd), one holding a paused rebase, or a dirty one —
+		// all skips rendered from the shared removal classifier, fed by the
+		// batch's precomputed slots.
+		v := verdicts[wt.Path]
+		verdict, cerr := stack.ClassifyWorktreeRemoval(p, wt.Path, "", stack.RemovalProbes{
+			Paused: func(string) (bool, error) { return v.paused, v.rebaseErr },
+			Clean:  func(string) (bool, error) { return v.clean, v.clErr },
+		})
+		if cerr != nil {
+			result.Failed = &worktreeAllFailure{Branch: name, Error: cerr.Error()}
+			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), cerr)
+		}
+		switch verdict {
+		case stack.RemovalInsideCaller:
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipInsideIt})
 			continue
-		}
-		v := verdicts[wt.Path]
-		if v.rebaseErr != nil {
-			result.Failed = &worktreeAllFailure{Branch: name, Error: v.rebaseErr.Error()}
-			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), v.rebaseErr)
-		} else if v.paused {
+		case stack.RemovalPausedRebase:
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipRebaseInProgress})
 			continue
-		}
-		if v.clErr != nil {
-			result.Failed = &worktreeAllFailure{Branch: name, Error: v.clErr.Error()}
-			return bulkWorktreeFailure(asJSON, result, "checking worktree for", name, "removed", len(result.Removed), len(names), v.clErr)
-		}
-		if !v.clean {
+		case stack.RemovalDirty:
 			// Dirty is a SKIP, decided up front — never classified by parsing
 			// git's refusal, and never a hard failure.
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipDirty})

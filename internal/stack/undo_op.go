@@ -81,15 +81,20 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 			return nil, fmt.Errorf("branch %q is checked out in worktree %q, but undo recorded created worktree %q; not removing an unexpected worktree", d.name, d.owner, entry.CreatedWorktrees[d.name])
 		}
 		if d.owner != "" {
-			// Belt under cmd's teleport pre-flight: never remove the worktree
-			// the caller is standing in — doing so deletes the process's own
-			// cwd.
-			if within, err := CwdWithinWorktree(g, d.owner); err != nil {
+			// Belt under cmd's teleport pre-flight, plus the shared removal
+			// classifier for the inside/dirty gates — the plan's own probe
+			// slots answer "clean", and a paused rebase is gated earlier in
+			// the undo flow, so this site runs no paused gate.
+			verdict, err := ClassifyWorktreeRemoval(g, d.owner, "", RemovalProbes{
+				Clean: func(string) (bool, error) { return !d.dirty, nil },
+			})
+			if err != nil {
 				return nil, err
-			} else if within {
-				return nil, fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", d.owner)
 			}
-			if d.dirty {
+			switch verdict {
+			case RemovalInsideCaller:
+				return nil, fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", d.owner)
+			case RemovalDirty:
 				return nil, fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", d.name, d.owner, d.name)
 			}
 			if err := g.WorktreeRemove(d.owner, false); err != nil {

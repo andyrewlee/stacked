@@ -513,7 +513,23 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 		return "", nil
 	}
 	main, _ := MainWorktree(wts)
-	if owner.Path == main.Path {
+	// The shared classifier owns the gate order — main-owner, inside-cwd,
+	// dirty — and this site keeps no paused gate: a paused worktree
+	// classifies through its dirty index, as it always did.
+	verdict, err := ClassifyWorktreeRemoval(env.Git, owner.Path, main.Path, RemovalProbes{
+		Clean: func(path string) (bool, error) {
+			clean, err := env.Git.IsCleanIn(path)
+			if err != nil {
+				return false, fmt.Errorf("checking worktree %q for %q: %w", path, branch, err)
+			}
+			return clean, nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	switch verdict {
+	case RemovalCheckedOutMain:
 		// A branch checked out in the main worktree is not removable state —
 		// nothing here releases a worktree. When it is ALSO the caller's
 		// current branch the delete/fold callers' checkout dance handles it;
@@ -523,20 +539,12 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 			return "", nil
 		}
 		return "", fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", branch, owner.Path)
-	}
-	// Linked owner: never remove the worktree the caller is standing in —
-	// RepoRoot (not CurrentBranch) decides, so a detached HEAD inside the
-	// worktree is caught too.
-	if within, err := CwdWithinWorktree(env.Git, owner.Path); err != nil {
-		return "", err
-	} else if within {
+	case RemovalInsideCaller:
+		// Linked owner: never remove the worktree the caller is standing
+		// in — RepoRoot (not CurrentBranch) decides, so a detached HEAD
+		// inside the worktree is caught too.
 		return "", fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, branch)
-	}
-	clean, err := env.Git.IsCleanIn(owner.Path)
-	if err != nil {
-		return "", fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
-	}
-	if !clean {
+	case RemovalDirty:
 		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}
 	return owner.Path, nil
