@@ -210,8 +210,11 @@ parent. The current branch is marked `◉`, others `○`, drifted branches are t
 `(needs restack)`, and each branch shows its top commit subject. In a
 multi-worktree repo each branch that lives in a linked worktree is also tagged
 with `(worktree: <path>)` (and `dirty` when that worktree has uncommitted
-changes); `--json` adds matching `worktree`/`dirty` fields. Single-tree output is
-unchanged.
+changes); `--json` adds matching `worktree`/`dirty` fields. A branch whose
+worktree sits paused mid-rebase keeps those fields — the pause detaches its
+worktree's HEAD, so attribution comes from the rebase head-name — and adds
+`paused` plus `conflictedFiles` (the unmerged paths the pause is waiting on);
+a `git worktree lock` hold shows as `locked`. Single-tree output is unchanged.
 
 #### `st status` (`stat`)
 Prints the current branch's role (trunk / tracked / untracked), its parent and

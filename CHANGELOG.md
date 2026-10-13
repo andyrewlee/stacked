@@ -37,6 +37,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ref tip from the same batched probe the render already ran, versus the
   recorded base in `parentSHA`. Absent when the ref is gone, which is itself
   the drift signal an orchestrator polls for.
+- **`st log` sees through a paused rebase.** A branch whose worktree sits
+  paused mid-rebase lists detached under `git worktree list`, which used to
+  strip its `worktree`/`dirty` annotation exactly when it was blocked. The
+  node now resolves the owner through the rebase head-name, keeps
+  `worktree`/`dirty`, and adds `paused` plus `conflictedFiles` — the unmerged
+  paths the pause is waiting on — so one poll answers "who is stuck and on
+  what". A worktree under `git worktree lock` also surfaces as `locked` on the
+  node. All additive (`omitempty`); text adds `paused`/`locked` to the
+  worktree tag.
 - **`st worktree` add forms take `--dry-run`.** `st worktree <branch>
   --dry-run` and `st worktree --all --dry-run` preview the worktree paths
   and the `.worktreeinclude` files a real run would copy — reported under

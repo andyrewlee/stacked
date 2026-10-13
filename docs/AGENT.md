@@ -153,7 +153,17 @@ message.
   it" in one poll. In a multi-worktree repo each node may also carry `worktree` (the on-disk path
   of the linked worktree the branch lives in) and `dirty` (true when that
   worktree has uncommitted changes); both are `omitempty`, so single-tree output
-  is unchanged. When tracked branches are unreachable from the trunk (a parent
+  is unchanged. When the branch's worktree sits paused mid-rebase the node also
+  carries `paused: true` and `conflictedFiles` (the unmerged paths the pause is
+  waiting on — the file list `status --json` reports for the current worktree,
+  here resolved per linked worktree); both are `omitempty`. A paused worktree
+  lists detached under `git worktree list`, so this attribution comes from the
+  rebase head-name — the branch the pause belongs to still gets its `worktree`/
+  `dirty` fields. A node also carries `locked: true` (`omitempty`) when its
+  worktree is under `git worktree lock` (see `st worktree lock`) — the hold
+  restack/removal honors. When the pause is in the MAIN worktree the node carries
+  `paused`+`conflictedFiles` only (the linked-only `worktree`/`dirty` fields
+  stay absent). When tracked branches are unreachable from the trunk (a parent
   cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
   the sorted names, `omitempty` — since they cannot appear in the tree; text
   prints the same list as a `warning:` line advising `st repair`.

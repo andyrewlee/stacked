@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -97,10 +98,16 @@ func renderedBranches(s *stack.State) (names []string, rendered map[string]bool)
 	return append(names, tracked...), rendered
 }
 
-// worktreeInfo annotates a branch that lives in a linked worktree.
+// worktreeInfo annotates a branch that lives in a linked worktree — or whose
+// worktree is paused mid-rebase. path is empty only for the paused-in-main case
+// (the linked-only worktree annotation contract leaves the main worktree
+// unlabeled), while paused/conflicted still name the block.
 type worktreeInfo struct {
-	path  string
-	dirty bool
+	path       string
+	dirty      bool
+	paused     bool
+	locked     bool
+	conflicted []string
 }
 
 // branchWorktrees returns, for a multi-worktree repo, a map from branch name to
@@ -108,6 +115,15 @@ type worktreeInfo struct {
 // returns an empty map so callers add no annotations and the output is
 // unchanged. Only rendered branches are probed for dirtiness; unrelated local
 // branches cannot appear in log output.
+//
+// A rebase paused in a worktree detaches its HEAD, so `git worktree list`
+// reports no branch — the owning branch would lose its worktree annotation
+// exactly when it is blocked, which is the one fleet state an orchestrator most
+// needs to see. PausedRebaseOwners resolves those rows through the rebase
+// head-name: a paused worktree annotates its branch with the path, dirty, the
+// paused flag, and the conflicted paths the pause is waiting on. A pause in
+// the MAIN worktree annotates paused+conflicted only (worktree/dirty are
+// linked-only by contract — the main worktree never carried them).
 func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) {
 	wts, err := worktrees()
 	if err != nil {
@@ -117,39 +133,94 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		return map[string]worktreeInfo{}, nil
 	}
 	main, _ := stack.MainWorktree(wts)
-	var paths []string
+
+	// Resolve detached paused worktrees to their owning branch (the ref a
+	// --continue would land on) before attributing anything — their Branch
+	// field is empty by construction. A registered-but-deleted worktree still
+	// lists (git marks it prunable, which the parser drops), and probing it
+	// would fail the whole render — detached rows whose dir is gone are
+	// excluded first.
+	var extant []git.Worktree
+	for _, wt := range wts {
+		if wt.Branch == "" {
+			if _, err := os.Stat(wt.Path); err != nil {
+				continue
+			}
+		}
+		extant = append(extant, wt)
+	}
+	paused, err := stack.PausedRebaseOwners(newGitPort(), extant)
+	if err != nil {
+		return nil, err
+	}
+
+	// One bounded fan-out answers every linked worktree's cleanliness — and,
+	// for a paused one, the unmerged paths — instead of serial `git -C`
+	// probes per rendered branch. Slots keep probe answers until the loop
+	// completes; the map below is assembled after.
+	type wtProbe struct {
+		path   string
+		branch string // paused rows carry the head-name-resolved owner here
+		paused bool
+	}
+	var probes []wtProbe
+	locked := map[string]bool{} // Locked rides on the worktree row — no probe
 	for _, wt := range wts {
 		if wt.Path == main.Path || wt.Branch == "" || !rendered[wt.Branch] {
 			continue
 		}
-		paths = append(paths, wt.Path)
+		probes = append(probes, wtProbe{path: wt.Path, branch: wt.Branch})
+		locked[wt.Path] = wt.Locked
 	}
-	// One bounded fan-out answers every linked worktree's cleanliness instead
-	// of a serial `git -C` probe per rendered branch.
-	cleans := make([]bool, len(paths))
-	_ = git.ParallelProbes(len(paths), func(i int) error {
-		clean, err := git.IsCleanAt(paths[i])
+	var pausedNames []string
+	for name := range paused {
+		pausedNames = append(pausedNames, name)
+	}
+	sort.Strings(pausedNames) // deterministic probe/assembly order
+	for _, name := range pausedNames {
+		if !rendered[name] {
+			continue // a pause on an untracked head names no rendered branch
+		}
+		wt := paused[name]
+		probes = append(probes, wtProbe{path: wt.Path, branch: name, paused: true})
+		locked[wt.Path] = wt.Locked
+	}
+
+	type wtResult struct {
+		clean      bool
+		conflicted []string
+	}
+	slots := make([]wtResult, len(probes))
+	_ = git.ParallelProbes(len(probes), func(i int) error {
+		var r wtResult
+		clean, err := git.IsCleanAt(probes[i].path)
 		if err != nil {
 			// A worktree we cannot stat (e.g. pruned on disk) is reported
 			// without a dirty flag rather than failing the whole render.
 			clean = true
 		}
-		cleans[i] = clean
+		r.clean = clean
+		if probes[i].paused {
+			// The conflicted inventory is the actionable payload of a pause;
+			// a probe failure reports the pause without it.
+			if files, uerr := git.UnmergedFilesIn(probes[i].path); uerr == nil {
+				r.conflicted = files
+			}
+		}
+		slots[i] = r
 		return nil
 	})
-	cleanByPath := make(map[string]bool, len(paths))
-	for i, p := range paths {
-		cleanByPath[p] = cleans[i]
-	}
+
 	info := make(map[string]worktreeInfo, len(wts))
-	for _, wt := range wts {
-		if wt.Path == main.Path {
+	for i, p := range probes {
+		dirty := !slots[i].clean
+		if p.paused && p.path == main.Path {
+			// Main-worktree pause: no worktree/dirty fields (linked-only
+			// contract), just the block signal and its conflicted files.
+			info[p.branch] = worktreeInfo{paused: true, conflicted: slots[i].conflicted}
 			continue
 		}
-		if wt.Branch == "" || !rendered[wt.Branch] {
-			continue
-		}
-		info[wt.Branch] = worktreeInfo{path: wt.Path, dirty: !cleanByPath[wt.Path]}
+		info[p.branch] = worktreeInfo{path: p.path, dirty: dirty, paused: p.paused, locked: locked[p.path], conflicted: slots[i].conflicted}
 	}
 	return info, nil
 }
@@ -162,13 +233,20 @@ type logNode struct {
 	// Tip is the branch's LIVE tip SHA from the same TipsFor batch the render
 	// already ran — absent when the ref is gone, which is itself the drift
 	// signal an orchestrator polls for.
-	Tip          string     `json:"tip,omitempty"`
-	Current      bool       `json:"current"`
-	NeedsRestack bool       `json:"needsRestack"`
-	TopCommit    string     `json:"topCommit,omitempty"`
-	Worktree     string     `json:"worktree,omitempty"`
-	Dirty        bool       `json:"dirty,omitempty"`
-	Children     []*logNode `json:"children"`
+	Tip          string `json:"tip,omitempty"`
+	Current      bool   `json:"current"`
+	NeedsRestack bool   `json:"needsRestack"`
+	TopCommit    string `json:"topCommit,omitempty"`
+	Worktree     string `json:"worktree,omitempty"`
+	Dirty        bool   `json:"dirty,omitempty"`
+	// Paused marks a branch whose worktree sits mid-rebase (it lists detached,
+	// resolved back to the branch through the rebase head-name); ConflictedFiles
+	// names the unmerged paths the pause is waiting on; Locked reports a
+	// `git worktree lock` hold on the branch's worktree (`st worktree lock`).
+	Paused          bool       `json:"paused,omitempty"`
+	ConflictedFiles []string   `json:"conflictedFiles,omitempty"`
+	Locked          bool       `json:"locked,omitempty"`
+	Children        []*logNode `json:"children"`
 	// Unreachable names tracked branches no trunk-rooted walk visits (a
 	// parent cycle or a dangling parent) — populated on the ROOT node only.
 	Unreachable []string `json:"unreachable,omitempty"`
@@ -210,6 +288,9 @@ func printLogJSON(s *stack.State, d *logData) error {
 		if wt, ok := d.wtInfo[name]; ok {
 			node.Worktree = wt.path
 			node.Dirty = wt.dirty
+			node.Paused = wt.paused
+			node.ConflictedFiles = wt.conflicted
+			node.Locked = wt.locked
 		}
 		for _, child := range d.index[name] {
 			if childNode := build(child, name); childNode != nil {
@@ -266,10 +347,21 @@ func printLogTree(s *stack.State, d *logData) {
 			}
 		}
 		if wt, ok := d.wtInfo[name]; ok {
-			safePath := sanitizeForTerminal(wt.path)
-			tag := "(worktree: " + safePath + ")"
-			if wt.dirty {
-				tag = "(worktree: " + safePath + ", dirty)"
+			var tag string
+			if wt.paused && wt.path == "" {
+				tag = "(paused mid-rebase)"
+			} else {
+				parts := []string{"worktree: " + sanitizeForTerminal(wt.path)}
+				if wt.dirty {
+					parts = append(parts, "dirty")
+				}
+				if wt.paused {
+					parts = append(parts, "paused")
+				}
+				if wt.locked {
+					parts = append(parts, "locked")
+				}
+				tag = "(" + strings.Join(parts, ", ") + ")"
 			}
 			line += " " + paint(tag, ansiCyan)
 		}
