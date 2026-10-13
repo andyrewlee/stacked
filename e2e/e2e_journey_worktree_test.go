@@ -677,6 +677,40 @@ func TestFoldCascadesIntoCleanChildWorktree(t *testing.T) {
 	r.stOK("validate")
 }
 
+// TestFoldInsideOwningWorktree proves `st fold` works when run from inside the
+// worktree that owns the folded branch — the only place such a branch can be
+// checked out, so the old "run from the main worktree" refusal could never be
+// satisfied. The fold lands the worktree's HEAD on the parent (the worktree
+// ends up owning it) and re-parents children.
+func TestFoldInsideOwningWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.create("feat-b", "b.txt", "b\n", "b")
+	r.create("feat-c", "c.txt", "c\n", "c")
+	r.stOK("checkout", "main") // free feat-b so it can live in its own worktree
+
+	wtPath := worktreeFor(t, r, "feat-b")
+
+	// Fold feat-b from inside its own worktree: succeeds and lands on feat-a.
+	r.stInOK(wtPath, "fold")
+	if r.branchExists("feat-b") {
+		t.Fatal("feat-b should be folded away")
+	}
+	if got := r.gitIn(wtPath, "branch", "--show-current"); got != "feat-a" {
+		t.Fatalf("worktree HEAD=%q after fold, want feat-a owning the worktree", got)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("the caller's worktree must survive the fold: %v", err)
+	}
+	// feat-c is re-parented onto feat-a and descends from it.
+	if !r.isAncestor("feat-a", "feat-c") {
+		t.Fatal("feat-c should descend from feat-a after the fold")
+	}
+	r.stOK("validate")
+}
+
 // TestCrossWorktreeRestackMultiLevel proves the owner-driven cascade reconciles a
 // multi-level stack across the worktree boundary with real git: main -> feat-a ->
 // feat-b -> feat-c, with the INTERMEDIATE feat-b living in its own worktree and

@@ -212,6 +212,37 @@ func TestFoldPlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	}
 }
 
+// TestFoldPlanInsideOwningWorktree — the preview must succeed where the real
+// op succeeds: folding the current branch from inside its own linked worktree
+// (parity with TestFoldInsideOwningWorktree).
+func TestFoldPlanInsideOwningWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	mkBranch(t, env, s, f, "b", "c")
+
+	f.addWorktree("/wt/b", "b")
+	f.repoRoot = "/wt/b"  // the caller stands inside b's own worktree
+	f.head = "b"          // …on b
+	f.mainBranch = "main" // …while the main worktree sits on the trunk
+
+	before := capturePreviewState(t, f, s)
+	preview, err := FoldPlan(env, s)
+	if err != nil {
+		t.Fatalf("FoldPlan inside the folded branch's worktree: %v", err)
+	}
+	assertPreviewDidNotMutate(t, f, s, before)
+	if !preview.DryRun {
+		t.Fatal("FoldPlan should be marked DryRun")
+	}
+	if got := preview.Deleted; !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("FoldPlan Deleted = %v, want [b]", got)
+	}
+	if preview.Branch != "a" {
+		t.Fatalf("FoldPlan Branch = %q, want a", preview.Branch)
+	}
+}
+
 func TestSquashPlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()

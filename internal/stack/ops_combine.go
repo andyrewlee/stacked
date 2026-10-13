@@ -30,14 +30,11 @@ func Fold(env Env, s *State) (*OpResult, error) {
 	if needs {
 		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
 	}
-	// Fold deletes cur; if it lives in another worktree git would refuse, so tear
-	// that (clean) worktree down first. A dirty owner errors before any git
-	// mutation, so nothing changes. (Normally cur is checked out HERE and this is
-	// a no-op; the guard covers the case where fold runs against an owned-elsewhere
-	// branch.)
-	if err := s.releaseOwnedWorktree(env, cur); err != nil {
-		return nil, err
-	}
+	// Fold deletes cur only AFTER g.Checkout(parent) below moves the caller's
+	// own worktree HEAD off it — so cur needs no worktree release: it is
+	// always checked out exactly where the caller stands (a branch is checked
+	// out in at most one worktree). A caller inside cur's linked worktree
+	// folds in place and that worktree ends up owning parent.
 	if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
 		return nil, err
 	} else if elsewhere {

@@ -26,9 +26,8 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 	if needs {
 		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
 	}
-	if _, err := s.ownedWorktreeReleaseTarget(env, cur); err != nil {
-		return nil, err
-	}
+	// cur is checked out where the caller stands — the real op's
+	// Checkout(parent) frees it in place, so no worktree release applies.
 	if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
 		return nil, err
 	} else if elsewhere {

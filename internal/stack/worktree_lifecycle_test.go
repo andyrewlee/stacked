@@ -108,10 +108,10 @@ func TestDeleteNonForceUnmergedKeepsCleanOwnedWorktree(t *testing.T) {
 	}
 }
 
-// Fold deletes the CURRENT branch, which git only lets you do when it is checked
-// out here — so the folded branch can never itself live in another worktree (a
-// branch is checked out in at most one worktree). The worktree-relevant Fold case
-// is therefore a folded branch whose CHILD is owned elsewhere: folding re-parents
+// Fold deletes the CURRENT branch — checked out wherever the caller stands,
+// which may be a linked worktree (fold's own Checkout(parent) frees it in
+// place; see TestFoldInsideOwningWorktree). The OTHER worktree-relevant Fold
+// case is a folded branch whose CHILD is owned elsewhere: folding re-parents
 // that child and must restack it IN its worktree, not move the main HEAD.
 func TestFoldCascadesIntoChildWorktree(t *testing.T) {
 	f, s, env := newEnvState()
@@ -152,6 +152,48 @@ func TestFoldCascadesIntoChildWorktree(t *testing.T) {
 	if cur, _ := f.CurrentBranch(); cur != "main" {
 		t.Fatalf("main worktree HEAD=%q after restack, want main", cur)
 	}
+	checkInvariants(t, f, s, 0)
+}
+
+// TestFoldInsideOwningWorktree — folding the current branch from inside its
+// OWN linked worktree must succeed: the op's Checkout(parent) retargets that
+// worktree's HEAD off the folded branch, freeing it for deletion. The old
+// worktree-release arm refused this case outright (and prescribed running
+// from the main worktree — impossible, since the branch can only be checked
+// out where the caller stands).
+func TestFoldInsideOwningWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b") // b is the branch we'll fold (into a)
+	mkBranch(t, env, s, f, "b", "c") // c re-parents onto a after the fold
+	bTip := f.branches["b"]
+
+	f.addWorktree("/wt/b", "b")
+	f.repoRoot = "/wt/b"  // the caller stands inside b's own worktree
+	f.head = "b"          // …on b
+	f.mainBranch = "main" // …while the main worktree sits on the trunk
+
+	res, err := Fold(env, s)
+	if err != nil {
+		t.Fatalf("fold inside the folded branch's worktree: %v", err)
+	}
+	if got, _ := f.RevParse(branchTipRef("a")); got != bTip {
+		t.Fatalf("a tip=%s, want b's folded tip %s", got, bTip)
+	}
+	if f.BranchExists("b") || s.IsTracked("b") {
+		t.Fatal("fold must delete b and untrack it")
+	}
+	if cb, _ := s.Get("c"); cb.Parent != "a" {
+		t.Fatalf("c parent=%q, want a (re-parented onto the fold target)", cb.Parent)
+	}
+	// The caller's worktree survives the fold and now owns the parent.
+	if dir, ok := f.linkedWorktrees["a"]; !ok || dir != "/wt/b" {
+		t.Fatalf("worktree ownership=%v, want /wt/b holding a", f.linkedWorktrees)
+	}
+	if cur, _ := f.CurrentBranch(); cur != "a" {
+		t.Fatalf("caller HEAD=%q, want a (fold lands the worktree on the parent)", cur)
+	}
+	_ = res
 	checkInvariants(t, f, s, 0)
 }
 
