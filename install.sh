@@ -166,23 +166,23 @@ fi
 tar -xzf "${TMP_DIR}/${FILENAME}" -C "$TMP_DIR"
 
 # Only a regular file may be installed: a link member would land as a link
-# at ${INSTALL_DIR}/${BINARY} (and chmod would follow it to the target),
-# while archive-recorded mode bits (e.g. setuid) would survive mv unchecked.
+# at ${INSTALL_DIR}/${BINARY}, while archive-recorded mode bits (e.g. setuid)
+# would survive mv unchecked.
 if [ ! -f "${TMP_DIR}/${BINARY}" ] || [ -L "${TMP_DIR}/${BINARY}" ]; then
   echo "Error: archive member ${BINARY} is missing or not a regular file" >&2
   exit 1
 fi
 chmod 0755 "${TMP_DIR}/${BINARY}"
 
-# Install binary
+# Install binary. The mode was set in TMP_DIR above and survives mv — a
+# post-install chmod would run unprivileged against a now-root-owned file on
+# the sudo path and could only fail after a successful install.
 echo "Installing to ${INSTALL_DIR}/${BINARY}..."
 if [ -w "$INSTALL_DIR" ]; then
   mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 else
   sudo mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 fi
-
-chmod +x "${INSTALL_DIR}/${BINARY}"
 
 echo ""
 echo "✓ ${BINARY} ${VERSION} installed successfully!"
