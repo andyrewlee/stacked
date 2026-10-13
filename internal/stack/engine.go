@@ -231,11 +231,11 @@ func restackEpilogue(env Env, s *State, start string, rebased []string) (*OpResu
 }
 
 // skippedWorktreeNotes drains the branches a restack skipped because their owning
-// worktree was dirty or mid-rebase, turning each into a human-readable note.
-// Empty when the cascade skipped nothing (the common, single-tree case).
+// worktree was locked, dirty, or mid-rebase, turning each into a human-readable
+// note. Empty when the cascade skipped nothing (the common, single-tree case).
 func skippedWorktreeNotes(s *State) []string {
-	skipped, rebase := s.drainSkippedWorktrees()
-	return skippedWorktreeNotesFrom(skipped, rebase)
+	skipped, reasons := s.drainSkippedWorktrees()
+	return skippedWorktreeNotesFrom(skipped, reasons)
 }
 
 // unreachableNotes turns the tracked branches no trunk forest walk can reach
@@ -250,22 +250,26 @@ func unreachableNotes(s *State) []string {
 	return []string{fmt.Sprintf("tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st repair`", s.Trunk, joinComma(un))}
 }
 
-func skippedWorktreeNotesFrom(skipped []string, rebase map[string]bool) []string {
+func skippedWorktreeNotesFrom(skipped []string, reasons map[string]wtSkipReason) []string {
 	if len(skipped) == 0 {
 		return nil
 	}
 	notes := make([]string, 0, len(skipped))
 	for _, name := range skipped {
-		notes = append(notes, skippedWorktreeNote(name, rebase[name]))
+		notes = append(notes, skippedWorktreeNote(name, reasons[name]))
 	}
 	return notes
 }
 
-func skippedWorktreeNote(name string, rebase bool) string {
-	if rebase {
+func skippedWorktreeNote(name string, reason wtSkipReason) string {
+	switch reason {
+	case wtSkipLocked:
+		return fmt.Sprintf("skipped %s: its worktree is locked (git worktree lock; `st worktree unlock %s`, then re-run)", name, name)
+	case wtSkipPausedRebase:
 		return fmt.Sprintf("skipped %s: a rebase is already in progress in its worktree (finish or abort it there, then re-run)", name)
+	default:
+		return fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name)
 	}
-	return fmt.Sprintf("skipped %s: its worktree is dirty (commit/stash there, then re-run)", name)
 }
 
 func cloneState(s *State) *State {

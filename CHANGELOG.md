@@ -8,6 +8,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`st worktree lock` / `st worktree unlock` — an agent-hold primitive.** A
+  locked worktree (`git worktree lock`, optionally with `--reason`) is a
+  standing hold: the restack cascade skips the branch living there and names
+  the lock in `notes`, every removal path (`st worktree rm`, `rm --all`, the
+  delete/fold release, and undo's created-worktree teardown) refuses or skips
+  it, and `st worktree ls --json` reports `locked` — including locks set with
+  plain git. `rm --all` reports the hold as `skipped[].reason` =
+  `"worktree is locked"`.
 - **`create`, `modify`, `untrack`, and `rename` take `--dry-run`.** Each
   answers the same result shape as the mutating command plus `"dryRun": true`,
   computed by a read-only planner — no lock, no undo entry, no mutation.

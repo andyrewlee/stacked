@@ -251,20 +251,21 @@ func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, b
 }
 
 // restackInWorktree rebases name onto parentTip inside its owning worktree
-// (git -C <path>), gated on that worktree having no paused rebase and no dirty
-// tree. A paused-rebase or dirty owner is SKIPPED (recorded in
-// s.skippedWorktrees, never clobbered) — the rebase probe runs first because a
-// paused-but-clean rebase would otherwise pass the clean gate, and aborting a
-// rebase this process did not start must never happen. A conflict during the
-// cross-worktree rebase is rolled back in that worktree and surfaced as an
-// error, rather than left paused where the main process cannot drive it.
+// (git -C <path>), gated on that worktree having no lock, no paused rebase
+// and no dirty tree. A locked, paused-rebase or dirty owner is SKIPPED
+// (recorded in s.skippedWorktrees, never clobbered) — the lock wins first
+// (a standing hold, no probe needed), then the rebase probe because a
+// paused-but-clean rebase would otherwise pass the clean gate, and aborting
+// a rebase this process did not start must never happen. A conflict during
+// the cross-worktree rebase is rolled back in that worktree and surfaced as
+// an error, rather than left paused where the main process cannot drive it.
 func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree, verdicts map[string]wtVerdict) (bool, error) {
-	skipped, rebase, err := worktreeRestackDisposition(env, owner, name, verdicts)
+	reason, err := worktreeRestackDisposition(env, owner, name, verdicts)
 	if err != nil {
 		return false, err
 	}
-	if skipped {
-		s.recordSkippedWorktree(name, rebase)
+	if reason != wtSkipNone {
+		s.recordSkippedWorktree(name, reason)
 		return false, nil
 	}
 	if err := env.Git.RebaseOntoIn(owner.Path, parentTip, b.ParentSHA, name); err != nil {
@@ -375,42 +376,64 @@ func probeWorktrees(g Git, paths []string, checkRebase bool) map[string]wtVerdic
 	return verdicts
 }
 
+// wtSkipReason names why a restack skipped a branch living in a foreign
+// worktree — a git-side lock, a paused rebase, or a dirty tree. The zero
+// value is "proceed": the disposition returns it alongside no skip.
+type wtSkipReason int
+
+const (
+	wtSkipNone wtSkipReason = iota
+	wtSkipDirty
+	wtSkipPausedRebase
+	wtSkipLocked
+)
+
 // worktreeRestackDisposition answers whether a foreign-owned worktree's
-// branch proceeds to a restack or is skipped — and for a skip, whether the
-// reason is a paused rebase (rebase=true) or a dirty tree (rebase=false). The
-// probe order is the contract: the rebase check runs first because a
-// paused-but-clean rebase would pass the clean gate, and aborting a rebase
-// this process did not start must never happen. Both the apply path
-// (restackInWorktree) and the dry-run preview (wouldSkipWorktreeRestack)
-// consume it — the shared piece is the gate ORDER, so a new gate lands once.
-// verdicts, when non-nil, carries precomputed answers (probeWorktrees); a path
-// missing from the map is probed live, so callers without a batch (single
-// restacks) behave exactly as before.
-func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verdicts map[string]wtVerdict) (skipped, rebase bool, err error) {
+// branch proceeds to a restack or is skipped — and for a skip, which reason
+// (wtSkipReason) to report. The gate order is the contract: a lock wins
+// first — it is a standing hold that needs no probe — then the rebase
+// check, because a paused-but-clean rebase would pass the clean gate, and
+// aborting a rebase this process did not start must never happen. Both the
+// apply path (restackInWorktree) and the dry-run preview
+// (wouldSkipWorktreeRestack) consume it — the shared piece is the gate
+// ORDER, so a new gate lands once. verdicts, when non-nil, carries
+// precomputed answers (probeWorktrees); a path missing from the map is
+// probed live, so callers without a batch (single restacks) behave exactly
+// as before.
+func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verdicts map[string]wtVerdict) (wtSkipReason, error) {
+	if owner.Locked {
+		return wtSkipLocked, nil
+	}
 	if v, ok := verdicts[owner.Path]; ok {
 		if v.rebaseErr != nil {
-			return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, v.rebaseErr)
+			return wtSkipNone, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, v.rebaseErr)
 		}
 		if v.paused {
-			return true, true, nil
+			return wtSkipPausedRebase, nil
 		}
 		if v.cleanErr != nil {
-			return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, v.cleanErr)
+			return wtSkipNone, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, v.cleanErr)
 		}
-		return !v.clean, false, nil
+		if !v.clean {
+			return wtSkipDirty, nil
+		}
+		return wtSkipNone, nil
 	}
 	inRebase, err := env.Git.RebaseInProgressIn(owner.Path)
 	if err != nil {
-		return false, false, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
+		return wtSkipNone, fmt.Errorf("checking rebase state in worktree %q for %q: %w", owner.Path, branch, err)
 	}
 	if inRebase {
-		return true, true, nil
+		return wtSkipPausedRebase, nil
 	}
 	clean, err := env.Git.IsCleanIn(owner.Path)
 	if err != nil {
-		return false, false, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
+		return wtSkipNone, fmt.Errorf("checking worktree %q for %q: %w", owner.Path, branch, err)
 	}
-	return !clean, false, nil
+	if !clean {
+		return wtSkipDirty, nil
+	}
+	return wtSkipNone, nil
 }
 
 // cascadeWorktrees is the per-cascade worktree snapshot: one `worktree list`
@@ -514,9 +537,10 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 	}
 	main, _ := MainWorktree(wts)
 	// The shared classifier owns the gate order — main-owner, inside-cwd,
-	// dirty — and this site keeps no paused gate: a paused worktree
+	// locked, dirty — and this site keeps no paused gate: a paused worktree
 	// classifies through its dirty index, as it always did.
 	verdict, err := ClassifyWorktreeRemoval(env.Git, owner.Path, main.Path, RemovalProbes{
+		Locked: owner.Locked,
 		Clean: func(path string) (bool, error) {
 			clean, err := env.Git.IsCleanIn(path)
 			if err != nil {
@@ -544,6 +568,8 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 		// in — RepoRoot (not CurrentBranch) decides, so a detached HEAD
 		// inside the worktree is caught too.
 		return "", fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, branch)
+	case RemovalLocked:
+		return "", fmt.Errorf("branch %q's worktree %q is locked (git worktree lock); unlock it (`st worktree unlock %s`) before deleting it", branch, owner.Path, branch)
 	case RemovalDirty:
 		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}

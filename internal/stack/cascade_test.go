@@ -106,11 +106,11 @@ func TestRestackCascadeSkipsForeignRebaseWorktree(t *testing.T) {
 	if !f.rebaseInWT["/wt/feat-a"] {
 		t.Fatal("the foreign rebase must be left untouched")
 	}
-	skipped, rebase := s.drainSkippedWorktrees()
+	skipped, reasons := s.drainSkippedWorktrees()
 	if len(skipped) != 1 || skipped[0] != "feat-a" {
 		t.Fatalf("skipped = %v, want [feat-a]", skipped)
 	}
-	if !rebase["feat-a"] {
+	if reasons["feat-a"] != wtSkipPausedRebase {
 		t.Fatal("the skip must be marked as a rebase skip, not a dirty-tree skip")
 	}
 	// feat-a is left needing a restack (never clobbered).
@@ -539,4 +539,55 @@ func TestRestackCascadeConflictInLaterWorktree(t *testing.T) {
 		t.Fatalf("clean restack after clearing the conflict: %v", err)
 	}
 	checkInvariants(t, f, s, 0)
+}
+
+// TestRestackCascadeSkipsLockedWorktree pins the hold semantic: a worktree
+// carrying a `git worktree lock` is skipped by the cascade — the lock is a
+// standing hold that wins before any probe, and the skip records the locked
+// reason so the note names it.
+func TestRestackCascadeSkipsLockedWorktree(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.markWorktreeLocked("/wt/feat-a")
+
+	did, err := s.restackBranch(env, "feat-a")
+	if err != nil {
+		t.Fatalf("restackBranch with locked owner: %v", err)
+	}
+	if did {
+		t.Fatal("a locked owner worktree must be skipped, not rebased")
+	}
+	if f.calls["RebaseOntoIn"] != 0 || f.calls["RebaseAbortIn"] != 0 {
+		t.Fatalf("no rebase call may reach a locked worktree (RebaseOntoIn=%d, RebaseAbortIn=%d)",
+			f.calls["RebaseOntoIn"], f.calls["RebaseAbortIn"])
+	}
+	skipped, reasons := s.drainSkippedWorktrees()
+	if len(skipped) != 1 || skipped[0] != "feat-a" {
+		t.Fatalf("skipped = %v, want [feat-a]", skipped)
+	}
+	if reasons["feat-a"] != wtSkipLocked {
+		t.Fatalf("skip reason = %v, want wtSkipLocked", reasons["feat-a"])
+	}
+	// feat-a is left needing a restack (never clobbered).
+	if needs, _ := s.NeedsRestack(f, "feat-a"); !needs {
+		t.Fatal("skipped feat-a should still need a restack")
+	}
+}
+
+// TestRestackCascadeLockedWorktreeSkipNote pins the note wording: a locked
+// skip names the lock and the unlock remedy.
+func TestRestackCascadeLockedWorktreeSkipNote(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.markWorktreeLocked("/wt/feat-a")
+
+	if _, err := s.restackBranch(env, "feat-a"); err != nil {
+		t.Fatalf("restackBranch: %v", err)
+	}
+	notes := skippedWorktreeNotes(s)
+	if len(notes) != 1 {
+		t.Fatalf("notes = %v, want exactly one skip note", notes)
+	}
+	if !strings.Contains(notes[0], "feat-a") || !strings.Contains(notes[0], "locked") ||
+		!strings.Contains(notes[0], "st worktree unlock feat-a") {
+		t.Fatalf("note = %q, want a lock-naming skip with the unlock remedy", notes[0])
+	}
 }

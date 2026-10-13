@@ -14,13 +14,13 @@ func init() {
 		Name:       "worktree",
 		Aliases:    []string{"wt"},
 		Summary:    "Materialize, list, or remove a branch's own worktree",
-		Usage:      "st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all [--json]",
+		Usage:      "st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all | lock|unlock <branch> [--reason s] [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
-		SubVerbs:   []string{"list", "ls", "remove", "rm"},
+		SubVerbs:   []string{"list", "ls", "remove", "rm", "lock", "unlock"},
 		// worktree completes tracked branches that lack a linked worktree in
-		// the create form, and worktree owners after `rm`/`remove`. --all takes
-		// no names at all.
+		// the create form, and worktree owners after `rm`/`remove`/
+		// `lock`/`unlock`. --all takes no names at all.
 		Completion: func(cc *completionCtx) []string {
 			wts := cc.worktrees()
 			if wts == nil {
@@ -38,8 +38,21 @@ func init() {
 				}
 				return minusNames(trackedAndTrunk(cc.s), excl)
 			}
-			if len(cc.positionals) == 1 && (cc.positionals[0] == "rm" || cc.positionals[0] == "remove") {
-				return sortedKeys(owned)
+			if len(cc.positionals) == 1 {
+				switch cc.positionals[0] {
+				case "rm", "remove", "lock":
+					return sortedKeys(owned)
+				case "unlock":
+					// Only locked worktrees can be unlocked.
+					var locked []string
+					for _, wt := range wts {
+						if wt.Locked && wt.Branch != "" {
+							locked = append(locked, wt.Branch)
+						}
+					}
+					sort.Strings(locked)
+					return locked
+				}
 			}
 			return nil
 		},
@@ -48,9 +61,11 @@ func init() {
 
 // runWorktree manages the worktrees that let a branch run on its own:
 //
-//	st worktree <branch>   materialize a worktree for an existing tracked branch
-//	st worktree ls         list every worktree
-//	st worktree rm <name>  remove a branch's worktree
+//	st worktree <branch>         materialize a worktree for an existing tracked branch
+//	st worktree ls               list every worktree
+//	st worktree rm <name>        remove a branch's worktree
+//	st worktree lock <name>      hold a branch's worktree (never restacked/removed)
+//	st worktree unlock <name>    release that hold
 func runWorktree(args []string) error {
 	var o worktreeOpts
 	fs := newWorktreeFlags(&o)
@@ -59,6 +74,9 @@ func runWorktree(args []string) error {
 	}
 	asJSON := o.asJSON
 	rest := fs.Args()
+	if o.reason != "" && (len(rest) != 2 || rest[0] != "lock") {
+		return fmt.Errorf("worktree --reason only applies to `st worktree lock <branch>`")
+	}
 	if o.all {
 		switch {
 		case len(rest) == 0:
@@ -85,6 +103,17 @@ func runWorktree(args []string) error {
 			return fmt.Errorf("worktree ls does not take --dry-run (it is already read-only)")
 		}
 		return worktreeList(asJSON)
+	case "lock", "unlock":
+		if len(rest) != 2 {
+			return fmt.Errorf("worktree %s requires exactly one branch name", rest[0])
+		}
+		if o.dryRun {
+			return fmt.Errorf("worktree %s does not take --dry-run", rest[0])
+		}
+		if rest[0] == "lock" {
+			return worktreeLock(rest[1], o.reason, asJSON)
+		}
+		return worktreeUnlock(rest[1], asJSON)
 	case "rm", "remove":
 		if len(rest) != 2 {
 			return fmt.Errorf("worktree rm requires exactly one branch name")
@@ -366,6 +395,96 @@ func materializeWorktreeAtIncludes(repo, root, branch string, candidates []strin
 	return materializedWorktree{Path: path, Copied: copied, Summary: "created worktree"}, nil
 }
 
+// worktreeLock/worktreeUnlock set or clear the git worktree lock on branch's
+// worktree — the standing hold every mutation gate honors: a locked worktree
+// is never rebased into by the restack cascade nor removed by any rm path.
+// Whatever the lock was set for (an agent holding a task there, or git's
+// original removable-device use), "do not touch" is the only safe answer.
+func worktreeLock(branch, reason string, asJSON bool) error {
+	return worktreeSetLock(branch, reason, true, asJSON)
+}
+
+func worktreeUnlock(branch string, asJSON bool) error {
+	return worktreeSetLock(branch, "", false, asJSON)
+}
+
+func worktreeSetLock(branch, reason string, lock, asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	s, err := loadState()
+	if err != nil {
+		return err
+	}
+	if branch != s.Trunk && !s.IsTracked(branch) {
+		return stack.ErrNotTracked(branch)
+	}
+
+	wts, err := worktrees()
+	if err != nil {
+		return err
+	}
+	wt, ok := stack.LinkedOwnerOf(wts, branch)
+	if !ok {
+		// A rebase paused in the worktree detaches HEAD — LinkedOwnerOf cannot
+		// attribute it, so resolve through the rebase metadata before
+		// answering "no worktree", exactly as the rm path does.
+		paused, perr := stack.PausedRebaseOwners(newGitPort(), wts)
+		if perr != nil {
+			return perr
+		}
+		if pausedWT, isPaused := paused[branch]; isPaused {
+			wt, ok = pausedWT, true
+		}
+	}
+	if !ok {
+		// The main worktree can never be locked (git refuses outright) — a
+		// branch checked out there has no lockable worktree.
+		if main, mok := stack.MainWorktree(wts); mok && main.Branch == branch {
+			return fmt.Errorf("%q is checked out in the main worktree, which cannot be locked — locks apply to linked worktrees only", branch)
+		}
+		return fmt.Errorf("%q has no worktree", branch)
+	}
+	if lock == wt.Locked {
+		// Idempotent: locking a locked worktree (reason left as-is) and
+		// unlocking an unlocked one report the state rather than failing.
+		word := "unlocked"
+		if lock {
+			word = "locked"
+		}
+		payload := struct {
+			Branch string `json:"branch"`
+			Path   string `json:"path"`
+			Locked bool   `json:"locked"`
+		}{branch, wt.Path, wt.Locked}
+		return emit(asJSON, payload, func() {
+			out("worktree %s already %s (%s)\n", sanitizeForTerminal(branch), word, sanitizeForTerminal(wt.Path))
+		})
+	}
+	if err := setWorktreeLock(wt.Path, reason, lock); err != nil {
+		word := "unlocking"
+		if lock {
+			word = "locking"
+		}
+		return fmt.Errorf("%s worktree %q for %q: %w", word, wt.Path, branch, err)
+	}
+	payload := struct {
+		Branch string `json:"branch"`
+		Path   string `json:"path"`
+		Locked bool   `json:"locked"`
+	}{branch, wt.Path, lock}
+	return emit(asJSON, payload, func() {
+		word := "unlocked"
+		if lock {
+			word = "locked"
+		}
+		out("%s worktree %s (%s)\n", word, sanitizeForTerminal(branch), sanitizeForTerminal(wt.Path))
+	})
+}
+
 // worktreeRemove removes the worktree owning branch.
 func worktreeRemove(branch string, asJSON bool) error {
 	release, err := acquireLock()
@@ -409,6 +528,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	// own fatal. All three share the removal classifier's canonical order.
 	port := newGitPort()
 	verdict, err := stack.ClassifyWorktreeRemoval(port, wt.Path, "", stack.RemovalProbes{
+		Locked: wt.Locked,
 		Paused: func(path string) (bool, error) {
 			paused, perr := port.RebaseInProgressIn(path)
 			if perr != nil {
@@ -424,6 +544,8 @@ func worktreeRemove(branch string, asJSON bool) error {
 	switch verdict {
 	case stack.RemovalInsideCaller:
 		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
+	case stack.RemovalLocked:
+		return fmt.Errorf("cannot remove worktree %q: it is locked (git worktree lock); unlock it first (`st worktree unlock %s`)", wt.Path, branch)
 	case stack.RemovalPausedRebase:
 		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
 	case stack.RemovalDirty:
@@ -448,6 +570,7 @@ const (
 	wtSkipRebaseInProgress = "a rebase is in progress there"
 	wtSkipInsideIt         = "you are inside it"
 	wtSkipDirty            = "worktree has uncommitted changes"
+	wtSkipLocked           = "worktree is locked"
 	// wtRebaseInProgressErr is the single-rm refusal sharing the skip reason's
 	// wording so `rm` and `rm --all` tell the same story.
 	wtRebaseInProgressErr = "cannot remove worktree %q: a rebase is in progress there; finish or abort it first"
@@ -582,6 +705,7 @@ func worktreeRemoveAll(asJSON bool) error {
 		// batch's precomputed slots.
 		v := verdicts[wt.Path]
 		verdict, cerr := stack.ClassifyWorktreeRemoval(p, wt.Path, "", stack.RemovalProbes{
+			Locked: wt.Locked,
 			Paused: func(string) (bool, error) { return v.paused, v.rebaseErr },
 			Clean:  func(string) (bool, error) { return v.clean, v.clErr },
 		})
@@ -595,6 +719,9 @@ func worktreeRemoveAll(asJSON bool) error {
 			continue
 		case stack.RemovalPausedRebase:
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipRebaseInProgress})
+			continue
+		case stack.RemovalLocked:
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipLocked})
 			continue
 		case stack.RemovalDirty:
 			// Dirty is a SKIP, decided up front — never classified by parsing

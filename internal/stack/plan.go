@@ -218,22 +218,22 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 }
 
 type restackPreview struct {
-	restacked     []string
-	skipped       []string
-	skippedRebase map[string]bool
+	restacked   []string
+	skipped     []string
+	skipReasons map[string]wtSkipReason
 }
 
 func (p restackPreview) notes() []string {
-	return skippedWorktreeNotesFrom(p.skipped, p.skippedRebase)
+	return skippedWorktreeNotesFrom(p.skipped, p.skipReasons)
 }
 
 type restackPreviewAccumulator struct {
-	restacked     []string
-	skipped       []string
-	skippedRebase map[string]bool
-	moved         map[string]bool
-	seen          map[string]bool
-	seenSkipped   map[string]bool
+	restacked   []string
+	skipped     []string
+	skipReasons map[string]wtSkipReason
+	moved       map[string]bool
+	seen        map[string]bool
+	seenSkipped map[string]bool
 	// cw lazily holds the worktree snapshot + batched gate verdicts the
 	// preview consults per candidate; cur is the (static-during-preview)
 	// current branch, both fetched at most once per preview run.
@@ -252,7 +252,7 @@ func newRestackPreviewAccumulator() *restackPreviewAccumulator {
 }
 
 func (a *restackPreviewAccumulator) preview() restackPreview {
-	return restackPreview{restacked: a.restacked, skipped: a.skipped, skippedRebase: a.skippedRebase}
+	return restackPreview{restacked: a.restacked, skipped: a.skipped, skipReasons: a.skipReasons}
 }
 
 func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]string, name string) error {
@@ -267,20 +267,18 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	if !needs && !a.moved[b.Parent] {
 		return nil
 	}
-	skipped, rebase, err := a.wouldSkipWorktreeRestack(env, s, name)
+	reason, err := a.wouldSkipWorktreeRestack(env, s, name)
 	if err != nil {
 		return err
 	}
-	if skipped {
+	if reason != wtSkipNone {
 		if !a.seenSkipped[name] {
 			a.seenSkipped[name] = true
 			a.skipped = append(a.skipped, name)
-			if rebase {
-				if a.skippedRebase == nil {
-					a.skippedRebase = map[string]bool{}
-				}
-				a.skippedRebase[name] = true
+			if a.skipReasons == nil {
+				a.skipReasons = map[string]wtSkipReason{}
 			}
+			a.skipReasons[name] = reason
 		}
 		return nil
 	}
@@ -324,19 +322,20 @@ func (a *restackPreviewAccumulator) worktreeCtx(env Env) (*cascadeWorktrees, err
 
 // wouldSkipWorktreeRestack answers restackInWorktree's skip question for the
 // dry-run preview: a branch owned by another worktree is skipped when that
-// worktree has a rebase in progress (the second return) or a dirty tree. The
-// gate itself is shared with the apply path (worktreeRestackDisposition), so
-// the preview predicts the real run by construction. The worktree snapshot,
-// gate verdicts, and current branch come from the accumulator's lazily built
-// context — identical answers to per-name probing, at a fraction of the spawns.
-func (a *restackPreviewAccumulator) wouldSkipWorktreeRestack(env Env, s *State, branch string) (skipped, rebase bool, err error) {
+// worktree is locked, has a rebase in progress, or has a dirty tree — the
+// returned kind names which. The gate itself is shared with the apply path
+// (worktreeRestackDisposition), so the preview predicts the real run by
+// construction. The worktree snapshot, gate verdicts, and current branch come
+// from the accumulator's lazily built context — identical answers to
+// per-name probing, at a fraction of the spawns.
+func (a *restackPreviewAccumulator) wouldSkipWorktreeRestack(env Env, s *State, branch string) (wtSkipReason, error) {
 	cw, err := a.worktreeCtx(env)
 	if err != nil {
-		return false, false, err
+		return wtSkipNone, err
 	}
 	owner, elsewhere := ownerElsewhereFrom(cw.wts, branch, a.cur)
 	if !elsewhere {
-		return false, false, nil
+		return wtSkipNone, nil
 	}
 	return worktreeRestackDisposition(env, owner, branch, cw.verdicts)
 }

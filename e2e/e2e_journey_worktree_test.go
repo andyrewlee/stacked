@@ -1450,3 +1450,98 @@ func TestPausedRebaseInLinkedWorktreeBlocksMutations(t *testing.T) {
 		t.Fatalf("worktree branch after abort = %q, want feat-a", got)
 	}
 }
+
+// TestWorktreeLockHold journeys the agent-hold primitive end to end:
+// `st worktree lock` marks the worktree (ls --json reports locked:true), the
+// restack cascade skips it naming the lock, rm refuses and rm --all skips it
+// under the documented reason, and `st worktree unlock` releases the hold.
+func TestWorktreeLockHold(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	res := r.stOK("worktree", "feat-a") // materialize feat-a's worktree
+	var added struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &added); err != nil || added.Path == "" {
+		// st worktree is JSON only under --json; fall back to ls for the path.
+		var listed []struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		}
+		ls := r.stOK("worktree", "ls", "--json")
+		if err := json.Unmarshal([]byte(ls.stdout), &listed); err != nil {
+			t.Fatalf("decode worktree ls: %v\n%s", err, ls.stdout)
+		}
+		for _, e := range listed {
+			if e.Branch == "feat-a" {
+				added.Path = e.Path
+			}
+		}
+	}
+	if added.Path == "" {
+		t.Fatalf("could not resolve feat-a's worktree path:\n%s", res.stdout)
+	}
+
+	// Lock it with a reason; ls --json reports the hold.
+	r.stOK("worktree", "lock", "feat-a", "--reason", "agent holding")
+	var listed []struct {
+		Path   string `json:"path"`
+		Branch string `json:"branch"`
+		Locked bool   `json:"locked"`
+	}
+	ls := r.stOK("worktree", "ls", "--json")
+	if err := json.Unmarshal([]byte(ls.stdout), &listed); err != nil {
+		t.Fatalf("decode worktree ls: %v\n%s", err, ls.stdout)
+	}
+	sawLocked := false
+	for _, e := range listed {
+		if e.Branch == "feat-a" {
+			sawLocked = e.Locked
+		}
+	}
+	if !sawLocked {
+		t.Fatalf("worktree ls --json after lock = %s, want feat-a locked", ls.stdout)
+	}
+
+	// Advance the trunk so feat-a needs a restack; the cascade skips it naming
+	// the lock rather than rebasing into the held worktree.
+	r.git("commit", "--allow-empty", "-q", "-m", "trunk moves")
+	out := r.stOK("restack")
+	if !strings.Contains(out.stdout, "skipped feat-a") || !strings.Contains(out.stdout, "locked") {
+		t.Fatalf("st restack stdout = %q, want a lock-naming skip for feat-a", out.stdout)
+	}
+	if got := r.git("rev-list", "--count", "feat-a"); got != "2" {
+		t.Fatalf("locked feat-a was rebased anyway (rev-list = %s, want 2)", got)
+	}
+
+	// rm refuses the hold; rm --all skips it under the contract reason.
+	res = r.st("worktree", "rm", "feat-a")
+	wantExit(t, res, 1)
+	if !strings.Contains(res.stderr, "locked") {
+		t.Fatalf("st worktree rm stderr = %q, want the locked refusal", res.stderr)
+	}
+	res = r.stOK("worktree", "rm", "--all", "--json")
+	var rmAll struct {
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &rmAll); err != nil {
+		t.Fatalf("decode rm --all: %v\n%s", err, res.stdout)
+	}
+	if len(rmAll.Skipped) != 1 || rmAll.Skipped[0].Branch != "feat-a" || rmAll.Skipped[0].Reason != "worktree is locked" {
+		t.Fatalf("rm --all skipped = %+v, want feat-a/worktree is locked", rmAll.Skipped)
+	}
+
+	// Unlock releases the hold and rm proceeds.
+	r.stOK("worktree", "unlock", "feat-a")
+	r.stOK("worktree", "rm", "feat-a")
+	if _, err := os.Stat(added.Path); !os.IsNotExist(err) {
+		t.Fatalf("worktree still present after unlock+rm: %v", err)
+	}
+}

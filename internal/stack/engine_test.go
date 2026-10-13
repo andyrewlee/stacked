@@ -2626,3 +2626,29 @@ func TestErrNotTrackedCanonicalText(t *testing.T) {
 		t.Fatalf("ErrNotTracked text = %q", got)
 	}
 }
+
+// TestDeleteRefusesLockedOwnerWorktree pins the hold on the release path:
+// deleting a branch whose linked worktree is locked refuses before teardown —
+// the standing hold outranks the delete, matching `st worktree rm`'s refusal.
+func TestDeleteRefusesLockedOwnerWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	f.addWorktree("/wt/b", "b")
+	f.markWorktreeLocked("/wt/b")
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Delete(env, s, "b", true)
+	if err == nil || !strings.Contains(err.Error(), "is locked") ||
+		!strings.Contains(err.Error(), "st worktree unlock b") {
+		t.Fatalf("delete = %v, want the locked-worktree refusal naming the unlock", err)
+	}
+	if _, ok := f.linkedWorktrees["b"]; !ok {
+		t.Fatal("delete removed a locked worktree")
+	}
+	if !f.BranchExists("b") || !s.IsTracked("b") {
+		t.Fatal("delete deleted the branch despite refusing its locked worktree")
+	}
+}
