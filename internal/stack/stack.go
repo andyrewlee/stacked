@@ -26,7 +26,7 @@ var ErrStateTooNew = errors.New("state file written by newer st")
 // lock. It is ordinary contention, not a failure — the correct response is to
 // retry once the other command finishes — so it is a distinct sentinel that
 // callers can map to its own exit code rather than the generic error.
-var ErrLocked = errors.New("another st command is running in this repository")
+var ErrLocked = errors.New("another st command is running in this repository (retry when it finishes, or set ST_LOCK_WAIT to wait)")
 
 // Branch is a single tracked branch within a stack.
 type Branch struct {
