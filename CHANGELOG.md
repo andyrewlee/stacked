@@ -178,6 +178,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`make check-tools` fails fast when `bash` is absent.** `scripts/cover.sh`,
+  the `check-install` scripts, and both git hooks are `#!/usr/bin/env bash`,
+  so a bash-less environment previously died mid-run instead of at the tool
+  inventory; `gzip` joins the optional list (`tar -z` forks it on GNU tar).
+- **`make release` preflights `GITHUB_TOKEN`.** A missing token used to
+  surface inside goreleaser's publish pipe, after the full gate and the
+  artifact build had already run.
+- **`make check-go-version` fails loudly on a patch-level or `toolchain`
+  go.mod floor** instead of silently truncating `go 1.26.1` to `1.26` — the
+  `Go N.NN+` doc-pin shape cannot express a patch, so the check refuses until
+  it (and the docs) are updated.
 - **`scripts/check-pins.sh` can no longer pass silently.** A malformed spec row
   (or no rows at all) now exits non-zero instead of printing a vacuous
   "consistent across", and every matching declaration in each file is compared

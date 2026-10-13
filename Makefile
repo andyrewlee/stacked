@@ -119,7 +119,15 @@ check-lint-version:
 # "Go 1.NN+" prose. Enforce agreement so a toolchain bump cannot silently leave
 # the docs behind (the same hazard check-lint-version guards for the lint pin).
 check-go-version:
-	@want=$$(sed -nE 's/^go ([0-9]+[.][0-9]+).*/\1/p' go.mod); \
+	@want=$$(sed -nE 's/^go ([0-9]+[.][0-9]+([.][0-9]+)?).*/\1/p' go.mod); \
+	case "$$want" in \
+		"") echo "cannot parse a go directive in go.mod" >&2; exit 1;; \
+		*.*.*) echo "go.mod floor is '$$want' — a patch-level floor cannot be expressed by the 'Go N.NN+' doc-pin shape; update check-go-version (and the docs) before bumping" >&2; exit 1;; \
+	esac; \
+	if grep -qE '^toolchain ' go.mod; then \
+		echo "go.mod carries a toolchain directive this check does not pin — update check-go-version before keeping it" >&2; \
+		exit 1; \
+	fi; \
 	scripts/check-pins.sh "go pin" "$$want" \
 		README.md 'Go [0-9]+\.[0-9]+\+' 's/^Go ([0-9.]+)\+$$/\1/' \
 		CONTRIBUTING.md 'Go [0-9]+\.[0-9]+\+' 's/^Go ([0-9.]+)\+$$/\1/'
@@ -190,10 +198,16 @@ check-goreleaser-present:
 # optional: optional tools gate only the legs that use them (installer checks,
 # release signing/verify), which skip loudly when they are absent. Presence is
 # reported here so a missing tool surfaces in the gate, not mid-release;
-# CI_STRICT=1 makes check-install require goreleaser and minisign.
+# CI_STRICT=1 makes check-install require goreleaser and minisign. bash is the
+# exception — cover.sh, the check-install scripts, and both git hooks are
+# bash, so its absence is fatal here rather than a skip.
 check-tools:
+	@command -v bash >/dev/null 2>&1 || { \
+		echo "bash is required — scripts/cover.sh, the check-install legs, and both git hooks are #!/usr/bin/env bash" >&2; \
+		exit 1; \
+	}
 	@missing=""; \
-	for t in curl tar goreleaser minisign shellcheck; do \
+	for t in curl tar goreleaser minisign shellcheck gzip; do \
 		command -v $$t >/dev/null 2>&1 || missing="$$missing $$t"; \
 	done; \
 	if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then \
@@ -202,7 +216,7 @@ check-tools:
 	if [ -n "$$missing" ]; then \
 		echo "optional install/release tools absent:$$missing (their legs skip; CI_STRICT=1 requires goreleaser+minisign+shellcheck)"; \
 	else \
-		echo "tools: curl, tar, sha256, goreleaser, minisign, shellcheck all present"; \
+		echo "tools: bash, curl, tar, sha256, gzip, goreleaser, minisign, shellcheck all present"; \
 	fi
 
 # Shellcheck is presence-optional like minisign (its diagnostics aren't
