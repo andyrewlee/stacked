@@ -178,6 +178,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`make snapshot` rehearses the real release pipeline.** It ran
+  `goreleaser build` — binaries only — while the docs described building "the
+  release artifacts". It now runs `goreleaser release --snapshot --clean`
+  (signing when `MINISIGN_KEY_FILE` is set, `--skip=sign` otherwise), so the
+  dry run covers the archive, checksum, and sign legs `install.sh` consumes.
 - **The exit-5 lock-contention error names its remedy.** `ErrLocked` now reads
   "another st command is running in this repository (retry when it finishes,
   or set ST_LOCK_WAIT to wait)" — matching the other top-failure errors that

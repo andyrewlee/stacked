@@ -368,7 +368,16 @@ release: check-release-version check-goreleaser-version check-goreleaser-present
 	HOOKS_REQUIRED=1 $(MAKE) check-hooks
 	goreleaser release --clean
 
-# Build release artifacts locally without publishing (dry run). Snapshots use
-# the same schema the release reads, so the pin gates this path as well.
+# Rehearse the release pipeline locally without publishing (dry run):
+# `goreleaser release --snapshot` runs the archive/checksum/sign legs —
+# `goreleaser build` would emit binaries only, covering none of the surface
+# install.sh consumes. Signing runs only when MINISIGN_KEY_FILE points at a
+# key (the same conditional check-install-assets.sh uses). Snapshots use the
+# same schema the release reads, so the pin gates this path as well.
 snapshot: check-goreleaser-version check-goreleaser-present
-	goreleaser build --snapshot --clean
+	@if [ -n "$${MINISIGN_KEY_FILE:-}" ]; then \
+		command -v minisign >/dev/null 2>&1 || { echo "MINISIGN_KEY_FILE is set but minisign is not installed" >&2; exit 1; }; \
+		goreleaser release --snapshot --clean; \
+	else \
+		goreleaser release --snapshot --clean --skip=sign; \
+	fi
