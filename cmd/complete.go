@@ -26,6 +26,11 @@ func init() {
 	})
 }
 
+// Adding a Completion rule to a Command registration grows the endpoint's
+// command set — keep the candidate-policy enumeration in docs/AGENT.md,
+// README.md's `st completion` section, and the CHANGELOG `__complete` bullet
+// in sync with it.
+//
 // completionCtx carries everything a command's Completion rule can need: where
 // the cursor sits (inside a flag's value, or at the positional index implied by
 // prior positionals plus the flag names already present), the loaded stack

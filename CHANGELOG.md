@@ -52,9 +52,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "createdBranches": [], "createdWorktrees": {}, "refs": {} } ] }` where
   `refs` maps each recorded branch to the tip undo would restore.
 - **Branch-aware shell completion via a hidden `st __complete` endpoint.**
-  `st completion <bash|zsh|fish>` now emits dynamic hooks for the seven
+  `st completion <bash|zsh|fish>` now emits dynamic hooks for the eight
   branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`,
-  `worktree`/`wt`, `delete`, `untrack`, and `rename` — that call
+  `worktree`/`wt`, `delete`, `untrack`, `commits`, and `rename` — that call
   `st __complete <cmd> <index> -- <words>` at
   completion time. Candidates are read-only and cheap (state file plus at
   most two flat git probes — `for-each-ref` or `worktree list`, never a
@@ -64,8 +64,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tracked branches; `onto` offers everything except the moving subtree;
   `track` offers untracked locals (`--parent`'s value completes tracked
   branches); `worktree` offers tracked branches lacking a worktree, and
-  `worktree rm` the branches owning one; `delete` and `untrack` offer the
-  tracked set, and `rename` tracked + trunk on its first positional.
+  `worktree rm` the branches owning one; `delete`, `untrack`, and `commits`
+  offer the tracked set, and `rename` tracked + trunk on its first positional.
   `__complete` is hidden from help
   and word-1 candidates and is exempt from the git-version floor so the
   per-keystroke cost stays flat; `ST_COMPLETE_BIN` overrides the binary
@@ -120,8 +120,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   splits) plus a single cascade restack; one `st undo` reverts everything.
   All-or-nothing: any refusal or dirty target worktree leaves the whole plan
   unapplied.
+- **`st help --json` reports each command's `subVerbs`.** The command-list
+  payload's per-command object now carries `subVerbs` (`omitempty`) — the
+  literal sub-verbs a command accepts (`worktree`'s `ls`/`rm`, `shell`'s
+  `install`, `completion`'s shells) — so agents read the sub-verb surface as
+  data instead of regexing it out of `usage`.
 
 ### Security
+- **Spawned git processes no longer inherit repo-routing environment
+  variables.** `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_CONFIG_*`, and the other
+  `GIT_*` variables git exports inside hooks are stripped from every
+  `st`-spawned git call, so `st` running inside a hook or under an exported
+  `GIT_DIR` cannot be redirected at the wrong repository or fed injected
+  config.
 - **Git output folded into errors is credential-scrubbed.** Captured git
   stderr/stdout that reaches error text or `--json` envelopes is now
   stripped of credential-shaped `scheme://userinfo@host` and

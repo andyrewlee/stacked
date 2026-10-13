@@ -141,7 +141,7 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | Command | Aliases | Summary |
 | --- | --- | --- |
 | `st init [--trunk <name>]` | | Initialize stack tracking in this repo. |
-| `st create <name> [-m|--message <msg>] [-a|--all] [--worktree]` | `c` | Create a new branch stacked on the current branch. |
+| `st create <name> [-m|--message <msg>] [-a|--all] [--worktree] [--dry-run]` | `c` | Create a new branch stacked on the current branch (`--dry-run` previews). |
 | `st log [--json]` | `ls` | Show the stack as a tree (trunk at the bottom); `--json` for scripting. |
 | `st status [--json]` | `stat` | Show the current branch, its parent/children, and restack state. |
 | `st commits [<branch>] [--json]` | | List the commits in a branch's recorded stack range (base..tip). |
@@ -151,8 +151,8 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st top` | `t` | Jump to the top (leaf) of the current stack. |
 | `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
 | `st track [name] [--parent <branch>] [--all] [--dry-run]` | | Start tracking a git branch (the current one when no name is given), or every untracked branch with `--all` (`--dry-run` previews the inferred map). |
-| `st untrack [name]` | | Stop tracking a branch (re-parents its children). |
-| `st modify [-m|--message <msg>] [-a|--all] [--commit]` | `amend`, `m` | Amend (or add) a commit, then restack everything above. |
+| `st untrack [name] [--dry-run]` | | Stop tracking a branch (re-parents its children; `--dry-run` previews the re-parenting). |
+| `st modify [-m|--message <msg>] [-a|--all] [--commit] [--dry-run]` | `amend`, `m` | Amend (or add) a commit, then restack everything above (`--dry-run` previews). |
 | `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
 | `st restack [--all] [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--all` restacks the whole forest; `--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
@@ -160,7 +160,7 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st fold [--dry-run]` | | Fold the current branch into its parent (parent absorbs its commits; `--dry-run` previews). |
 | `st squash [-m|--message <msg>] [--dry-run]` | | Squash all of the current branch's commits into one (`--dry-run` previews). |
 | `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
-| `st rename [old] <new>` | `mv` | Rename a branch and update the stack metadata. |
+| `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update the stack metadata (`--dry-run` previews the re-parenting). |
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
 | `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` runs offline against the local trunk; `--dry-run` previews). |
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
@@ -169,7 +169,7 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st undo [<n>] [--list \| --dry-run] [--force]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews, `--force` restores refs that moved outside st). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
-| `st worktree <branch> \| --all \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (for parallel work). |
+| `st worktree <branch> [--dry-run] \| --all [--dry-run] \| ls\|list \| rm\|remove <branch> \| rm --all` | `wt` | Materialize, list, or remove a branch's own worktree (`--dry-run` on the add forms previews paths and `.worktreeinclude` copies). |
 | `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |
@@ -186,10 +186,12 @@ st init                 # auto-detect trunk
 st init --trunk main
 ```
 
-#### `st create <name> [-m <msg>] [-a|--all] [--worktree]`
+#### `st create <name> [-m <msg>] [-a|--all] [--worktree] [--dry-run]`
 Creates `<name>` off the current branch, switches to it, and tracks it. `-a`
 stages all changes first; `-m` commits the staged changes onto the new branch
-(`-a` requires `-m` — there is nothing to commit without a message).
+(`-a` requires `-m` — there is nothing to commit without a message). `--dry-run`
+previews the create — including the worktree path and `.worktreeinclude` copies
+with `--worktree` — without changing anything.
 
 With `--worktree`, the branch is created and tracked and its own linked
 worktree is materialized in one command — the main worktree's HEAD does not
@@ -231,7 +233,7 @@ own worktree (see `st worktree`), checkout *teleports* there instead of switchin
 in place — with the shell shim installed your shell `cd`s into the worktree; without
 it the path is printed.
 
-#### `st worktree <branch> | --all | ls|list | rm|remove <branch> | rm --all` (`wt`)
+#### `st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all` (`wt`)
 Make a branch a "place you can be" on its own — useful for running multiple agents
 on different branches of one stack in parallel. To create a *new* branch straight
 into its own worktree, use `st create <name> --worktree`; `st worktree <branch>`
@@ -256,7 +258,10 @@ caller is standing in ("you are inside it" — removing it would delete the
 process's own cwd). A worktree paused
 mid-rebase is refused by `rm` and skipped by `rm --all` as "a rebase is in
 progress there" — it lists as `detached`, but `st` still knows which branch
-its rebase owns. The stack metadata is
+its rebase owns. The add forms take `--dry-run` — `st worktree <branch>
+--dry-run` and `st worktree --all --dry-run` report each worktree path and
+the `.worktreeinclude` copies a real run would make without creating
+anything. The stack metadata is
 shared across all worktrees, so every `st` command sees the same stack.
 
 #### `st shell install [bash|zsh|fish]`
@@ -273,7 +278,7 @@ Walk `n` levels up (toward leaves) or down (toward trunk) and check out the resu
 Jump to the leaf of the current stack (`top`) or to the bottom branch just above
 trunk (`bottom`).
 
-#### `st track [name] [--parent <branch>] [--all] [--dry-run]` / `st untrack [name]`
+#### `st track [name] [--parent <branch>] [--all] [--dry-run]` / `st untrack [name] [--dry-run]`
 `track` starts managing an existing git branch — the current one, or the one
 named — with the parent inferred from the commit graph or set with `--parent`.
 `--all` adopts every untracked local branch in one pass, inferring each
@@ -281,12 +286,15 @@ branch's parent from the merge base (branches that share no history with the
 trunk are skipped and reported in `notes`); `--all --dry-run` prints the
 inferred parent map as `would track:` pairs and records nothing. `untrack`
 stops managing a branch and re-parents its children onto that branch's parent
-(the git branch is not deleted).
+(the git branch is not deleted); `untrack --dry-run` previews the
+re-parenting without changing anything.
 
-#### `st modify [-m <msg>] [-a|--all] [--commit]` (`amend`, `m`)
+#### `st modify [-m <msg>] [-a|--all] [--commit] [--dry-run]` (`amend`, `m`)
 Amends the current branch's tip (or, with `--commit`, adds a new commit), then
 restacks every descendant so the rest of the stack rebases onto the new tip. A
 bare `st modify` stages all changes and amends without editing the message.
+`--dry-run` previews the amend (or `--commit`) plus the descendant restacks
+without changing anything.
 
 #### `st restack [--all] [--dry-run]` (`r`)
 Rebases the current branch onto its parent's current tip, then restacks its entire
@@ -390,10 +398,11 @@ rebases it and its descendants there. `target` may not be the branch itself or o
 of its descendants. On conflict, resolve and run `st continue`. `--dry-run`
 previews the move and descendant restacks without changing anything.
 
-#### `st rename [old] <new>` (`mv`)
+#### `st rename [old] <new> [--dry-run]` (`mv`)
 Renames a branch (the current one by default) with `git branch -m` and updates the
 stack metadata: the branch's record, the trunk name if applicable, and every
-child's parent pointer.
+child's parent pointer. `--dry-run` previews the rename and the children's
+re-parenting without changing anything.
 
 #### `st undo [<n>] [--list | --dry-run]`
 Reverts the last stack-mutating command: the metadata is rolled back and each
@@ -438,7 +447,7 @@ Re-parented branches may then need `st restack`.
 Prints a shell completion script for st's subcommands, e.g.
 `st completion zsh > "${fpath[1]}/_st"`. The scripts complete branch names
 live for `checkout`, `onto`, `track`, `worktree` (and `rm`'s owned
-branches), `delete`, `untrack`, and `rename`, via a hidden read-only
+branches), `delete`, `untrack`, `commits`, and `rename`, via a hidden read-only
 `st __complete` endpoint that answers in
 flat probes — no fetch, no history walk, silent-empty outside a repo. Set
 `ST_COMPLETE_BIN` to point the hooks at a different st binary.
