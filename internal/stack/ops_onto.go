@@ -142,19 +142,28 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	}
 
 	// Capture the target the paused rebase is actually replaying onto BEFORE
-	// RebaseContinue removes the worktree-local metadata. Only an ordinary
-	// tracked branch needs it: a pending reparent already persists its target
-	// (pending.ParentSHA), and an untracked conflicted branch has no ParentSHA
-	// to stamp. If the parent ref moved while the rebase was paused, the live
-	// tip is NOT what the rebase incorporated — recording it would suppress
-	// the follow-up restack that picks up the move.
+	// RebaseContinue removes the worktree-local metadata. Both consumers need
+	// it: an ordinary tracked branch gets stamped with the truth, and a
+	// pending reparent is promoted only when the paused rebase IS the
+	// recorded one — a stale record (its rebase finished or aborted outside
+	// st) or a foreign rebase paused on the same branch has a different onto
+	// and must not promote. If the parent ref moved while the rebase was
+	// paused, the live tip is NOT what the rebase incorporated — recording it
+	// would suppress the follow-up restack that picks up the move.
 	ontoSHA := ""
 	isPendingReparent := s.PendingReparent != nil && s.PendingReparent.Branch == conflicted
-	if conflicted != "" && !isPendingReparent {
-		if _, ok := s.Get(conflicted); ok {
+	if conflicted != "" {
+		if _, tracked := s.Get(conflicted); isPendingReparent || tracked {
 			if ontoSHA, err = g.RebaseOntoSHA(); err != nil {
 				return nil, fmt.Errorf("reading the paused rebase's target before continuing %q: %w", conflicted, err)
 			}
+		}
+		if isPendingReparent && ontoSHA != s.PendingReparent.ParentSHA {
+			// Head-name matched but this rebase is not the recorded one —
+			// demote to the foreign-rebase path: stamp the truth, warn, and
+			// keep the record for `st repair` (it may still name a rebase
+			// genuinely paused in a linked worktree).
+			isPendingReparent = false
 		}
 	}
 
@@ -177,7 +186,7 @@ func Continue(env Env, s *State) (*OpResult, error) {
 	// The just-finished branch now sits on its parent's current tip.
 	var foreignNote string
 	if conflicted != "" {
-		if pending := s.PendingReparent; pending != nil && pending.Branch == conflicted {
+		if pending := s.PendingReparent; isPendingReparent {
 			if b, ok := s.Get(conflicted); ok {
 				b.Parent = pending.Parent
 				b.ParentSHA = pending.ParentSHA

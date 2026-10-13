@@ -157,6 +157,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **`st continue` verifies a pending reparent before promoting it.** When the
+  paused rebase's head-name matched the recorded branch, the record's target
+  was stamped unconditionally — a stale record plus a foreign rebase on the
+  same branch could mis-base the branch with `st` reporting clean. The
+  recorded `onto` SHA is now verified on every adoption arm; a mismatch is
+  treated as a foreign rebase (truth stamped, warning issued, record kept
+  for `st repair`).
 - **`st fold` works inside the folded branch's own worktree.** The op asked
   its worktree-release helper to tear down the caller's own worktree — the
   one place it can never run — so every fold of a worktree-owned branch
