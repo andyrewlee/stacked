@@ -21,7 +21,18 @@ func ParallelProbes(n int, fn func(i int) error) error {
 		}
 		return nil
 	}
-	errs := make([]error, n)
+	// probeResult carries each slot's outcome: a returned error or a captured
+	// panic. A panicking worker stops taking indexes — its remaining slots
+	// stay zero — and the panic is re-raised on the calling goroutine after
+	// the wait so the process dies (via the caller's recover path) instead of
+	// crashing inside a worker goroutine, where an unrecovered panic would
+	// exit with Go's runtime code 2 — the code the CLI contract reserves for
+	// conflicts.
+	type probeResult struct {
+		err   error
+		panic any
+	}
+	results := make([]probeResult, n)
 	var next atomic.Int64
 	next.Store(-1)
 	var wg sync.WaitGroup
@@ -30,14 +41,24 @@ func ParallelProbes(n int, fn func(i int) error) error {
 		go func() {
 			defer wg.Done()
 			for i := int(next.Add(1)); i < n; i = int(next.Add(1)) {
-				errs[i] = fn(i)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							results[i] = probeResult{panic: r}
+						}
+					}()
+					results[i] = probeResult{err: fn(i)}
+				}()
 			}
 		}()
 	}
 	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return err
+	for _, r := range results {
+		if r.panic != nil {
+			panic(r.panic)
+		}
+		if r.err != nil {
+			return r.err
 		}
 	}
 	return nil

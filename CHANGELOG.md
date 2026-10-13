@@ -157,6 +157,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   emitted `--json` payload is unchanged.
 
 ### Fixed
+- **A panicking git probe no longer exits as a fake conflict.** `ParallelProbes`
+  workers ran unrecovered, so a panic killed the process with Go's runtime
+  exit 2 — the code the agent contract reserves for a paused rebase. Panics
+  are now captured per probe slot and re-raised on the calling goroutine,
+  where the existing recover renders exit 70.
 - **Interactive rebases inherit the scrubbed git environment.** `st restack`,
   `st onto`, and the other rebase-driving commands spawn `git rebase`
   interactively; that one spawn missed the repo-routing environment scrub
