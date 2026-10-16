@@ -89,6 +89,7 @@ func (Shell) RebaseHeadNameIn(dir string) (string, error) {
 }
 func (Shell) IsCleanIn(dir string) (bool, error)                    { return IsCleanIn(dir) }
 func (Shell) RepoRoot() (string, error)                             { return RepoRoot() }
+func (Shell) DirExists(dir string) bool                             { return DirExists(dir) }
 func (Shell) WorktreeRemove(dir string, force bool) error           { return WorktreeRemove(dir, force) }
 func (Shell) DiffCachedHunks() ([]Hunk, []UnsupportedRecord, error) { return DiffCachedHunks() }
 func (Shell) BlamePorcelain(file, rev string) (map[int]BlameLine, error) {

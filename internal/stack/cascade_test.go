@@ -573,6 +573,55 @@ func TestRestackCascadeSkipsLockedWorktree(t *testing.T) {
 	}
 }
 
+// TestRestackCascadeSkipsStaleWorktree pins the stale-registration semantic:
+// an rm -rf'd worktree still lists (prunable), but probing its path can only
+// fail — the cascade skips it before any probe and records the stale reason.
+func TestRestackCascadeSkipsStaleWorktree(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.markWorktreeStale("/wt/feat-a")
+
+	did, err := s.restackBranch(env, "feat-a")
+	if err != nil {
+		t.Fatalf("restackBranch with stale owner: %v", err)
+	}
+	if did {
+		t.Fatal("a stale owner worktree must be skipped, not rebased")
+	}
+	if f.calls["RebaseOntoIn"] != 0 || f.calls["IsCleanIn"] != 0 {
+		t.Fatalf("no probe may reach a dead worktree path (RebaseOntoIn=%d, IsCleanIn=%d)",
+			f.calls["RebaseOntoIn"], f.calls["IsCleanIn"])
+	}
+	skipped, reasons := s.drainSkippedWorktrees()
+	if len(skipped) != 1 || skipped[0] != "feat-a" {
+		t.Fatalf("skipped = %v, want [feat-a]", skipped)
+	}
+	if reasons["feat-a"] != wtSkipStale {
+		t.Fatalf("skip reason = %v, want wtSkipStale", reasons["feat-a"])
+	}
+	if needs, _ := s.NeedsRestack(f, "feat-a"); !needs {
+		t.Fatal("skipped feat-a should still need a restack")
+	}
+}
+
+// TestRestackCascadeStaleWorktreeSkipNote pins the note wording: a stale skip
+// names the dead registration and the `git worktree prune` remedy.
+func TestRestackCascadeStaleWorktreeSkipNote(t *testing.T) {
+	f, s, env := setupCascade(t)
+	f.markWorktreeStale("/wt/feat-a")
+
+	if _, err := s.restackBranch(env, "feat-a"); err != nil {
+		t.Fatalf("restackBranch: %v", err)
+	}
+	notes := skippedWorktreeNotes(s)
+	if len(notes) != 1 {
+		t.Fatalf("notes = %v, want exactly one skip note", notes)
+	}
+	if !strings.Contains(notes[0], "feat-a") || !strings.Contains(notes[0], "stale") ||
+		!strings.Contains(notes[0], "git worktree prune") {
+		t.Fatalf("note = %q, want a stale-naming skip with the prune remedy", notes[0])
+	}
+}
+
 // TestRestackCascadeLockedWorktreeSkipNote pins the note wording: a locked
 // skip names the lock and the unlock remedy.
 func TestRestackCascadeLockedWorktreeSkipNote(t *testing.T) {

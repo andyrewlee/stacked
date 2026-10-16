@@ -67,6 +67,7 @@ type undoDoomed struct {
 	owner     string
 	dirty     bool
 	locked    bool
+	stale     bool
 	mismatch  bool
 	isCurrent bool
 	// Checkout-target resolution for the current-doomed case, computed against
@@ -246,7 +247,9 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 	for i := range p.doomed {
 		if owner, ok := LinkedOwnerOf(p.wts, p.doomed[i].name); ok {
 			if recorded := entry.CreatedWorktrees[p.doomed[i].name]; recorded == "" || sameWorktreePath(owner.Path, recorded) {
-				cleanPaths = append(cleanPaths, owner.Path)
+				if !WorktreeStale(g, owner) {
+					cleanPaths = append(cleanPaths, owner.Path)
+				}
 			}
 		}
 	}
@@ -256,8 +259,13 @@ func planUndo(env Env, s *State, entry *UndoEntry, force, canTeleport bool, jour
 		if owner, ok := LinkedOwnerOf(p.wts, d.name); ok {
 			d.owner = owner.Path
 			d.locked = owner.Locked
+			d.stale = WorktreeStale(g, owner)
 			if recorded := entry.CreatedWorktrees[d.name]; recorded != "" && !sameWorktreePath(owner.Path, recorded) {
 				d.mismatch = true
+			} else if d.stale {
+				// A dead registration's clean probe can only fail — the
+				// classifier's Stale gate renders the refusal; there is no
+				// dirty answer to record.
 			} else {
 				v := verdicts[owner.Path]
 				if v.cleanErr != nil {
@@ -317,7 +325,7 @@ func (p *undoPlan) blocked() bool {
 		return true
 	}
 	for _, d := range p.doomed {
-		if d.mismatch || d.locked || d.dirty || (d.isCurrent && !d.targetLive && !d.targetRec) {
+		if d.mismatch || d.locked || d.stale || d.dirty || (d.isCurrent && !d.targetLive && !d.targetRec) {
 			return true
 		}
 	}

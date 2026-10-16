@@ -173,6 +173,13 @@ func PausedRebaseOwners(g Git, wts []git.Worktree) (map[string]git.Worktree, err
 		if wt.Branch != "" {
 			continue // attached worktrees report their owner branch directly
 		}
+		if WorktreeStale(g, wt) {
+			// A dead registration's rebase-merge dir is gone with the
+			// worktree — it cannot hold a live pause, and probing the path
+			// only leaks `git -C` failure noise. `git worktree prune` clears
+			// the row.
+			continue
+		}
 		inRebase, err := g.RebaseInProgressIn(wt.Path)
 		if err != nil {
 			return nil, fmt.Errorf("checking rebase state in worktree %q: %w", wt.Path, err)
@@ -193,6 +200,17 @@ func PausedRebaseOwners(g Git, wts []git.Worktree) (map[string]git.Worktree, err
 		paused[head] = wt
 	}
 	return paused, nil
+}
+
+// WorktreeStale reports whether a worktree registration is dead: git already
+// marked it prunable, or its directory is simply gone. The prunable attribute
+// only exists on newer gits, so the port's stat-backed DirExists covers the
+// floor — a row whose path stat fails for another reason (e.g. permission)
+// counts as PRESENT (see DirExists): the probe that runs on it reports the
+// real error instead of the registration being misclassified as stale.
+// The dir check goes through the port so the fake git controls it.
+func WorktreeStale(g Git, wt git.Worktree) bool {
+	return wt.Prunable || !g.DirExists(wt.Path)
 }
 
 // ownerElsewhere reports whether branch is checked out in a worktree OTHER than
@@ -386,6 +404,7 @@ const (
 	wtSkipDirty
 	wtSkipPausedRebase
 	wtSkipLocked
+	wtSkipStale
 )
 
 // worktreeRestackDisposition answers whether a foreign-owned worktree's
@@ -403,6 +422,12 @@ const (
 func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verdicts map[string]wtVerdict) (wtSkipReason, error) {
 	if owner.Locked {
 		return wtSkipLocked, nil
+	}
+	// A dead registration cannot be probed — its path is gone. Keep the row
+	// as the branch's owner (git still considers it checked out until prune)
+	// and skip, naming the remedy, rather than surfacing a `git -C` failure.
+	if WorktreeStale(env.Git, owner) {
+		return wtSkipStale, nil
 	}
 	if v, ok := verdicts[owner.Path]; ok {
 		if v.rebaseErr != nil {
@@ -468,7 +493,9 @@ func newCascadeWorktrees(env Env, s *State, starts []string, idx map[string][]st
 	var paths []string
 	for _, start := range starts {
 		for _, name := range append([]string{start}, descendantsOf(idx, start)...) {
-			if owner, elsewhere := ownerElsewhereFrom(wts, name, cur); elsewhere {
+			if owner, elsewhere := ownerElsewhereFrom(wts, name, cur); elsewhere && !WorktreeStale(env.Git, owner) {
+				// Stale owners stay out of the batch — a dead path can only
+				// fail the probe; the disposition reports staleness itself.
 				paths = append(paths, owner.Path)
 			}
 		}
@@ -537,10 +564,11 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 	}
 	main, _ := MainWorktree(wts)
 	// The shared classifier owns the gate order — main-owner, inside-cwd,
-	// locked, dirty — and this site keeps no paused gate: a paused worktree
-	// classifies through its dirty index, as it always did.
+	// locked, stale, dirty — and this site keeps no paused gate: a paused
+	// worktree classifies through its dirty index, as it always did.
 	verdict, err := ClassifyWorktreeRemoval(env.Git, owner.Path, main.Path, RemovalProbes{
 		Locked: owner.Locked,
+		Stale:  WorktreeStale(env.Git, owner),
 		Clean: func(path string) (bool, error) {
 			clean, err := env.Git.IsCleanIn(path)
 			if err != nil {
@@ -570,6 +598,8 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 		return "", fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, branch)
 	case RemovalLocked:
 		return "", fmt.Errorf("branch %q's worktree %q is locked (git worktree lock); unlock it (`st worktree unlock %s`) before deleting it", branch, owner.Path, branch)
+	case RemovalStale:
+		return "", fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `git worktree prune` to release it before deleting %q", branch, owner.Path, branch)
 	case RemovalDirty:
 		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}

@@ -185,6 +185,91 @@ func TestWorktreeRemoveAllSkipsCwdWorktree(t *testing.T) {
 	}
 }
 
+// TestWorktreeStaleRegistrationGates drives the rm -rf'd-worktree shape every
+// gate must survive: the row stays registered (prunable) while its directory
+// is gone, so add re-materialization refuses naming the prune remedy, rm
+// refuses instead of leaking `git -C` noise on a dead path, rm --all skips it
+// like a dirty worktree, and ls reports the prunable flag.
+func TestWorktreeStaleRegistrationGates(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	created, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := os.RemoveAll(created.Path); err != nil {
+		t.Fatalf("remove worktree dir: %v", err)
+	}
+	resetProcCaches()
+
+	// `st worktree feat-a` must not report "already exists" — the existing
+	// thing is a dead registration, and recreating requires pruning it.
+	if _, err := materializeWorktree("feat-a"); err == nil ||
+		!strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), "git worktree prune") {
+		t.Fatalf("materializeWorktree on a stale registration = %v, want the prune remedy", err)
+	}
+
+	// Single rm refuses naming the remedy rather than probing the dead path.
+	if err := worktreeRemove("feat-a", false); err == nil ||
+		!strings.Contains(err.Error(), "git worktree prune") {
+		t.Fatalf("worktreeRemove on a stale registration = %v, want the prune refusal", err)
+	}
+
+	// rm --all skips it like a dirty worktree instead of failing the batch.
+	out := captureStdout(t, func() {
+		if err := worktreeRemoveAll(false); err != nil {
+			t.Fatalf("worktreeRemoveAll: %v", err)
+		}
+	})
+	if !strings.Contains(out, "skipped feat-a") || !strings.Contains(out, "stale") {
+		t.Fatalf("rm --all output = %q, want the stale skip named", out)
+	}
+
+	// ls reports the dead registration: the prunable JSON field and a
+	// "(stale)" text marker.
+	listOut := captureStdout(t, func() {
+		if err := runWorktree([]string{"ls", "--json"}); err != nil {
+			t.Fatalf("worktree ls --json: %v", err)
+		}
+	})
+	var listed []struct {
+		Path     string `json:"path"`
+		Branch   string `json:"branch"`
+		Head     string `json:"head"`
+		Prunable bool   `json:"prunable"`
+	}
+	decodeStrictJSON(t, "worktree ls --json", listOut, &listed)
+	var sawStale bool
+	for _, entry := range listed {
+		if entry.Branch == "feat-a" {
+			sawStale = entry.Prunable
+		}
+	}
+	if !sawStale {
+		t.Fatalf("worktree ls --json = %s, want prunable on the dead registration", listOut)
+	}
+	textOut := captureStdout(t, func() {
+		if err := worktreeList(false); err != nil {
+			t.Fatalf("worktreeList: %v", err)
+		}
+	})
+	if !strings.Contains(textOut, "(stale)") {
+		t.Fatalf("worktree ls text = %q, want the stale marker", textOut)
+	}
+
+	// The remedy actually clears it.
+	mustRun(t, "git", "worktree", "prune")
+	resetProcCaches()
+	if _, err := materializeWorktree("feat-a"); err != nil {
+		t.Fatalf("materializeWorktree after prune: %v", err)
+	}
+}
+
 // TestGitIgnoredSet pins the batched check-ignore probe: one spawn classifies
 // every manifest entry, exit status 1 (nothing ignored) is an empty set, and
 // -z round-trips paths with spaces verbatim.

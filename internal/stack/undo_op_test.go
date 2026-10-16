@@ -1421,6 +1421,32 @@ func TestUndoDeletesDoomedInOneBatch(t *testing.T) {
 	}
 }
 
+// A stale unrecorded worktree must refuse, leaving the branch in place — a
+// dead registration cannot be probed or removed, so undo names the prune
+// remedy rather than tearing down what git still considers checked out.
+func TestUndoCreateRefusesStaleUnrecordedWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := mustSnapshot(t, s, f, "create")
+	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
+		t.Fatalf("create in worktree prep: %v", err)
+	}
+	f.addWorktree("/wt/unrecorded", "b")
+	f.markWorktreeStale("/wt/unrecorded")
+
+	_, err := Undo(env, s, entry, false)
+	if err == nil || !strings.Contains(err.Error(), "git worktree prune") {
+		t.Fatalf("undo error = %v, want a stale-registration refusal naming the remedy", err)
+	}
+	if !f.BranchExists("b") {
+		t.Fatal("failed undo deleted the branch anyway")
+	}
+}
+
 // A locked unrecorded worktree must refuse, leaving both the worktree and the
 // branch in place — the standing hold outranks undo's created-worktree
 // teardown, same as dirty.

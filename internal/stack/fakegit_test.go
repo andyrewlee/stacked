@@ -102,6 +102,11 @@ type fakeGit struct {
 	// Locked like `git worktree list` does and the gates can model a held
 	// worktree — linked or paused-detached alike.
 	lockedWT map[string]bool
+	// staleWT marks worktree paths whose registration outlived the directory
+	// (an rm -rf'd worktree): Worktrees emits Prunable on the row like real
+	// porcelain does, and DirExists answers false for the path, so gates can
+	// model the stale-row skip without touching the filesystem.
+	staleWT map[string]bool
 	// rebaseInWT marks worktree dirs (the Path Worktrees reports — "." is the
 	// main worktree) with a paused rebase, whether st-armed or armed directly
 	// by the test as a foreign rebase st must not touch. rebaseWT records
@@ -579,10 +584,10 @@ func (f *fakeGit) Worktrees() ([]git.Worktree, error) {
 	}
 	list = append(list, main)
 	for branch, path := range f.linkedWorktrees {
-		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch], Locked: f.lockedWT[path]})
+		list = append(list, git.Worktree{Path: path, Branch: branch, Head: f.branches[branch], Locked: f.lockedWT[path], Prunable: f.staleWT[path]})
 	}
 	for path := range f.pausedLinkedWorktrees {
-		list = append(list, git.Worktree{Path: path, Detached: true, Head: f.detachedAt, Locked: f.lockedWT[path]})
+		list = append(list, git.Worktree{Path: path, Detached: true, Head: f.detachedAt, Locked: f.lockedWT[path], Prunable: f.staleWT[path]})
 	}
 	return list, nil
 }
@@ -611,6 +616,26 @@ func (f *fakeGit) markWorktreeLocked(path string) {
 		f.lockedWT = map[string]bool{}
 	}
 	f.lockedWT[path] = true
+}
+
+// markWorktreeStale marks the worktree at path as a stale registration — the
+// `rm -rf`'d-worktree state where `git worktree list` still lists the row
+// (prunable) but the directory is gone. Worktrees reports Prunable on the row
+// and DirExists answers false, like real git + stat.
+func (f *fakeGit) markWorktreeStale(path string) {
+	if f.staleWT == nil {
+		f.staleWT = map[string]bool{}
+	}
+	f.staleWT[path] = true
+}
+
+// DirExists answers true unless the test marked the path stale — fake
+// worktree dirs "exist" by definition (they are paths, not real dirs).
+func (f *fakeGit) DirExists(dir string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["DirExists"]++
+	return !f.staleWT[dir]
 }
 
 // knownWorktreeDir reports whether dir names a worktree git would accept for

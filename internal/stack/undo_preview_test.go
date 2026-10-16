@@ -381,6 +381,35 @@ func TestUndoPreviewRecordedWorktreeMismatch(t *testing.T) {
 	}
 }
 
+// A stale owner registration is a preview blocker — the dead dir cannot be
+// probed, so the dry run names worktree_stale:<branch> the same way the real
+// undo refuses.
+func TestUndoPreviewStaleWorktree(t *testing.T) {
+	f, s, env := newEnvState()
+	entry := mustSnapshot(t, s, f, "create feat-s")
+	mkBranch(t, env, s, f, "main", "feat-s")
+	f.addWorktree("/wt/feat-s", "feat-s")
+	f.markWorktreeStale("/wt/feat-s")
+	entry.CreatedBranches = []string{"feat-s"}
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := UndoPreview(env, s, entry, false, 1, nil)
+	if err != nil {
+		t.Fatalf("UndoPreview: %v", err)
+	}
+	found := false
+	for _, b := range res.Blockers {
+		if b == "worktree_stale:feat-s" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("blockers = %v, want worktree_stale:feat-s", res.Blockers)
+	}
+}
+
 func TestUndoPreviewAbsorbedCommitsWarning(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")

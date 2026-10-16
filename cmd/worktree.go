@@ -236,6 +236,9 @@ func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (material
 // ownership questions identically before any per-branch work.
 func worktreeAddPrecheck(wts []git.Worktree, branch string) (mw materializedWorktree, handled bool, err error) {
 	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
+		if stack.WorktreeStale(newGitPort(), wt) {
+			return materializedWorktree{}, false, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", branch, wt.Path)
+		}
 		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, true, nil
 	}
 	if main, ok := stack.MainWorktree(wts); ok && main.Branch == branch {
@@ -357,6 +360,9 @@ func materializeWorktreeAtIncludes(repo, root, branch string, candidates []strin
 		return materializedWorktree{}, err
 	}
 	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
+		if stack.WorktreeStale(newGitPort(), wt) {
+			return materializedWorktree{}, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", branch, wt.Path)
+		}
 		// Already materialized as its own linked worktree: report the existing path
 		// idempotently rather than failing, so the command is safe to re-run.
 		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, nil
@@ -529,6 +535,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	port := newGitPort()
 	verdict, err := stack.ClassifyWorktreeRemoval(port, wt.Path, "", stack.RemovalProbes{
 		Locked: wt.Locked,
+		Stale:  stack.WorktreeStale(port, wt),
 		Paused: func(path string) (bool, error) {
 			paused, perr := port.RebaseInProgressIn(path)
 			if perr != nil {
@@ -546,6 +553,8 @@ func worktreeRemove(branch string, asJSON bool) error {
 		return fmt.Errorf("cannot remove worktree %q: you are inside it; run from the main worktree (or another worktree)", wt.Path)
 	case stack.RemovalLocked:
 		return fmt.Errorf("cannot remove worktree %q: it is locked (git worktree lock); unlock it first (`st worktree unlock %s`)", wt.Path, branch)
+	case stack.RemovalStale:
+		return fmt.Errorf("cannot remove worktree %q for %q: its registration is stale (the directory is gone); run `git worktree prune` to clear it", wt.Path, branch)
 	case stack.RemovalPausedRebase:
 		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
 	case stack.RemovalDirty:
@@ -571,6 +580,7 @@ const (
 	wtSkipInsideIt         = "you are inside it"
 	wtSkipDirty            = "worktree has uncommitted changes"
 	wtSkipLocked           = "worktree is locked"
+	wtSkipStale            = "stale worktree registration (directory gone); run `git worktree prune`"
 	// wtRebaseInProgressErr is the single-rm refusal sharing the skip reason's
 	// wording so `rm` and `rm --all` tell the same story.
 	wtRebaseInProgressErr = "cannot remove worktree %q: a rebase is in progress there; finish or abort it first"
@@ -646,7 +656,10 @@ func worktreeRemoveAll(asJSON bool) error {
 	// Worktrees paused mid-rebase list as detached — LinkedOwnerOf cannot see
 	// their target branch, so resolve the pause set once up front and skip
 	// each paused branch by name rather than reporting "no worktree".
-	paused, perr := stack.PausedRebaseOwners(newGitPort(), wts)
+	// One port for the whole command so its RepoRoot memo turns the
+	// per-candidate cwd checks into a single probe.
+	p := newGitPort()
+	paused, perr := stack.PausedRebaseOwners(p, wts)
 	if perr != nil {
 		return perr
 	}
@@ -658,7 +671,9 @@ func worktreeRemoveAll(asJSON bool) error {
 	// path's own verdict, which is never consulted again.
 	var candPaths []string
 	for _, name := range names {
-		if wt, ok := stack.LinkedOwnerOf(wts, name); ok {
+		if wt, ok := stack.LinkedOwnerOf(wts, name); ok && !stack.WorktreeStale(p, wt) {
+			// Stale registrations still get their verdict via the
+			// classifier's Stale gate; only the path probe is skipped.
 			candPaths = append(candPaths, wt.Path)
 		}
 	}
@@ -681,12 +696,9 @@ func worktreeRemoveAll(asJSON bool) error {
 		return nil
 	})
 	verdicts := make(map[string]rmVerdict, len(candPaths))
-	for i, p := range candPaths {
-		verdicts[p] = slots[i]
+	for i, path := range candPaths {
+		verdicts[path] = slots[i]
 	}
-	// One port for the loop so its RepoRoot memo turns the per-candidate
-	// cwd checks into a single probe.
-	p := newGitPort()
 	for _, name := range names {
 		if name == mainBranch {
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipCheckedOutMain})
@@ -706,6 +718,7 @@ func worktreeRemoveAll(asJSON bool) error {
 		v := verdicts[wt.Path]
 		verdict, cerr := stack.ClassifyWorktreeRemoval(p, wt.Path, "", stack.RemovalProbes{
 			Locked: wt.Locked,
+			Stale:  stack.WorktreeStale(p, wt),
 			Paused: func(string) (bool, error) { return v.paused, v.rebaseErr },
 			Clean:  func(string) (bool, error) { return v.clean, v.clErr },
 		})
@@ -722,6 +735,9 @@ func worktreeRemoveAll(asJSON bool) error {
 			continue
 		case stack.RemovalLocked:
 			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipLocked})
+			continue
+		case stack.RemovalStale:
+			result.Skipped = append(result.Skipped, worktreeAllSkip{Branch: name, Reason: wtSkipStale})
 			continue
 		case stack.RemovalDirty:
 			// Dirty is a SKIP, decided up front — never classified by parsing
@@ -757,6 +773,7 @@ type worktreeListEntry struct {
 	Bare     bool   `json:"bare,omitempty"`
 	Detached bool   `json:"detached,omitempty"`
 	Locked   bool   `json:"locked,omitempty"`
+	Prunable bool   `json:"prunable,omitempty"`
 }
 
 // worktreeList renders every worktree linked to the repository.
@@ -776,6 +793,7 @@ func worktreeList(asJSON bool) error {
 			Bare:     wt.Bare,
 			Detached: wt.Detached,
 			Locked:   wt.Locked,
+			Prunable: wt.Prunable,
 		})
 	}
 	return emit(asJSON, entries, func() {
@@ -786,6 +804,9 @@ func worktreeList(asJSON bool) error {
 				label = "(bare)"
 			case label == "":
 				label = "(detached)"
+			}
+			if wt.Prunable {
+				label += " (stale)"
 			}
 			out("%s\t%s\n", sanitizeForTerminal(label), sanitizeForTerminal(wt.Path))
 		}
