@@ -347,7 +347,7 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 			}
 			if WorktreeStale(g, owner) {
 				plan.Summary = "not applied: a target's worktree registration is stale; " + plan.Summary
-				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q's worktree registration at %s is dead (the directory is gone); run `git worktree prune` to clear it", target, owner.Path))
+				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q's worktree registration at %s is dead (the directory is gone); run `st worktree prune` to clear it", target, owner.Path))
 				return plan, nil
 			}
 			v := verdicts[owner.Path]

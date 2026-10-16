@@ -411,7 +411,7 @@ func gatePruneCandidates(env Env, s *State, names []string) (candidates []string
 			continue
 		}
 		if WorktreeStale(g, owner) {
-			return nil, nil, fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `git worktree prune` to release it before deleting %q", name, owner.Path, name)
+			return nil, nil, fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `st worktree prune` to release it before deleting %q", name, owner.Path, name)
 		}
 		v := verdicts[owner.Path]
 		if v.cleanErr != nil {

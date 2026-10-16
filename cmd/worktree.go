@@ -14,10 +14,10 @@ func init() {
 		Name:       "worktree",
 		Aliases:    []string{"wt"},
 		Summary:    "Materialize, list, or remove a branch's own worktree",
-		Usage:      "st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all | lock|unlock <branch> [--reason s] [--json]",
+		Usage:      "st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all | lock|unlock <branch> [--reason s] | prune [--dry-run] [--json]",
 		Run:        runWorktree,
 		NewFlagSet: worktreeFlagSet,
-		SubVerbs:   []string{"list", "ls", "remove", "rm", "lock", "unlock"},
+		SubVerbs:   []string{"list", "ls", "prune", "remove", "rm", "lock", "unlock"},
 		// worktree completes tracked branches that lack a linked worktree in
 		// the create form, and worktree owners after `rm`/`remove`/
 		// `lock`/`unlock`. --all takes no names at all.
@@ -66,6 +66,7 @@ func init() {
 //	st worktree rm <name>        remove a branch's worktree
 //	st worktree lock <name>      hold a branch's worktree (never restacked/removed)
 //	st worktree unlock <name>    release that hold
+//	st worktree prune            drop registrations whose directories are gone
 func runWorktree(args []string) error {
 	var o worktreeOpts
 	fs := newWorktreeFlags(&o)
@@ -91,7 +92,7 @@ func runWorktree(args []string) error {
 		}
 	}
 	if len(rest) == 0 {
-		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>, --all)")
+		return fmt.Errorf("worktree requires a branch name (or: ls, rm <branch>, prune, --all)")
 	}
 
 	switch rest[0] {
@@ -122,6 +123,11 @@ func runWorktree(args []string) error {
 			return fmt.Errorf("worktree rm does not take --dry-run")
 		}
 		return worktreeRemove(rest[1], asJSON)
+	case "prune":
+		if len(rest) != 1 {
+			return fmt.Errorf("worktree prune takes no arguments")
+		}
+		return worktreePrune(o.dryRun, asJSON)
 	default:
 		if len(rest) != 1 {
 			return fmt.Errorf("worktree takes exactly one branch name")
@@ -237,7 +243,7 @@ func previewWorktreeAdd(repo, root, branch string, wts []git.Worktree) (material
 func worktreeAddPrecheck(wts []git.Worktree, branch string) (mw materializedWorktree, handled bool, err error) {
 	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
 		if stack.WorktreeStale(newGitPort(), wt) {
-			return materializedWorktree{}, false, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", branch, wt.Path)
+			return materializedWorktree{}, false, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `st worktree prune` to clear it, then re-run", branch, wt.Path)
 		}
 		return materializedWorktree{Path: wt.Path, Summary: "worktree already exists"}, true, nil
 	}
@@ -361,7 +367,7 @@ func materializeWorktreeAtIncludes(repo, root, branch string, candidates []strin
 	}
 	if wt, ok := stack.LinkedOwnerOf(wts, branch); ok {
 		if stack.WorktreeStale(newGitPort(), wt) {
-			return materializedWorktree{}, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", branch, wt.Path)
+			return materializedWorktree{}, fmt.Errorf("%q's worktree registration %q is stale (the directory is gone); run `st worktree prune` to clear it, then re-run", branch, wt.Path)
 		}
 		// Already materialized as its own linked worktree: report the existing path
 		// idempotently rather than failing, so the command is safe to re-run.
@@ -554,7 +560,7 @@ func worktreeRemove(branch string, asJSON bool) error {
 	case stack.RemovalLocked:
 		return fmt.Errorf("cannot remove worktree %q: it is locked (git worktree lock); unlock it first (`st worktree unlock %s`)", wt.Path, branch)
 	case stack.RemovalStale:
-		return fmt.Errorf("cannot remove worktree %q for %q: its registration is stale (the directory is gone); run `git worktree prune` to clear it", wt.Path, branch)
+		return fmt.Errorf("cannot remove worktree %q for %q: its registration is stale (the directory is gone); run `st worktree prune` to clear it", wt.Path, branch)
 	case stack.RemovalPausedRebase:
 		return fmt.Errorf(wtRebaseInProgressErr, wt.Path)
 	case stack.RemovalDirty:
@@ -580,7 +586,7 @@ const (
 	wtSkipInsideIt         = "you are inside it"
 	wtSkipDirty            = "worktree has uncommitted changes"
 	wtSkipLocked           = "worktree is locked"
-	wtSkipStale            = "stale worktree registration (directory gone); run `git worktree prune`"
+	wtSkipStale            = "stale worktree registration (directory gone); run `st worktree prune`"
 	// wtRebaseInProgressErr is the single-rm refusal sharing the skip reason's
 	// wording so `rm` and `rm --all` tell the same story.
 	wtRebaseInProgressErr = "cannot remove worktree %q: a rebase is in progress there; finish or abort it first"
@@ -809,6 +815,102 @@ func worktreeList(asJSON bool) error {
 				label += " (stale)"
 			}
 			out("%s\t%s\n", sanitizeForTerminal(label), sanitizeForTerminal(wt.Path))
+		}
+	})
+}
+
+// worktreePruneEntry is one row of `st worktree prune`'s report — the
+// registration's path plus the branch it held (empty for detached rows).
+type worktreePruneEntry struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"`
+}
+
+func worktreePruneEntries(wts []git.Worktree) []worktreePruneEntry {
+	entries := make([]worktreePruneEntry, 0, len(wts))
+	for _, wt := range wts {
+		entries = append(entries, worktreePruneEntry{Path: wt.Path, Branch: wt.Branch})
+	}
+	return entries
+}
+
+// worktreePrune drops stale worktree registrations — rows whose directories
+// are gone (`git worktree prune` semantics; it can never touch a live
+// worktree's files). --dry-run reports the candidates without mutating. The
+// report is a before/after list diff, not git's stderr: stale rows git
+// declined to drop (locked, too new) simply stay absent from `pruned`.
+func worktreePrune(dryRun, asJSON bool) error {
+	release, err := acquireLock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	before, err := worktrees()
+	if err != nil {
+		return err
+	}
+	stale := stack.StaleWorktrees(newGitPort(), before)
+	if dryRun {
+		payload := struct {
+			Prunable []worktreePruneEntry `json:"prunable"`
+			DryRun   bool                 `json:"dryRun"`
+		}{Prunable: worktreePruneEntries(stale), DryRun: true}
+		return emit(asJSON, payload, func() {
+			if len(stale) == 0 {
+				out("no stale worktree registrations\n")
+				return
+			}
+			for _, e := range payload.Prunable {
+				label := e.Branch
+				if label == "" {
+					label = "(detached)"
+				}
+				out("would prune %s (%s)\n", sanitizeForTerminal(label), sanitizeForTerminal(e.Path))
+			}
+		})
+	}
+	if len(stale) > 0 {
+		if err := pruneWorktrees(); err != nil {
+			return fmt.Errorf("worktree prune: %w", err)
+		}
+	}
+	after, err := worktrees()
+	if err != nil {
+		return err
+	}
+	live := make(map[string]bool, len(after))
+	for _, wt := range after {
+		live[wt.Path] = true
+	}
+	var pruned []worktreePruneEntry
+	for _, wt := range before {
+		if !live[wt.Path] {
+			pruned = append(pruned, worktreePruneEntry{Path: wt.Path, Branch: wt.Branch})
+		}
+	}
+	if pruned == nil {
+		pruned = []worktreePruneEntry{}
+	}
+	summary := "no stale worktree registrations"
+	if len(pruned) > 0 {
+		summary = fmt.Sprintf("pruned %d stale worktree registration(s)", len(pruned))
+	}
+	payload := struct {
+		Pruned  []worktreePruneEntry `json:"pruned"`
+		Summary string               `json:"summary"`
+	}{Pruned: pruned, Summary: summary}
+	return emit(asJSON, payload, func() {
+		if len(pruned) == 0 {
+			out("%s\n", summary)
+			return
+		}
+		for _, e := range pruned {
+			label := e.Branch
+			if label == "" {
+				label = "(detached)"
+			}
+			out("pruned %s (%s)\n", sanitizeForTerminal(label), sanitizeForTerminal(e.Path))
 		}
 	})
 }

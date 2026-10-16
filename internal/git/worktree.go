@@ -389,6 +389,17 @@ func DirExists(path string) bool {
 	return st.IsDir()
 }
 
+// WorktreePrune drops worktree registrations whose directories are gone
+// (`git worktree prune`). It never touches a live worktree's files — only
+// stale metadata rows. On the Git 2.17 floor a prune clears a registration
+// as soon as its directory is missing (the default --expire window gates
+// pruning by the metadata file's mtime, which a directory deletion already
+// aged past).
+func WorktreePrune() error {
+	_, err := Run("worktree", "prune")
+	return err
+}
+
 // WorktreeRemove removes the linked worktree at path. When force is true the
 // worktree is removed even if it has uncommitted changes.
 func WorktreeRemove(path string, force bool) error {

@@ -604,7 +604,7 @@ func TestRestackCascadeSkipsStaleWorktree(t *testing.T) {
 }
 
 // TestRestackCascadeStaleWorktreeSkipNote pins the note wording: a stale skip
-// names the dead registration and the `git worktree prune` remedy.
+// names the dead registration and the `st worktree prune` remedy.
 func TestRestackCascadeStaleWorktreeSkipNote(t *testing.T) {
 	f, s, env := setupCascade(t)
 	f.markWorktreeStale("/wt/feat-a")
@@ -617,7 +617,7 @@ func TestRestackCascadeStaleWorktreeSkipNote(t *testing.T) {
 		t.Fatalf("notes = %v, want exactly one skip note", notes)
 	}
 	if !strings.Contains(notes[0], "feat-a") || !strings.Contains(notes[0], "stale") ||
-		!strings.Contains(notes[0], "git worktree prune") {
+		!strings.Contains(notes[0], "st worktree prune") {
 		t.Fatalf("note = %q, want a stale-naming skip with the prune remedy", notes[0])
 	}
 }

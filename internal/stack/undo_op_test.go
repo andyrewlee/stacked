@@ -1439,7 +1439,7 @@ func TestUndoCreateRefusesStaleUnrecordedWorktree(t *testing.T) {
 	f.markWorktreeStale("/wt/unrecorded")
 
 	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "git worktree prune") {
+	if err == nil || !strings.Contains(err.Error(), "st worktree prune") {
 		t.Fatalf("undo error = %v, want a stale-registration refusal naming the remedy", err)
 	}
 	if !f.BranchExists("b") {

@@ -14,6 +14,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `worktree` fields (still exit 1), so an orchestrator can route
   `st continue`/`st abort` to the right worktree without parsing messages.
 
+- **`st worktree prune [--dry-run]` — the stale-registration cleanup verb.**
+  A worktree whose directory was deleted out from under it stays registered
+  (git reports it `prunable`); `st worktree prune` drops exactly those rows
+  and reports them as `{ "pruned": [{path, branch}] }`, while `--dry-run`
+  previews the same set as `prunable` without mutating. The refusal/skip
+  messages the stale gates emit now name this verb instead of raw git.
 - **`st worktree lock` / `st worktree unlock` — an agent-hold primitive.** A
   locked worktree (`git worktree lock`, optionally with `--reason`) is a
   standing hold: the restack cascade skips the branch living there and names

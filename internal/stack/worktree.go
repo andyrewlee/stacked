@@ -213,6 +213,18 @@ func WorktreeStale(g Git, wt git.Worktree) bool {
 	return wt.Prunable || !g.DirExists(wt.Path)
 }
 
+// StaleWorktrees returns the rows of wts whose directories are gone — exactly
+// the registrations `git worktree prune` would drop. Order is preserved.
+func StaleWorktrees(g Git, wts []git.Worktree) []git.Worktree {
+	var stale []git.Worktree
+	for _, wt := range wts {
+		if WorktreeStale(g, wt) {
+			stale = append(stale, wt)
+		}
+	}
+	return stale
+}
+
 // ownerElsewhere reports whether branch is checked out in a worktree OTHER than
 // the one this process runs in. In a single-tree repo (or when branch is the
 // current branch here) it returns false, so the in-place rebase path is taken
@@ -599,7 +611,7 @@ func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, erro
 	case RemovalLocked:
 		return "", fmt.Errorf("branch %q's worktree %q is locked (git worktree lock); unlock it (`st worktree unlock %s`) before deleting it", branch, owner.Path, branch)
 	case RemovalStale:
-		return "", fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `git worktree prune` to release it before deleting %q", branch, owner.Path, branch)
+		return "", fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `st worktree prune` to release it before deleting %q", branch, owner.Path, branch)
 	case RemovalDirty:
 		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
 	}

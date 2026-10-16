@@ -1391,6 +1391,26 @@ func TestPausedRebaseOwnersSkipsStale(t *testing.T) {
 	}
 }
 
+// TestStaleWorktreesSelectsOnlyDeadRows pins the candidate set `st worktree
+// prune` reports: prunable and missing-dir rows select; live, locked, and
+// detached-but-live rows never do (locked ≠ dead). Order is preserved.
+func TestStaleWorktreesSelectsOnlyDeadRows(t *testing.T) {
+	f, _, _ := newEnvState()
+	f.markWorktreeStale("/wt-dead") // directory gone; the hand-built row carries no flag
+
+	rows := []git.Worktree{
+		{Path: ".", Branch: "main"},                         // main live row
+		{Path: "/wt-live", Branch: "a"},                     // live linked
+		{Path: "/wt-locked", Branch: "b", Locked: true},     // locked ≠ dead
+		{Path: "/wt-dead", Detached: true},                  // missing dir, no flag (old git)
+		{Path: "/wt-prunable", Branch: "c", Prunable: true}, // flag alone selects (dir may still stat)
+	}
+	stale := StaleWorktrees(f, rows)
+	if len(stale) != 2 || stale[0].Path != "/wt-dead" || stale[1].Path != "/wt-prunable" {
+		t.Fatalf("StaleWorktrees = %+v, want [/wt-dead /wt-prunable]", stale)
+	}
+}
+
 // TestRepairClearsStalePendingReparent pins the GC arm: a pending reparent
 // whose rebase is gone (finished/aborted outside st) is a validate problem
 // that repair clears by name — while a live paused rebase keeps its record.

@@ -99,7 +99,7 @@ func Undo(env Env, s *State, entry *UndoEntry, force bool) (*OpResult, error) {
 			case RemovalLocked:
 				return nil, fmt.Errorf("cannot remove worktree %q for %q: it is locked (git worktree lock); unlock it (`st worktree unlock %s`) and retry the undo", d.owner, d.name, d.name)
 			case RemovalStale:
-				return nil, fmt.Errorf("cannot remove worktree %q for %q: its registration is stale (the directory is gone); run `git worktree prune` to clear it and retry the undo", d.owner, d.name)
+				return nil, fmt.Errorf("cannot remove worktree %q for %q: its registration is stale (the directory is gone); run `st worktree prune` to clear it and retry the undo", d.owner, d.name)
 			case RemovalDirty:
 				return nil, fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", d.name, d.owner, d.name)
 			}

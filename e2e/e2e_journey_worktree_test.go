@@ -1599,7 +1599,7 @@ func TestWorktreeLockHold(t *testing.T) {
 // its directory is deleted, and previously every `git -C` probe the gates ran
 // died on the dead path. Now log renders with the owner annotation intact,
 // restack skips feat-a naming the stale registration, worktree rm and delete
-// refuse naming `git worktree prune`, rm --all skips under a documented
+// refuse naming `st worktree prune`, rm --all skips under a documented
 // reason, and pruning restores the normal flow.
 func TestStaleWorktreeRegistration(t *testing.T) {
 	t.Parallel()
@@ -1665,7 +1665,7 @@ func TestStaleWorktreeRegistration(t *testing.T) {
 	// refusal.
 	res = r.st("worktree", "rm", "feat-a")
 	wantExit(t, res, 1)
-	if !strings.Contains(res.stderr, "git worktree prune") {
+	if !strings.Contains(res.stderr, "st worktree prune") {
 		t.Fatalf("st worktree rm stderr = %q, want the prune remedy", res.stderr)
 	}
 	res = r.stOK("worktree", "rm", "--all", "--json")
@@ -1684,16 +1684,65 @@ func TestStaleWorktreeRegistration(t *testing.T) {
 	// --force reaches the worktree gate past the not-merged refusal.
 	res = r.st("delete", "feat-a", "--force")
 	wantExit(t, res, 1)
-	if !strings.Contains(res.stderr, "git worktree prune") {
+	if !strings.Contains(res.stderr, "st worktree prune") {
 		t.Fatalf("st delete stderr = %q, want the prune remedy", res.stderr)
 	}
 	if !r.branchExists("feat-a") {
 		t.Fatal("st delete removed the stale-owned branch anyway")
 	}
 
-	// The named remedy unblocks everything: prune, then the worktree
-	// re-materializes on demand.
-	r.git("worktree", "prune")
+	// `st worktree prune` is the named remedy: --dry-run lists the stale row
+	// without mutating, the real prune drops it and reports what went, and a
+	// second run is a clean no-op.
+	res = r.stOK("worktree", "prune", "--dry-run", "--json")
+	var dryRun struct {
+		Prunable []struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		} `json:"prunable"`
+		DryRun bool `json:"dryRun"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &dryRun); err != nil {
+		t.Fatalf("decode prune --dry-run: %v\n%s", err, res.stdout)
+	}
+	// wt is already deleted, so EvalSymlinks on it fails — resolve the
+	// parent (which exists) and re-join to match git's canonicalized row.
+	deadParent, err := filepath.EvalSymlinks(filepath.Dir(wt))
+	if err != nil {
+		t.Fatalf("resolve worktree parent: %v", err)
+	}
+	wantWT := filepath.Join(deadParent, filepath.Base(wt))
+	if len(dryRun.Prunable) != 1 || dryRun.Prunable[0].Path != wantWT ||
+		dryRun.Prunable[0].Branch != "feat-a" || !dryRun.DryRun {
+		t.Fatalf("prune --dry-run = %+v, want [%s feat-a] dryRun", dryRun.Prunable, wantWT)
+	}
+	// The dry run mutated nothing — the row still lists.
+	if out := r.git("worktree", "list", "--porcelain"); !strings.Contains(out, wt) {
+		t.Fatalf("prune --dry-run dropped the registration anyway:\n%s", out)
+	}
+
+	res = r.stOK("worktree", "prune", "--json")
+	var pruned struct {
+		Pruned []struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		} `json:"pruned"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &pruned); err != nil {
+		t.Fatalf("decode prune: %v\n%s", err, res.stdout)
+	}
+	if len(pruned.Pruned) != 1 || pruned.Pruned[0].Path != wantWT || pruned.Pruned[0].Branch != "feat-a" {
+		t.Fatalf("prune = %+v, want [%s feat-a]", pruned.Pruned, wantWT)
+	}
+	if out := r.git("worktree", "list", "--porcelain"); strings.Contains(out, wt) {
+		t.Fatalf("pruned registration still lists:\n%s", out)
+	}
+	res = r.stOK("worktree", "prune")
+	if !strings.Contains(res.stdout, "no stale worktree registrations") {
+		t.Fatalf("second prune stdout = %q, want the empty report", res.stdout)
+	}
+
+	// With the dead row cleared the worktree re-materializes on demand.
 	res = r.stOK("worktree", "feat-a", "--json")
 	var added struct {
 		Path string `json:"path"`

@@ -24,7 +24,7 @@ const (
 	RemovalLocked
 	// RemovalStale — the registration is dead: the worktree's directory is
 	// gone (prunable, or the path fails to stat). Probes on the path can
-	// only fail; the remedy is `git worktree prune`, which frees the
+	// only fail; the remedy is `st worktree prune`, which frees the
 	// branch's checkout. Checked after Locked: a locked stale row reports
 	// the lock, then staleness on the next run — each step's remedy works.
 	RemovalStale

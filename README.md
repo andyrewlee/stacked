@@ -169,7 +169,7 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st undo [<n>] [--list \| --dry-run] [--force]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews, `--force` restores refs that moved outside st). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
 | `st repair` | | Reconcile the metadata with the repository (fix drift). |
-| `st worktree <branch> [--dry-run] \| --all [--dry-run] \| ls\|list \| rm\|remove <branch> \| rm --all \| lock\|unlock <branch> [--reason s]` | `wt` | Materialize, list, or remove a branch's own worktree, or lock/unlock it (`--dry-run` on the add forms previews paths and `.worktreeinclude` copies; a locked worktree is never restacked into or removed). |
+| `st worktree <branch> [--dry-run] \| --all [--dry-run] \| ls\|list \| rm\|remove <branch> \| rm --all \| lock\|unlock <branch> [--reason s] \| prune [--dry-run]` | `wt` | Materialize, list, or remove a branch's own worktree, or lock/unlock it (`--dry-run` on the add forms previews paths and `.worktreeinclude` copies; a locked worktree is never restacked into or removed; `prune` drops registrations whose directories are gone). |
 | `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |

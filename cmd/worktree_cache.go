@@ -23,6 +23,7 @@ import (
 // can leave a different branch checked out in a worktree), and the cmd
 // layer's direct calls go through helpers that own the reset —
 // addWorktreePath/removeWorktreePath for `git worktree add`/`remove`,
+// pruneWorktrees for `git worktree prune` (it drops registrations),
 // setWorktreeLock for `git worktree lock`/`unlock` (the Locked flag lives on
 // the memoized entries, so a lock flip must force a re-list),
 // checkoutAndReset for the one direct checkout, moveCwdAndReset for the one
@@ -140,6 +141,14 @@ func setWorktreeLock(path, reason string, lock bool) error {
 	} else {
 		err = git.WorktreeUnlock(path)
 	}
+	resetProcCaches()
+	return err
+}
+
+// pruneWorktrees runs git.WorktreePrune then invalidates — a prune drops
+// registrations the memoized list may still hold.
+func pruneWorktrees() error {
+	err := git.WorktreePrune()
 	resetProcCaches()
 	return err
 }

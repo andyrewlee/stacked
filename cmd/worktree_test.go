@@ -210,13 +210,13 @@ func TestWorktreeStaleRegistrationGates(t *testing.T) {
 	// `st worktree feat-a` must not report "already exists" — the existing
 	// thing is a dead registration, and recreating requires pruning it.
 	if _, err := materializeWorktree("feat-a"); err == nil ||
-		!strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), "git worktree prune") {
+		!strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), "st worktree prune") {
 		t.Fatalf("materializeWorktree on a stale registration = %v, want the prune remedy", err)
 	}
 
 	// Single rm refuses naming the remedy rather than probing the dead path.
 	if err := worktreeRemove("feat-a", false); err == nil ||
-		!strings.Contains(err.Error(), "git worktree prune") {
+		!strings.Contains(err.Error(), "st worktree prune") {
 		t.Fatalf("worktreeRemove on a stale registration = %v, want the prune refusal", err)
 	}
 
@@ -263,10 +263,110 @@ func TestWorktreeStaleRegistrationGates(t *testing.T) {
 	}
 
 	// The remedy actually clears it.
-	mustRun(t, "git", "worktree", "prune")
+	if err := worktreePrune(false, false); err != nil {
+		t.Fatalf("worktreePrune: %v", err)
+	}
 	resetProcCaches()
 	if _, err := materializeWorktree("feat-a"); err != nil {
 		t.Fatalf("materializeWorktree after prune: %v", err)
+	}
+}
+
+// TestWorktreePrune drives the stale-registration cleanup verb: --dry-run
+// lists the dead row without mutating, the real run reports exactly what
+// dropped (a before/after list diff, never stderr-parsed), a re-run is a
+// clean no-op, and positional args are a usage error.
+func TestWorktreePrune(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	resetProcCaches()
+
+	// Nothing stale → a no-op report, no git spawn needed.
+	out := captureStdout(t, func() {
+		if err := worktreePrune(false, false); err != nil {
+			t.Fatalf("worktreePrune on a clean repo: %v", err)
+		}
+	})
+	if !strings.Contains(out, "no stale worktree registrations") {
+		t.Fatalf("clean prune output = %q", out)
+	}
+
+	// Usage errors: prune takes no positional arg and no --all.
+	if err := runWorktree([]string{"prune", "feat-a"}); err == nil {
+		t.Fatal("worktree prune <arg> did not fail")
+	}
+	if err := runWorktree([]string{"prune", "--all"}); err == nil {
+		t.Fatal("worktree prune --all did not fail")
+	}
+
+	created, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := os.RemoveAll(created.Path); err != nil {
+		t.Fatalf("remove worktree dir: %v", err)
+	}
+	// `git worktree list` reports canonicalized paths (/var -> /private/var
+	// on macOS) while created.Path came back unexpanded — compare resolved.
+	deadPath, err := filepath.EvalSymlinks(filepath.Dir(created.Path))
+	if err != nil {
+		t.Fatalf("resolve worktree parent: %v", err)
+	}
+	deadPath = filepath.Join(deadPath, filepath.Base(created.Path))
+	resetProcCaches()
+
+	// --dry-run --json names the candidate and mutates nothing.
+	dryOut := captureStdout(t, func() {
+		if err := worktreePrune(true, true); err != nil {
+			t.Fatalf("worktreePrune --dry-run: %v", err)
+		}
+	})
+	var dry struct {
+		Prunable []struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		} `json:"prunable"`
+		DryRun bool `json:"dryRun"`
+	}
+	decodeStrictJSON(t, "worktree prune --dry-run --json", dryOut, &dry)
+	if len(dry.Prunable) != 1 || dry.Prunable[0].Path != deadPath ||
+		dry.Prunable[0].Branch != "feat-a" || !dry.DryRun {
+		t.Fatalf("prunable = %+v, want [%s feat-a] dryRun", dry.Prunable, deadPath)
+	}
+	listed, err := worktrees()
+	if err != nil {
+		t.Fatalf("worktrees after dry-run: %v", err)
+	}
+	stillThere := false
+	for _, wt := range listed {
+		if wt.Path == deadPath {
+			stillThere = true
+		}
+	}
+	if !stillThere {
+		t.Fatal("prune --dry-run dropped the registration anyway")
+	}
+
+	// The real run reports exactly the dropped row.
+	out = captureStdout(t, func() {
+		if err := worktreePrune(false, false); err != nil {
+			t.Fatalf("worktreePrune: %v", err)
+		}
+	})
+	if !strings.Contains(out, "pruned feat-a") {
+		t.Fatalf("prune output = %q, want the dropped row named", out)
+	}
+	listed, err = worktrees()
+	if err != nil {
+		t.Fatalf("worktrees after prune: %v", err)
+	}
+	for _, wt := range listed {
+		if wt.Path == deadPath {
+			t.Fatalf("pruned registration %q still lists", wt.Path)
+		}
 	}
 }
 
