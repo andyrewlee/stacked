@@ -451,6 +451,15 @@ func renderError(err error, asJSON bool) {
 				obj["onto"] = ce.Onto
 			}
 		}
+		// A paused-elsewhere refusal carries the branch and the worktree
+		// holding the pause — where `st continue`/`st abort` must run — under
+		// its own code so routing does not mean message-parsing.
+		var pe *stack.PausedElsewhereError
+		if errors.As(err, &pe) {
+			obj["code"] = "paused"
+			obj["branch"] = pe.Branch
+			obj["worktree"] = pe.Worktree
+		}
 		enc := json.NewEncoder(os.Stderr)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(map[string]any{"error": obj})

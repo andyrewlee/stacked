@@ -61,6 +61,20 @@ func (e *ConflictError) Error() string {
 
 func (e *ConflictError) Unwrap() error { return ErrConflict }
 
+// PausedElsewhereError reports a mutation refused because a tracked branch's
+// rebase is paused in ANOTHER worktree. It wraps nothing extra — the exit
+// stays 1 — but errors.As lets the CLI emit Branch and Worktree as structured
+// JSON fields so an orchestrator can route `st continue`/`st abort` to the
+// right worktree without parsing the message.
+type PausedElsewhereError struct {
+	Branch   string // the tracked branch whose rebase is paused
+	Worktree string // the worktree path holding the pause
+}
+
+func (e *PausedElsewhereError) Error() string {
+	return fmt.Sprintf("branch %q has a rebase in progress in worktree %q; resolve it there (`st continue` or `st abort`) before mutating the stack", e.Branch, e.Worktree)
+}
+
 // AlsoFailed joins an operation error with the error of a follow-up
 // recovery/rollback step that also failed, keeping both matchable with
 // errors.Is/errors.As: "<primary>; additionally failed to <what>: <secondary>".
@@ -111,7 +125,7 @@ func RequireNoPausedRebase(g Git, s *State) error {
 	if len(names) > 0 {
 		sort.Strings(names)
 		head := names[0]
-		return fmt.Errorf("branch %q has a rebase in progress in worktree %q; resolve it there (`st continue` or `st abort`) before mutating the stack", head, paused[head].Path)
+		return &PausedElsewhereError{Branch: head, Worktree: paused[head].Path}
 	}
 	return nil
 }

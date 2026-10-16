@@ -1317,6 +1317,30 @@ func TestRequireNoPausedRebaseLinkedWorktree(t *testing.T) {
 	}
 }
 
+// TestRequireNoPausedRebaseTypedError pins the machine-routable refusal: the
+// gate returns *PausedElsewhereError carrying the branch and its worktree so
+// the CLI can emit them as structured fields — and with several tracked
+// branches paused the refusal names the sorted-first one deterministically.
+func TestRequireNoPausedRebaseTypedError(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+
+	f.addPausedWorktree("/wt-b", "b")
+	f.addPausedWorktree("/wt-a", "a")
+	err := RequireNoPausedRebase(f, s)
+	var pe *PausedElsewhereError
+	if !errors.As(err, &pe) {
+		t.Fatalf("gate error = %T %v, want *PausedElsewhereError", err, err)
+	}
+	if pe.Branch != "a" || pe.Worktree != "/wt-a" {
+		t.Fatalf("paused error = {%q, %q}, want sorted-first a@/wt-a", pe.Branch, pe.Worktree)
+	}
+	if !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "/wt-a") {
+		t.Fatalf("typed error message = %q, want the same wording as before", err)
+	}
+}
+
 // TestPausedRebaseOwnersSkipsStale pins the dead-registration sweep: a linked
 // worktree row whose directory is gone (rm -rf) still lists — prunable — but
 // its rebase-merge state died with the directory, so it cannot hold a live

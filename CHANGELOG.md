@@ -8,6 +8,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Paused-elsewhere refusals are machine-routable.** A mutation refused
+  because a tracked branch's rebase is paused in another worktree now emits a
+  JSON error envelope with `code: "paused"` plus structured `branch` and
+  `worktree` fields (still exit 1), so an orchestrator can route
+  `st continue`/`st abort` to the right worktree without parsing messages.
+
 - **`st worktree lock` / `st worktree unlock` — an agent-hold primitive.** A
   locked worktree (`git worktree lock`, optionally with `--reason`) is a
   standing hold: the restack cascade skips the branch living there and names
