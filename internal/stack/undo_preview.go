@@ -136,6 +136,9 @@ func UndoPreview(env Env, s *State, entry *UndoEntry, canTeleport bool, journalI
 		if d.locked {
 			res.Blockers = append(res.Blockers, "worktree_locked:"+d.name)
 		}
+		if d.stale {
+			res.Blockers = append(res.Blockers, "worktree_stale:"+d.name)
+		}
 		if d.dirty {
 			res.Blockers = append(res.Blockers, "worktree_dirty:"+d.name)
 		}

@@ -310,7 +310,7 @@ func (a *restackPreviewAccumulator) worktreeCtx(env Env) (*cascadeWorktrees, err
 		main, _ := MainWorktree(wts)
 		var paths []string
 		for _, wt := range wts {
-			if wt.Path != main.Path && wt.Branch != "" {
+			if wt.Path != main.Path && wt.Branch != "" && !WorktreeStale(env.Git, wt) {
 				paths = append(paths, wt.Path)
 			}
 		}

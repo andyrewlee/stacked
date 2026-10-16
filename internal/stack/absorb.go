@@ -332,7 +332,9 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 			if !elsewhere {
 				continue
 			}
-			ownerPaths = append(ownerPaths, owner.Path)
+			if !WorktreeStale(g, owner) {
+				ownerPaths = append(ownerPaths, owner.Path)
+			}
 			owners[target] = owner
 		}
 		// One parallel batch answers every target's cleanliness check instead
@@ -342,6 +344,11 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 			owner, ok := owners[target]
 			if !ok {
 				continue
+			}
+			if WorktreeStale(g, owner) {
+				plan.Summary = "not applied: a target's worktree registration is stale; " + plan.Summary
+				plan.Notes = append(plan.Notes, fmt.Sprintf("branch %q's worktree registration at %s is dead (the directory is gone); run `git worktree prune` to clear it", target, owner.Path))
+				return plan, nil
 			}
 			v := verdicts[owner.Path]
 			if v.cleanErr != nil {

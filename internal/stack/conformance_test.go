@@ -656,6 +656,34 @@ func TestConformanceWorktreeProbesOnUnknownDir(t *testing.T) {
 	})
 }
 
+// DirExists splits a live worktree dir from a path no directory occupies —
+// the probe WorktreeStale relies on when the porcelain prunable flag is
+// absent (older git).
+func TestConformanceDirExists(t *testing.T) {
+	runConformance(t, func(d *confDriver) {
+		if err := d.g.CreateBranch("a"); err != nil {
+			d.t.Fatalf("CreateBranch: %v", err)
+		}
+		if err := d.g.Checkout("main"); err != nil {
+			d.t.Fatalf("checkout main: %v", err)
+		}
+		wtPath := d.addWorktree("a")
+		if !d.g.DirExists(wtPath) {
+			d.t.Fatal("DirExists(live worktree) = false, want true")
+		}
+		// The absent case: on the fake arm markWorktreeStale is the "dir is
+		// gone" seam; on the shell arm a never-created sibling path is gone
+		// by construction.
+		gone := wtPath + "-gone"
+		if d.fake != nil {
+			d.fake.markWorktreeStale(gone)
+		}
+		if d.g.DirExists(gone) {
+			d.t.Fatal("DirExists(missing dir) = true, want false")
+		}
+	})
+}
+
 // WorktreeRemove refuses a dirty worktree without force and deregisters a
 // clean one; ResetHardIn restores a dirty worktree to clean.
 func TestConformanceWorktreeRemoveAndResetHardIn(t *testing.T) {
@@ -1188,7 +1216,7 @@ func TestConformancePortCoverageGuard(t *testing.T) {
 		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitRange": true,
 		"CommitList": true, "CommitSubjects": true, "CreateBranch": true, "CreateBranchAt": true,
 		"CurrentBranch": true, "DeleteBranches": true, "DiffCachedHunks": true,
-		"DiffCachedPatchesFor": true, "ForceBranch": true, "HasStagedChanges": true,
+		"DiffCachedPatchesFor": true, "DirExists": true, "ForceBranch": true, "HasStagedChanges": true,
 		"HasUnstagedChanges": true, "IsAncestor": true, "IsClean": true,
 		"IsCleanIn": true, "LooseBranchTip": true, "MergeBase": true, "MergedInto": true,
 		"RebaseAbort": true, "RebaseAbortIn": true, "RebaseContinue": true,

@@ -103,6 +103,13 @@ type Git interface {
 	// IsCleanIn reports whether the worktree at dir has no staged or unstaged
 	// changes, so the cascade can skip a dirty dependent worktree.
 	IsCleanIn(dir string) (bool, error)
+	// DirExists reports whether dir names an existing directory — the
+	// stat-backed probe that decides whether a `git worktree list` row is a
+	// live worktree or a stale registration whose directory is gone (the
+	// porcelain `prunable` flag only exists on newer git). A stat failure
+	// other than "does not exist" counts as present so the follow-up `git -C`
+	// probe surfaces the real error rather than misclassifying the row.
+	DirExists(dir string) bool
 	// RepoRoot returns the top level of the worktree containing the process's
 	// current directory (rev-parse --show-toplevel) — the answer to "which
 	// worktree am I standing in", used by guards that must never delete the

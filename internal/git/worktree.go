@@ -51,6 +51,10 @@ type Worktree struct {
 	Bare     bool   `json:"bare,omitempty"`
 	Detached bool   `json:"detached,omitempty"`
 	Locked   bool   `json:"locked,omitempty"`
+	// Prunable is git's stale-registration mark: the worktree's directory is
+	// gone and `git worktree prune` would drop the row. Only emitted on newer
+	// gits; consumers that need "the dir is dead" should also stat the path.
+	Prunable bool `json:"prunable,omitempty"`
 }
 
 // Worktrees lists every worktree linked to the repository (the main worktree
@@ -239,6 +243,8 @@ func parseWorktreesZ(out string) ([]Worktree, error) {
 				cur.Bare = true
 			case "locked":
 				cur.Locked = true
+			case "prunable":
+				cur.Prunable = true
 			}
 		default:
 			return nil, fmt.Errorf("git worktree list -z: unrecognized attribute %q", field)
@@ -314,6 +320,8 @@ func parseWorktreesLegacy(out string) ([]Worktree, error) {
 				cur.Bare = true
 			case "locked":
 				cur.Locked = true
+			case "prunable":
+				cur.Prunable = true
 			}
 		default:
 			return nil, fmt.Errorf("git worktree list: unrecognized line %q", line)
@@ -365,6 +373,20 @@ func WorktreeUnlock(path string) error {
 	}
 	_, err := Run("worktree", "unlock", "--", path)
 	return err
+}
+
+// DirExists reports whether path names an existing directory — the stat-backed
+// probe that decides whether a `git worktree list` row is a live worktree or a
+// stale registration whose directory is gone, without spawning git. A stat
+// failure other than "does not exist" (permissions, I/O) counts as PRESENT:
+// the worktree may be alive and the caller's `git -C` probe then surfaces the
+// real error instead of misclassifying the row as stale.
+func DirExists(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return st.IsDir()
 }
 
 // WorktreeRemove removes the linked worktree at path. When force is true the

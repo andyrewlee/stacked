@@ -1572,3 +1572,112 @@ func TestWorktreeLockHold(t *testing.T) {
 		t.Fatalf("worktree still present after unlock+rm: %v", err)
 	}
 }
+
+// TestStaleWorktreeRegistration journeys the rm -rf'd-worktree shape end to
+// end — the bug this plan fixes: the row stays registered (prunable) after
+// its directory is deleted, and previously every `git -C` probe the gates ran
+// died on the dead path. Now log renders with the owner annotation intact,
+// restack skips feat-a naming the stale registration, worktree rm and delete
+// refuse naming `git worktree prune`, rm --all skips under a documented
+// reason, and pruning restores the normal flow.
+func TestStaleWorktreeRegistration(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+	r.create("feat-a", "a.txt", "a\n", "a")
+	r.stOK("checkout", "main")
+
+	wt := worktreeFor(t, r, "feat-a")
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatalf("remove worktree dir: %v", err)
+	}
+
+	// Sanity: porcelain still lists the row, now flagged prunable.
+	if out := r.git("worktree", "list", "--porcelain"); !strings.Contains(out, "prunable") {
+		t.Fatalf("worktree list missing the prunable entry:\n%s", out)
+	}
+
+	// `st log --json` must not die on the dead path — feat-a keeps its
+	// worktree annotation (git still reports the branch checked out there).
+	out := r.stOK("log", "--json").stdout
+	var root logNode
+	if err := json.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("decode log json: %v\n%s", err, out)
+	}
+	feat := findNode(&root, "feat-a")
+	if feat == nil || feat.Worktree == "" {
+		t.Fatalf("feat-a lost its worktree annotation in log --json: %+v\n%s", feat, out)
+	}
+
+	// `st worktree ls` surfaces the dead registration.
+	ls := r.stOK("worktree", "ls", "--json")
+	var listed []struct {
+		Branch   string `json:"branch"`
+		Prunable bool   `json:"prunable"`
+	}
+	if err := json.Unmarshal([]byte(ls.stdout), &listed); err != nil {
+		t.Fatalf("decode worktree ls: %v\n%s", err, ls.stdout)
+	}
+	sawStale := false
+	for _, e := range listed {
+		if e.Branch == "feat-a" {
+			sawStale = e.Prunable
+		}
+	}
+	if !sawStale {
+		t.Fatalf("worktree ls --json = %s, want feat-a prunable", ls.stdout)
+	}
+
+	// Advance the trunk so feat-a needs a restack; the cascade skips it
+	// naming the stale registration rather than probing the dead path.
+	r.git("commit", "--allow-empty", "-q", "-m", "trunk moves")
+	res := r.stOK("restack")
+	if !strings.Contains(res.stdout, "skipped feat-a") || !strings.Contains(res.stdout, "stale") {
+		t.Fatalf("st restack stdout = %q, want a stale-naming skip for feat-a", res.stdout)
+	}
+	if got := r.git("rev-list", "--count", "feat-a"); got != "2" {
+		t.Fatalf("feat-a was rebased into a dead worktree (rev-list = %s, want 2)", got)
+	}
+
+	// rm refuses naming the remedy; rm --all skips under the documented
+	// reason; delete refuses rather than fighting git's own checkout-owner
+	// refusal.
+	res = r.st("worktree", "rm", "feat-a")
+	wantExit(t, res, 1)
+	if !strings.Contains(res.stderr, "git worktree prune") {
+		t.Fatalf("st worktree rm stderr = %q, want the prune remedy", res.stderr)
+	}
+	res = r.stOK("worktree", "rm", "--all", "--json")
+	var rmAll struct {
+		Skipped []struct {
+			Branch string `json:"branch"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &rmAll); err != nil {
+		t.Fatalf("decode rm --all: %v\n%s", err, res.stdout)
+	}
+	if len(rmAll.Skipped) != 1 || rmAll.Skipped[0].Branch != "feat-a" || !strings.Contains(rmAll.Skipped[0].Reason, "stale") {
+		t.Fatalf("rm --all skipped = %+v, want feat-a/stale", rmAll.Skipped)
+	}
+	// --force reaches the worktree gate past the not-merged refusal.
+	res = r.st("delete", "feat-a", "--force")
+	wantExit(t, res, 1)
+	if !strings.Contains(res.stderr, "git worktree prune") {
+		t.Fatalf("st delete stderr = %q, want the prune remedy", res.stderr)
+	}
+	if !r.branchExists("feat-a") {
+		t.Fatal("st delete removed the stale-owned branch anyway")
+	}
+
+	// The named remedy unblocks everything: prune, then the worktree
+	// re-materializes on demand.
+	r.git("worktree", "prune")
+	res = r.stOK("worktree", "feat-a", "--json")
+	var added struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &added); err != nil || added.Path == "" {
+		t.Fatalf("worktree feat-a after prune: %v\n%s", err, res.stdout)
+	}
+}

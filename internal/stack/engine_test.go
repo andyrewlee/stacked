@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/andyrewlee/stacked/internal/git"
 )
 
 func newEnvState() (*fakeGit, *State, Env) {
@@ -1312,6 +1314,56 @@ func TestRequireNoPausedRebaseLinkedWorktree(t *testing.T) {
 	f5.failErr["RebaseHeadNameIn"] = errors.New("head-name dead")
 	if err := RequireNoPausedRebase(f5, s5); err == nil || !strings.Contains(err.Error(), "head-name dead") {
 		t.Fatalf("RebaseHeadNameIn probe failure = %v, want it surfaced", err)
+	}
+}
+
+// TestPausedRebaseOwnersSkipsStale pins the dead-registration sweep: a linked
+// worktree row whose directory is gone (rm -rf) still lists — prunable — but
+// its rebase-merge state died with the directory, so it cannot hold a live
+// pause. Probing the dead path would only leak `git -C` noise, so the sweep
+// skips it before any probe and the branch it owned blocks nothing. Both
+// stale signals are covered: the porcelain prunable flag, and a missing dir
+// alone for git versions too old to emit the flag.
+func TestPausedRebaseOwnersSkipsStale(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.addPausedWorktree("/wt-a", "a")
+	f.markWorktreeStale("/wt-a") // the directory is gone; the row remains
+
+	// Old-git row: no prunable flag, so the stat probe must decide.
+	staleRow := git.Worktree{Path: "/wt-a", Detached: true}
+	paused, err := PausedRebaseOwners(f, []git.Worktree{staleRow})
+	if err != nil {
+		t.Fatalf("PausedRebaseOwners with a stale row: %v", err)
+	}
+	if len(paused) != 0 {
+		t.Fatalf("paused = %v, want the dead registration to resolve nothing", paused)
+	}
+	if got := f.calls["RebaseInProgressIn"]; got != 0 {
+		t.Fatalf("RebaseInProgressIn calls = %d, want the stale row skipped before any probe", got)
+	}
+	if got := f.calls["DirExists"]; got == 0 {
+		t.Fatal("DirExists never ran — the flagless row must fall back to the stat probe")
+	}
+
+	// New-git row: the prunable flag decides before any stat.
+	dirCalls := f.calls["DirExists"]
+	flagRow := git.Worktree{Path: "/wt-a", Detached: true, Prunable: true}
+	paused, err = PausedRebaseOwners(f, []git.Worktree{flagRow})
+	if err != nil {
+		t.Fatalf("PausedRebaseOwners with a prunable row: %v", err)
+	}
+	if len(paused) != 0 {
+		t.Fatalf("paused = %v, want the prunable row to resolve nothing", paused)
+	}
+	if got := f.calls["DirExists"]; got != dirCalls {
+		t.Fatalf("DirExists calls = %d, want the prunable flag to short-circuit the stat", got)
+	}
+
+	// End to end: the gate fetches rows itself (they carry prunable) and
+	// does not refuse a branch whose pause died with its worktree.
+	if err := RequireNoPausedRebase(f, s); err != nil {
+		t.Fatalf("gate refused a branch whose pause died with its worktree: %v", err)
 	}
 }
 

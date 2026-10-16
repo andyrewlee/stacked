@@ -265,6 +265,8 @@ func skippedWorktreeNote(name string, reason wtSkipReason) string {
 	switch reason {
 	case wtSkipLocked:
 		return fmt.Sprintf("skipped %s: its worktree is locked (git worktree lock; `st worktree unlock %s`, then re-run)", name, name)
+	case wtSkipStale:
+		return fmt.Sprintf("skipped %s: its worktree registration is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", name)
 	case wtSkipPausedRebase:
 		return fmt.Sprintf("skipped %s: a rebase is already in progress in its worktree (finish or abort it there, then re-run)", name)
 	default:

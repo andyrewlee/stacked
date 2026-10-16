@@ -22,6 +22,12 @@ const (
 	// a standing hold: whatever it was set for, the worktree must not be
 	// torn down until it is unlocked.
 	RemovalLocked
+	// RemovalStale — the registration is dead: the worktree's directory is
+	// gone (prunable, or the path fails to stat). Probes on the path can
+	// only fail; the remedy is `git worktree prune`, which frees the
+	// branch's checkout. Checked after Locked: a locked stale row reports
+	// the lock, then staleness on the next run — each step's remedy works.
+	RemovalStale
 	// RemovalPausedRebase — a rebase is in progress inside the worktree.
 	RemovalPausedRebase
 	// RemovalDirty — uncommitted changes; in-progress work is never
@@ -41,13 +47,18 @@ const (
 // git.Worktree entry.
 type RemovalProbes struct {
 	Locked bool
+	// Stale, like Locked, arrives as a known fact on the caller's
+	// git.Worktree entry (WorktreeStale(owner)) — it needs no probe: a dead
+	// registration's path is gone, so the Paused/Clean probes below it
+	// could only report `git -C` noise.
+	Stale  bool
 	Paused func(path string) (bool, error)
 	Clean  func(path string) (bool, error)
 }
 
 // ClassifyWorktreeRemoval evaluates the removal gates for the worktree at
-// ownerPath in canonical order — main-owner, inside-cwd, locked, paused,
-// dirty —
+// ownerPath in canonical order — main-owner, inside-cwd, locked, stale,
+// paused, dirty —
 // and returns the first failing verdict, or RemovalOK when all pass. The
 // caller resolved the owner itself (LinkedOwnerOf for the rm paths,
 // OwnerOf for the engine's release — they differ on whether the main
@@ -69,6 +80,9 @@ func ClassifyWorktreeRemoval(g Git, ownerPath, mainPath string, probes RemovalPr
 	}
 	if probes.Locked {
 		return RemovalLocked, nil
+	}
+	if probes.Stale {
+		return RemovalStale, nil
 	}
 	if probes.Paused != nil {
 		paused, err := probes.Paused(ownerPath)
