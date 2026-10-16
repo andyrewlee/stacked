@@ -8,6 +8,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"os/exec"
 	"testing"
 
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -18,10 +19,11 @@ import (
 // branch/onto fields on conflict.
 type jsonErrorEnvelope struct {
 	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-		Branch  string `json:"branch"`
-		Onto    string `json:"onto"`
+		Code     string `json:"code"`
+		Message  string `json:"message"`
+		Branch   string `json:"branch"`
+		Onto     string `json:"onto"`
+		Worktree string `json:"worktree"`
 	} `json:"error"`
 }
 
@@ -30,6 +32,7 @@ type jsonErrorEnvelope struct {
 // from the shared contract, never hand-picked per row.
 var envelopeExitCode = map[string]int{
 	"error":           1,
+	"paused":          1,
 	"conflict":        2,
 	"not_initialized": 3,
 	"dirty":           4,
@@ -312,5 +315,37 @@ func TestJSONEnvelopeConflictFields(t *testing.T) {
 	env = requireErrorEnvelope(t, []string{"continue", "--json"}, "conflict")
 	if env.Error.Branch != "feat-b" || env.Error.Onto != "feat-a" {
 		t.Fatalf("continue conflict envelope fields = %q/%q, want feat-b/feat-a", env.Error.Branch, env.Error.Onto)
+	}
+}
+
+// TestJSONEnvelopePausedElsewhere proves the cross-worktree pause refusal is
+// machine-routable: a tracked branch paused mid-rebase in a linked worktree
+// makes a gated mutation fail with code "paused" plus the branch and the
+// worktree path where `st continue`/`st abort` must run — exit still 1.
+func TestJSONEnvelopePausedElsewhere(t *testing.T) {
+	newRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCheckout(t, "main")
+	write(t, "a.txt", "diverged\n")
+	mustRun(t, "git", "add", "a.txt")
+	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
+
+	wt, err := materializeWorktree("feat-a")
+	if err != nil {
+		t.Fatalf("materializeWorktree: %v", err)
+	}
+	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
+	}
+	resetProcCaches()
+
+	env := requireErrorEnvelope(t, []string{"create", "feat-x", "--json"}, "paused")
+	if env.Error.Branch != "feat-a" {
+		t.Fatalf("paused envelope branch = %q, want feat-a", env.Error.Branch)
+	}
+	if env.Error.Worktree == "" || !sameExistingPath(env.Error.Worktree, wt.Path) {
+		t.Fatalf("paused envelope worktree = %q, want %q", env.Error.Worktree, wt.Path)
 	}
 }

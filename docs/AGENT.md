@@ -59,7 +59,9 @@ code above:
              "branch": "feat-b", "onto": "feat-a" } }
 ```
 
-`error.code` is one of: `error` (1), `conflict` (2), `not_initialized` (3),
+`error.code` is one of: `error` (1), `paused` (1 — a tracked branch's rebase
+is paused in ANOTHER worktree; the envelope also carries `branch` and
+`worktree`, the path where `st continue`/`st abort` must run), `conflict` (2), `not_initialized` (3),
 `dirty` (4), `locked` (5), `locked_guard` (5 — an abandoned `lock.reclaim`
 guard; operator action required, do not retry), `internal` (70, a recovered panic). So an agent can read stdout for
 the result, stderr for the error envelope, and the exit code for the category.

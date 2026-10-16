@@ -1457,6 +1457,27 @@ func TestPausedRebaseInLinkedWorktreeBlocksMutations(t *testing.T) {
 		t.Fatal("st delete removed the paused branch anyway")
 	}
 
+	// Under --json the same refusal is machine-routable: code "paused" with
+	// the branch and the worktree to resolve it in, still exit 1.
+	res = r.st("delete", "feat-a", "--json")
+	wantExit(t, res, 1)
+	var env struct {
+		Error struct {
+			Code     string `json:"code"`
+			Branch   string `json:"branch"`
+			Worktree string `json:"worktree"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(res.stderr), &env); err != nil {
+		t.Fatalf("st delete --json stderr not an envelope: %v\n%s", err, res.stderr)
+	}
+	if env.Error.Code != "paused" || env.Error.Branch != "feat-a" {
+		t.Fatalf("paused envelope = %+v, want code paused + branch feat-a", env.Error)
+	}
+	if wantWT, _ := filepath.EvalSymlinks(wt); env.Error.Worktree != wantWT && env.Error.Worktree != wt {
+		t.Fatalf("paused envelope worktree = %q, want %q", env.Error.Worktree, wt)
+	}
+
 	// `st worktree rm feat-a` finds the detached owner via the head-name.
 	res = r.st("worktree", "rm", "feat-a")
 	wantExit(t, res, 1)
