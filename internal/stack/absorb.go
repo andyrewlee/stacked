@@ -436,7 +436,7 @@ func Absorb(env Env, s *State) (*AbsorbResult, error) {
 
 	plan.DryRun = false
 	lowest := targets[0]
-	rebased, err := s.restackUpstack(env, lowest)
+	rebased, err := s.restackForestWithOrig(env, s.childNames(lowest), cur)
 	if err != nil {
 		err = restoreHEADAfterNonConflict(env, cur, s.Trunk, err)
 		// On a hard (non-conflict) cascade failure the staged copies are

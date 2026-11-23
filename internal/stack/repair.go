@@ -12,12 +12,13 @@ import (
 type problemKind int
 
 const (
-	TrunkMissing         problemKind = iota // the trunk branch's git ref is gone
-	BranchMissing                           // a tracked branch's git ref is gone
-	ParentUntracked                         // parent is neither the trunk nor a tracked branch
-	ParentMissing                           // parent is tracked but its git ref is gone
-	ParentCycle                             // the parent chain loops before reaching the trunk
-	StalePendingReparent                    // a recorded pending reparent outlived its rebase
+	TrunkMissing             problemKind = iota // the trunk branch's git ref is gone
+	BranchMissing                               // a tracked branch's git ref is gone
+	ParentUntracked                             // parent is neither the trunk nor a tracked branch
+	ParentMissing                               // parent is tracked but its git ref is gone
+	ParentCycle                                 // the parent chain loops before reaching the trunk
+	StalePendingReparent                        // a recorded pending reparent outlived its rebase
+	StalePendingContinuation                    // a recorded pending continuation outlived its rebase
 )
 
 // Problem is one inconsistency found by Inconsistencies. Detail carries the
@@ -68,6 +69,9 @@ func (s *State) Inconsistencies(tips map[string]string, rebaseInProgress bool) [
 	}
 	if s.PendingReparent != nil && !rebaseInProgress {
 		ps = append(ps, Problem{Kind: StalePendingReparent, Branch: s.PendingReparent.Branch, Detail: s.PendingReparent.Parent})
+	}
+	if s.PendingContinuation != nil && !rebaseInProgress {
+		ps = append(ps, Problem{Kind: StalePendingContinuation, Branch: s.PendingContinuation.Branch})
 	}
 	for _, name := range s.BranchNames() {
 		ps = append(ps, s.branchProblems(tips, name)...)
@@ -138,18 +142,24 @@ func Repair(env Env, s *State) (*OpResult, error) {
 			fixes = append(fixes, fmt.Sprintf("broke a parent cycle at %s (re-parented onto trunk)", name))
 		}
 	}
-	// A pending reparent whose rebase is gone is stale — the rebase was
-	// finished or aborted outside st. Clear it so a later `st continue` cannot
-	// promote it onto an unrelated rebase. A live paused rebase keeps its
-	// record; `st continue` still needs it.
-	if s.PendingReparent != nil {
+	// A pending reparent or continuation whose rebase is gone is stale — the
+	// rebase was finished or aborted outside st. Clear them so a later `st
+	// continue` cannot apply them onto an unrelated rebase. A live paused
+	// rebase keeps its records; `st continue` still needs them.
+	if s.PendingReparent != nil || s.PendingContinuation != nil {
 		inProgress, err := g.RebaseInProgress()
 		if err != nil {
 			return nil, fmt.Errorf("checking rebase state: %w", err)
 		}
 		if !inProgress {
-			fixes = append(fixes, fmt.Sprintf("cleared the stale pending reparent of %s onto %s (its rebase is gone)", s.PendingReparent.Branch, s.PendingReparent.Parent))
-			s.PendingReparent = nil
+			if s.PendingReparent != nil {
+				fixes = append(fixes, fmt.Sprintf("cleared the stale pending reparent of %s onto %s (its rebase is gone)", s.PendingReparent.Branch, s.PendingReparent.Parent))
+				s.PendingReparent = nil
+			}
+			if s.PendingContinuation != nil {
+				fixes = append(fixes, fmt.Sprintf("cleared the stale pending continuation for %s (its rebase is gone)", s.PendingContinuation.Branch))
+				s.PendingContinuation = nil
+			}
 		}
 	}
 	return &OpResult{Summary: "repair complete", Notes: fixes}, nil

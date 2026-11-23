@@ -106,20 +106,19 @@ func MergedInto(ref string) (map[string]bool, error) {
 // cannot see: branch's tip is no ancestor of upstream, yet merging it would
 // add nothing.
 //
-// The check is exact tree-content equality, not a patch-id heuristic: P is the
-// path set of `git diff --no-renames upstream...branch` (three-dot =
-// merge-base to branch), and branch is contained iff `git diff --quiet
-// upstream branch -- P` finds no disagreement on exactly those paths.
-// --no-renames keeps BOTH sides of a rename in P: a branch renaming A to B
-// also deletes A, and a path set listing only B would overlook that deletion
-// when upstream merely copied A to B while keeping A. Equivalently, the
-// three-way merge of
-// branch into upstream would yield upstream's exact tree: at every contested
-// path ours==theirs, so no conflict is possible and upstream's other changes
-// are untouched. A branch whose squash-merge landed in a trunk that later
-// moved those same files forward is NOT contained — the conservative
-// direction, keeping the branch rather than guessing. An empty P (a branch
-// carrying no net change) is contained. Two spawns, no worktree, no index.
+// Fast path (works on Git 2.17+): compute the changed path set P = diff
+// --name-only --no-renames up...br (--no-renames keeps BOTH sides of a rename
+// in P so a rename's source deletion is checked too) and test `diff --quiet
+// up br -- P`. If every path in P already matches upstream identically, all
+// changes are contained.
+//
+// Three-way fallback (Git 2.38+): if the 2-way path differed because upstream
+// ALSO accepted an unrelated hunk in one of the same files before or after the
+// squash-merge, run `git merge-tree --write-tree up br` (in-memory, zero
+// worktree/index writes). If the 3-way merge succeeds cleanly AND yields
+// upstream's exact tree OID (`up^{tree}`), merging branch into upstream adds
+// nothing — every change is genuinely contained. Conflicts (exit 1) or older
+// Git without `--write-tree` (exit 129) return false conservatively.
 func ChangesContainedIn(upstream, branch string) (bool, error) {
 	if err := validRefArg("ref", upstream); err != nil {
 		return false, err
@@ -153,10 +152,34 @@ func ChangesContainedIn(upstream, branch string) (bool, error) {
 		return true, nil
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return false, fmt.Errorf("git diff --quiet %s %s -- <changed paths>: %w", up, br, err)
+	}
+	return changesContainedByMergeTree(up, br)
+}
+
+func changesContainedByMergeTree(up, br string) (bool, error) {
+	mergedOut, err := run("merge-tree", "--write-tree", up, br)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			// Exit 1 = merge conflict (not cleanly contained).
+			// Exit 129 = usage/unknown option on Git <2.38 (conservative fallback).
+			if exitErr.ExitCode() == 1 || exitErr.ExitCode() == 129 {
+				return false, nil
+			}
+		}
+		return false, fmt.Errorf("git merge-tree --write-tree %s %s: %w", up, br, err)
+	}
+	mergedTree, _, _ := strings.Cut(strings.TrimSpace(mergedOut), "\n")
+	if mergedTree == "" {
 		return false, nil
 	}
-	return false, fmt.Errorf("git diff --quiet %s %s -- <changed paths>: %w", up, br, err)
+	upTree, err := RevParse(up + "^{tree}")
+	if err != nil {
+		return false, fmt.Errorf("resolve tree of %s: %w", up, err)
+	}
+	return mergedTree == upTree, nil
 }
 
 // TipSubjectsFor returns the subject line of each named local branch's tip

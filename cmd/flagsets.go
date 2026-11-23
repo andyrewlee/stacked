@@ -223,13 +223,15 @@ func commitsFlagSet() *flag.FlagSet { return newCommitsFlags(&commitsOpts{}) }
 type submitOpts struct {
 	asJSON bool
 	all    bool
+	upto   bool
 	remote string
 	dryRun bool
 }
 
 func newSubmitFlags(o *submitOpts) *flag.FlagSet {
 	fs := newFlagSet("submit", &o.asJSON)
-	fs.BoolVar(&o.all, "all", false, "push every tracked branch, not just the current stack path")
+	fs.BoolVar(&o.all, "all", false, "push every tracked branch in the forest, not just the current stack")
+	fs.BoolVar(&o.upto, "upto", false, "push only up to the current branch (bottom..current), omitting upstack descendants")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to push to")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed without pushing")
 	return withDefaults(fs, "submit")
@@ -256,6 +258,7 @@ func openFlagSet() *flag.FlagSet { return newOpenFlags(&openOpts{}) }
 
 type syncOpts struct {
 	asJSON   bool
+	all      bool
 	noDelete bool
 	noFetch  bool
 	remote   string
@@ -264,6 +267,7 @@ type syncOpts struct {
 
 func newSyncFlags(o *syncOpts) *flag.FlagSet {
 	fs := newFlagSet("sync", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "sync every tracked stack in the forest, not just the current stack")
 	fs.BoolVar(&o.noDelete, "no-delete", false, "do not delete merged branches")
 	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against the local trunk")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")

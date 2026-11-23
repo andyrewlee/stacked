@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/andyrewlee/stacked/internal/git"
@@ -11,8 +12,8 @@ func init() {
 	register(&Command{
 		Name:       "submit",
 		Aliases:    []string{"ss"},
-		Summary:    "Push the stack's branches to the remote (no PRs — login-free); --all pushes the whole forest",
-		Usage:      "st submit [--all] [--remote <name>] [--dry-run] [--json]",
+		Summary:    "Push the current stack's branches to the remote (no PRs — login-free); --all pushes the whole forest",
+		Usage:      "st submit [--all] [--upto] [--remote <name>] [--dry-run] [--json]",
 		Run:        runSubmit,
 		NewFlagSet: submitFlagSet,
 	})
@@ -41,12 +42,14 @@ type submitResult struct {
 }
 
 // runSubmit pushes branches to the configured remote using --force-with-lease:
-// with --all, every tracked branch in the forest in topological order; without
-// it, every branch on the current stack — from the bottom branch (just above
-// trunk) up to and including the currently checked-out branch. stacked is
-// login-free and does not talk to any host API, so it never opens pull
-// requests; the user can create PRs on their host afterwards. With --dry-run no
-// branches are pushed and the planned pushes are printed instead.
+// with --all, every tracked branch in the forest in topological order; with
+// --upto, every branch from the bottom of the current stack up to and including
+// the current branch; by default, the full current stack (bottom through all
+// descendants). stacked is login-free and does not talk to any host API, so it
+// never opens pull requests; in text mode it prints compare URLs for newly
+// created remote branches (or unpushed branches on --dry-run) while --json
+// always carries the full prHints list. With --dry-run no branches are pushed
+// and the planned pushes are printed instead.
 func runSubmit(args []string) error {
 	var o submitOpts
 	fs := newSubmitFlags(&o)
@@ -56,7 +59,16 @@ func runSubmit(args []string) error {
 	if err := rejectArgs("submit", fs.Args()); err != nil {
 		return err
 	}
+	if o.all && o.upto {
+		return errors.New("--all and --upto cannot be combined")
+	}
 	asJSON, remote, dryRun := o.asJSON, o.remote, o.dryRun
+	scope := stack.SubmitStack
+	if o.all {
+		scope = stack.SubmitAll
+	} else if o.upto {
+		scope = stack.SubmitUpto
+	}
 
 	// Serialize with every other stack op: submit resolves which commits to
 	// push from stack state + branch tips, and a concurrent sync/delete/undo
@@ -78,7 +90,7 @@ func runSubmit(args []string) error {
 		return err
 	}
 
-	plan, err := stack.SubmitPlan(stackEnv(state, asJSON), state, o.all)
+	plan, err := stack.SubmitPlan(stackEnv(state, asJSON), state, scope)
 	if err != nil {
 		return err
 	}
@@ -91,6 +103,7 @@ func runSubmit(args []string) error {
 	}
 
 	pushed := []string{}
+	created := map[string]bool{}
 	if dryRun {
 		for _, name := range stackBranches {
 			pushed = append(pushed, name)
@@ -110,6 +123,9 @@ func runSubmit(args []string) error {
 		// can land A and C while rejecting B, so pushed is not a prefix.
 		for _, name := range stackBranches {
 			switch pushRes.Status[name] {
+			case git.PushCreated:
+				pushed = append(pushed, name)
+				created[name] = true
 			case git.PushUpdated, git.PushUpToDate:
 				pushed = append(pushed, name)
 			}
@@ -158,6 +174,11 @@ func runSubmit(args []string) error {
 		if published, err = git.PublishedStates(remote, stackBranches); err != nil {
 			return err
 		}
+		for _, name := range stackBranches {
+			if published[name] == git.PublishedMissing {
+				created[name] = true
+			}
+		}
 	}
 
 	payload := submitResult{Remote: remote, DryRun: dryRun, Pushed: pushed, RepoURL: repoURL, PRHints: prHints, Published: published}
@@ -170,10 +191,10 @@ func runSubmit(args []string) error {
 		for _, name := range pushed {
 			out("  %s\n", sanitizeForTerminal(name))
 		}
-		if repoURL != "" {
+		if repoURL != "" && len(created) > 0 {
 			out("\nopen pull requests on your host: %s\n", sanitizeForTerminal(repoURL))
 			for _, hint := range prHints {
-				if hint.CompareURL == "" {
+				if !created[hint.Head] || hint.CompareURL == "" {
 					continue
 				}
 				out("  %s -> %s  %s\n", sanitizeForTerminal(hint.Head), sanitizeForTerminal(hint.Base), sanitizeForTerminal(hint.CompareURL))

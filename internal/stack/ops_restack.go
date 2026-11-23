@@ -3,6 +3,8 @@
 // restack.go; their dry-run planners live there too.
 package stack
 
+import "errors"
+
 // Restack rebases the current branch and its upstack onto their parents. From
 // the trunk it restacks every tracked branch. Requires a clean working tree.
 func Restack(env Env, s *State) (*OpResult, error) {
@@ -19,13 +21,17 @@ func Restack(env Env, s *State) (*OpResult, error) {
 	if start != s.Trunk {
 		did, err := s.restackBranch(env, start)
 		if err != nil {
+			var ce *ConflictError
+			if errors.As(err, &ce) {
+				return nil, s.recordContinuation(env, ce.Branch, []string{start}, start, err)
+			}
 			return nil, err
 		}
 		if did {
 			rebased = append(rebased, start)
 		}
 	}
-	up, err := s.restackUpstack(env, start)
+	up, err := s.restackForestWithOrig(env, s.childNames(start), start)
 	if err != nil {
 		err = restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 		return nil, err
@@ -48,7 +54,7 @@ func RestackAllOp(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	rebased, err := restackAll(env, s)
+	rebased, err := s.restackForestWithOrig(env, s.childNames(s.Trunk), start)
 	if err != nil {
 		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 	}

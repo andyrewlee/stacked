@@ -193,3 +193,34 @@ func TestRepairMissingTrunkErrors(t *testing.T) {
 		t.Fatal("Repair with a missing trunk should error")
 	}
 }
+
+func TestInconsistenciesAndRepairStalePendingContinuation(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	s.PendingContinuation = &PendingContinuation{Branch: "b", Scope: []string{"b"}, OrigBranch: "a"}
+
+	tips, _ := f.Tips()
+	if got := s.Inconsistencies(tips, true); len(got) != 0 {
+		t.Fatalf("with rebase in progress, Inconsistencies = %+v, want none", got)
+	}
+	got := s.Inconsistencies(tips, false)
+	want := []Problem{{Kind: StalePendingContinuation, Branch: "b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Inconsistencies = %+v, want %+v", got, want)
+	}
+
+	res, err := Repair(env, s)
+	if err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	if s.PendingContinuation != nil {
+		t.Fatalf("PendingContinuation not cleared by Repair: %+v", s.PendingContinuation)
+	}
+	if len(res.Notes) == 0 {
+		t.Fatal("Repair reported no fixes for stale pending continuation")
+	}
+	if got := s.Inconsistencies(tips, false); len(got) != 0 {
+		t.Fatalf("post-repair Inconsistencies = %+v, want none", got)
+	}
+}

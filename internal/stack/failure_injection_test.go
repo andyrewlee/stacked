@@ -671,7 +671,7 @@ func TestProbeFailuresSurface(t *testing.T) {
 				return f, s, env
 			},
 			run: func(env Env, _ *fakeGit, s *State) error {
-				_, err := Sync(env, &fakeRemote{}, s, "origin", true, true)
+				_, err := Sync(env, &fakeRemote{}, s, "origin", true, true, true)
 				return err
 			},
 			wantSub: boom.Error(),
@@ -1117,8 +1117,8 @@ func TestContinueForeignStampSaveFailure(t *testing.T) {
 
 // TestContinueRestackFailureRestoresHEAD pins the post-continue cascade arm:
 // the conflicted branch completes but a dependent's restack fails
-// non-conflict — HEAD must be restored to the completed branch before the
-// error surfaces.
+// non-conflict — HEAD must be restored to the interrupted operation's original
+// branch before the error surfaces.
 func TestContinueRestackFailureRestoresHEAD(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -1141,8 +1141,8 @@ func TestContinueRestackFailureRestoresHEAD(t *testing.T) {
 	if errors.Is(err, ErrConflict) {
 		t.Fatalf("Continue = %v, must not classify the sibling failure as a conflict", err)
 	}
-	if f.head != "b" {
-		t.Fatalf("HEAD = %q, want b restored after the failed cascade", f.head)
+	if f.head != "a" {
+		t.Fatalf("HEAD = %q, want a restored after the failed cascade", f.head)
 	}
 }
 
@@ -1173,7 +1173,7 @@ func TestContinueFinalSaveFailure(t *testing.T) {
 }
 
 // TestContinueFinalRestoreFailure pins the last checkpoint: continue, restack,
-// and persist all succeeded but checking the completed branch back out fails —
+// and persist all succeeded but checking the original branch back out fails —
 // the error must surface.
 func TestContinueFinalRestoreFailure(t *testing.T) {
 	f, s, env := newEnvState()
@@ -1187,14 +1187,14 @@ func TestContinueFinalRestoreFailure(t *testing.T) {
 	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Modify = %v, want the pause conflict", err)
 	}
-	boom := errors.New("cannot check out b")
-	f.checkoutErr["b"] = boom
+	boom := errors.New("cannot check out a")
+	f.checkoutErr["a"] = boom
 
 	_, err := Continue(env, s)
 	if !errors.Is(err, boom) {
 		t.Fatalf("Continue = %v, want wrapped %v", err, boom)
 	}
-	if !strings.Contains(err.Error(), `restore branch "b"`) {
+	if !strings.Contains(err.Error(), `restore branch "a"`) {
 		t.Fatalf("Continue = %v, want the restore step named", err)
 	}
 	if f.head != "c" {

@@ -3071,3 +3071,141 @@ func TestCreateWorktreeDryRunJSON(t *testing.T) {
 		t.Fatal("create --worktree --dry-run tracked feat-x")
 	}
 }
+
+func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	remoteDir := t.TempDir()
+	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
+	// Set origin's fetch URL to a GitHub-shaped URL and its push URL to the local
+	// bare repo so PushBranches executes against a real remote while RemoteToHTTPS
+	// still builds compare URLs.
+	const ghURL = "https://github.com/acme/widgets.git"
+	mustRun(t, "git", "remote", "add", "origin", ghURL)
+	mustRun(t, "git", "remote", "set-url", "--push", "origin", remoteDir)
+
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+	mustCheckout(t, "main")
+	mustCreate(t, "other", "o.txt", "o\n", "o")
+	mustCheckout(t, "feat-a")
+
+	// --all and --upto are mutually exclusive.
+	if err := runSubmit([]string{"--all", "--upto"}); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("submit --all --upto = %v, want mutual exclusion error", err)
+	}
+
+	// Default from bottom of stack pushes the full current stack [feat-a, feat-b],
+	// excluding sibling stack [other].
+	type submitJSON struct {
+		Pushed  []string       `json:"pushed"`
+		PRHints []stack.PRHint `json:"prHints"`
+	}
+	dryAll := captureStdout(t, func() {
+		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --dry-run --json: %v", err)
+		}
+	})
+	var gotFull submitJSON
+	if err := json.Unmarshal([]byte(dryAll), &gotFull); err != nil {
+		t.Fatalf("unmarshal dry-run: %v\n%s", err, dryAll)
+	}
+	if want := []string{"feat-a", "feat-b"}; !reflect.DeepEqual(gotFull.Pushed, want) {
+		t.Fatalf("default submit from feat-a pushed = %v, want %v", gotFull.Pushed, want)
+	}
+
+	// --upto stops at the current branch [feat-a].
+	dryUpto := captureStdout(t, func() {
+		if err := runSubmit([]string{"--upto", "--dry-run", "--json"}); err != nil {
+			t.Fatalf("submit --upto --dry-run --json: %v", err)
+		}
+	})
+	var gotUpto submitJSON
+	if err := json.Unmarshal([]byte(dryUpto), &gotUpto); err != nil {
+		t.Fatalf("unmarshal --upto dry-run: %v\n%s", err, dryUpto)
+	}
+	if want := []string{"feat-a"}; !reflect.DeepEqual(gotUpto.Pushed, want) {
+		t.Fatalf("submit --upto pushed = %v, want %v", gotUpto.Pushed, want)
+	}
+
+	// Real first push of feat-a creates the remote branch -> text prints compare URL.
+	firstText := captureStdout(t, func() {
+		if err := runSubmit([]string{"--upto"}); err != nil {
+			t.Fatalf("first submit --upto: %v", err)
+		}
+	})
+	if !strings.Contains(firstText, "open pull requests on your host:") || !strings.Contains(firstText, "compare/main...feat-a") {
+		t.Fatalf("first submit text should print compare URL for newly created branch:\n%s", firstText)
+	}
+
+	// Second push of full stack: feat-a is updated/up-to-date, feat-b is newly created.
+	// Text mode prints compare URL ONLY for feat-b (not feat-a).
+	secondText := captureStdout(t, func() {
+		if err := runSubmit(nil); err != nil {
+			t.Fatalf("second submit: %v", err)
+		}
+	})
+	if strings.Contains(secondText, "compare/main...feat-a") {
+		t.Fatalf("second submit text should omit compare URL for already-existing feat-a:\n%s", secondText)
+	}
+	if !strings.Contains(secondText, "compare/feat-a...feat-b") {
+		t.Fatalf("second submit text should print compare URL for newly created feat-b:\n%s", secondText)
+	}
+
+	// Third push (all already exist): text omits the compare URL block entirely,
+	// while --json still emits full prHints for both branches.
+	write(t, "a.txt", "a2\n")
+	if err := runModify([]string{"-a"}); err != nil {
+		t.Fatalf("modify feat-a: %v", err)
+	}
+	repushText := captureStdout(t, func() {
+		if err := runSubmit(nil); err != nil {
+			t.Fatalf("re-submit text: %v", err)
+		}
+	})
+	if strings.Contains(repushText, "open pull requests on your host:") || strings.Contains(repushText, "compare/") {
+		t.Fatalf("re-submit text should omit compare URLs when no branch was newly created:\n%s", repushText)
+	}
+	repushJSON := captureStdout(t, func() {
+		if err := runSubmit([]string{"--json"}); err != nil {
+			t.Fatalf("re-submit --json: %v", err)
+		}
+	})
+	var gotJSON submitJSON
+	if err := json.Unmarshal([]byte(repushJSON), &gotJSON); err != nil {
+		t.Fatalf("unmarshal re-submit --json: %v\n%s", err, repushJSON)
+	}
+	if len(gotJSON.PRHints) != 2 {
+		t.Fatalf("--json prHints len = %d, want 2: %+v", len(gotJSON.PRHints), gotJSON.PRHints)
+	}
+}
+
+func TestDeleteReparentedRenderingTextAndJSON(t *testing.T) {
+	newRepo(t)
+	mustInit(t)
+	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
+	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
+
+	dryText := captureStdout(t, func() {
+		if err := runDelete([]string{"feat-a", "-f", "--dry-run"}); err != nil {
+			t.Fatalf("delete --dry-run: %v", err)
+		}
+	})
+	if !strings.Contains(dryText, "would re-parent: feat-b -> main") {
+		t.Fatalf("delete --dry-run text missing would re-parent:\n%s", dryText)
+	}
+
+	liveJSON := captureStdout(t, func() {
+		if err := runDelete([]string{"feat-a", "-f", "--json"}); err != nil {
+			t.Fatalf("delete --json: %v", err)
+		}
+	})
+	var res stack.OpResult
+	if err := json.Unmarshal([]byte(liveJSON), &res); err != nil {
+		t.Fatalf("unmarshal delete --json: %v\n%s", err, liveJSON)
+	}
+	want := []stack.Reparent{{Branch: "feat-b", OldParent: "feat-a", NewParent: "main"}}
+	if !reflect.DeepEqual(res.Reparented, want) {
+		t.Fatalf("delete --json reparented = %+v, want %+v", res.Reparented, want)
+	}
+}

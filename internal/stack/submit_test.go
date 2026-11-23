@@ -16,7 +16,7 @@ func TestSubmitPlanCurrentStackOrdersBottomUp(t *testing.T) {
 	mkBranch(t, env, s, f, "a", "b")
 	mkBranch(t, env, s, f, "b", "c")
 
-	plan, err := SubmitPlan(env, s, false)
+	plan, err := SubmitPlan(env, s, SubmitStack)
 	if err != nil {
 		t.Fatalf("SubmitPlan: %v", err)
 	}
@@ -26,18 +26,39 @@ func TestSubmitPlanCurrentStackOrdersBottomUp(t *testing.T) {
 	}
 }
 
-func TestSubmitPlanCurrentStackStopsAtCurrent(t *testing.T) {
+func TestSubmitPlanCurrentStackIncludesDescendantsAndExcludesSiblings(t *testing.T) {
 	t.Parallel()
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
-	// A descendant off the current branch is NOT part of the path.
+	mkBranch(t, env, s, f, "b", "c")
+	mkBranch(t, env, s, f, "main", "other")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := SubmitPlan(env, s, SubmitStack)
+	if err != nil {
+		t.Fatalf("SubmitPlan: %v", err)
+	}
+	want := []string{"a", "b", "c"}
+	if strings.Join(plan.Branches, ",") != strings.Join(want, ",") {
+		t.Fatalf("SubmitPlan.Branches = %v, want %v", plan.Branches, want)
+	}
+}
+
+func TestSubmitPlanUptoStopsAtCurrent(t *testing.T) {
+	t.Parallel()
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	// A descendant off the current branch is omitted under --upto.
 	mkBranch(t, env, s, f, "b", "descendant")
 	if err := f.Checkout("b"); err != nil {
 		t.Fatal(err)
 	}
 
-	plan, err := SubmitPlan(env, s, false)
+	plan, err := SubmitPlan(env, s, SubmitUpto)
 	if err != nil {
 		t.Fatalf("SubmitPlan: %v", err)
 	}
@@ -55,7 +76,7 @@ func TestSubmitPlanAtTrunk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := SubmitPlan(env, s, false)
+	plan, err := SubmitPlan(env, s, SubmitStack)
 	if err != nil {
 		t.Fatalf("SubmitPlan: %v", err)
 	}
@@ -76,7 +97,7 @@ func TestSubmitPlanRejectsUntrackedCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := SubmitPlan(env, s, false); err == nil || !strings.Contains(err.Error(), "not tracked") {
+	if _, err := SubmitPlan(env, s, SubmitStack); err == nil || !strings.Contains(err.Error(), "not tracked") {
 		t.Fatalf("SubmitPlan(untracked) error = %v, want not-tracked", err)
 	}
 }
@@ -91,7 +112,7 @@ func TestSubmitPlanAllOrdersWholeForest(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "x")
 	mkBranch(t, env, s, f, "x", "y")
 
-	plan, err := SubmitPlan(env, s, true)
+	plan, err := SubmitPlan(env, s, SubmitAll)
 	if err != nil {
 		t.Fatalf("SubmitPlan --all: %v", err)
 	}
@@ -123,7 +144,7 @@ func TestSubmitPlanAllDetectsCorruptForest(t *testing.T) {
 	// trunk-descendants walk cannot reach it.
 	s.Branches["orphan"].Parent = "ghost"
 
-	_, err := SubmitPlan(env, s, true)
+	_, err := SubmitPlan(env, s, SubmitAll)
 	if err == nil || !strings.Contains(err.Error(), "orphan") {
 		t.Fatalf("SubmitPlan --all on corrupt forest error = %v, want one naming orphan", err)
 	}
@@ -133,7 +154,7 @@ func TestSubmitPlanAllEmptyForest(t *testing.T) {
 	t.Parallel()
 	_, s, env := newEnvState()
 
-	plan, err := SubmitPlan(env, s, true)
+	plan, err := SubmitPlan(env, s, SubmitAll)
 	if err != nil {
 		t.Fatalf("SubmitPlan --all: %v", err)
 	}

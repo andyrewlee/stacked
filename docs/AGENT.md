@@ -77,8 +77,10 @@ message.
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
-  `branch`, `restacked`, `deleted`, `notes`, `tracked`, and `dryRun` are all
-  `omitempty` — absent when empty or false. `track --all` adopts every
+  `branch`, `restacked`, `deleted`, `reparented`, `notes`, `tracked`, and `dryRun` are all
+  `omitempty` — absent when empty or false. `reparented` lists
+  `[{ "branch", "oldParent", "newParent" }]` for every child whose stack parent
+  changed (`delete`, `sync`, `prune`, `fold`, and their `--dry-run` previews). `track --all` adopts every
   untracked local branch in one shot, inferring each parent (so an existing
   `a→b→c` stack becomes a real chain); it adds `"tracked": {"name": "parent"}`
   and `notes` entries for skipped branches (e.g. orphans sharing no history
@@ -97,7 +99,15 @@ message.
   refusals the real create would. In a multi-worktree repo, `restack`/`sync`
   rebase a dependent branch that lives in another worktree *inside that worktree*;
   a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
-  feat-a: its worktree is dirty (…)"`) rather than clobbered. `continue` resumes an interrupted restack,
+  feat-a: its worktree is dirty (…)"`) rather than clobbered. When run from a
+  tracked branch, `sync` scopes pruning and restacking to the current stack
+  (pass `--all` for the whole forest; from trunk or an untracked branch it
+  always syncs the whole forest). If `sync` prunes the current branch and it
+  has a single surviving child (not checked out in another worktree), `sync`
+  switches HEAD to that child, setting `branch` and adding `"switched to <child>"`
+  to `notes`. `continue` resumes an interrupted restack scoped to that
+  operation's subtree (never touching unrelated stacks/worktrees) and restores
+  HEAD to the original branch when possible,
   emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
   `notes` entry naming the branch whose conflict was just completed.
 - **`absorb --json`** — its own shape, NOT the shared one:
@@ -185,10 +195,11 @@ message.
 - **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
 - **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
 - **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }` — `…` includes `locked`, `detached`, `bare`, and `prunable` (`omitempty` each); `prunable` means git considers the registration stale (typically its directory was deleted out from under it — clear it with `git worktree prune`); `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip branches into `skipped` with a `reason`: `rm --all` reasons are "worktree has uncommitted changes", "checked out in the main worktree", "you are inside it", "a rebase is in progress there", "worktree is locked", and "stale worktree registration (directory gone); run `git worktree prune`"; `--all` skips the main worktree's branch and every branch whose worktree sits paused mid-rebase the same way. `st worktree lock <branch>` / `st worktree unlock <branch>` set and clear the worktree's git lock — the standing hold every mutation gate honors — and return `{ "branch", "path", "locked": bool }` (idempotent: re-locking or re-unlocking reports the current state; `lock` takes an optional `--reason <string>` recorded in git's lock metadata). The add forms take `--dry-run`: `st worktree <branch> --dry-run` returns the same payload plus `"dryRun": true`, and `st worktree --all --dry-run` the same aggregate plus `"dryRun": true` — predicting each row's `path` and `copied` (the `.worktreeinclude` selection a real run would make, including its collision refusals) without creating anything. `st shell install` emits a shell script, not JSON.
-- **`submit --json`** — `submit` pushes the current stack path
-  (trunk→current); `submit --all` pushes the whole tracked forest in
+- **`submit --json`** — `submit` pushes the full current stack
+  (bottom→top in dependency order); `submit --upto` stops at the current branch
+  (bottom→current); `submit --all` pushes the whole tracked forest in
   dependency order (parents before children) and works from any branch,
-  including trunk or detached HEAD. One shape for every outcome:
+  including trunk or detached HEAD (`--upto` and `--all` are mutually exclusive). One shape for every outcome:
   `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "published", "summary", "failed" }`
   (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
   `pushed` is empty and `summary` explains why). Under `--dry-run`, `published`
@@ -197,8 +208,11 @@ message.
   `diverged`, `missing`, or `unknown`, same semantics as `status --json`'s
   field — so the preview answers "is a submit needed" per branch without a
   fetch. On successful non-trunk submits,
-  `prHints` lists `{ "head", "base", "compareURL" }` objects so each stacked PR
-  targets its stack parent; `compareURL` is present for known compare URL shapes
+  `prHints` always lists `{ "head", "base", "compareURL" }` objects for every
+  pushed branch so each stacked PR
+  targets its stack parent (text mode prints compare URLs only for newly created
+  remote branches, or unpushed branches under `--dry-run`, to avoid noise on
+  force-update re-pushes); `compareURL` is present for known compare URL shapes
   (github.com, gitlab.com, and self-hosted hosts whose name carries a
   `github`/`gitlab` label); for unrecognized hosts the hint object still
   carries `head`/`base` but `compareURL` is simply absent. Submit reads the single

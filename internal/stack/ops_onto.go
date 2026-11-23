@@ -44,6 +44,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 		paused, outErr := rebaseFailure(g, rebaseErr, "moving", cur, target)
 		if paused {
 			s.PendingReparent = &PendingReparent{Branch: cur, Parent: target, ParentSHA: newParentTip}
+			s.PendingContinuation = &PendingContinuation{Branch: cur, Scope: []string{cur}, OrigBranch: cur}
 			if saveErr := env.save(); saveErr != nil {
 				// The reparent intent could not be persisted, so a later `st
 				// continue` (a fresh process loading from disk) would recover
@@ -52,6 +53,7 @@ func Onto(env Env, s *State, target string) (*OpResult, error) {
 				// state instead of diverging, and drop the in-memory pending entry
 				// to match the unpersisted disk.
 				s.PendingReparent = nil
+				s.PendingContinuation = nil
 				if abortErr := g.RebaseAbort(); abortErr != nil {
 					// Neither persisting nor aborting worked: the rebase is still
 					// paused, so keep ErrConflict (recovery via st continue/abort)
@@ -107,6 +109,9 @@ func Abort(env Env, s *State) (*OpResult, error) {
 	}
 	if s != nil && s.PendingReparent != nil && (conflicted == "" || s.PendingReparent.Branch == conflicted) {
 		s.PendingReparent = nil
+	}
+	if s != nil && s.PendingContinuation != nil && (conflicted == "" || s.PendingContinuation.Branch == conflicted) {
+		s.PendingContinuation = nil
 	}
 	return &OpResult{Summary: "aborted the in-progress rebase"}, nil
 }
@@ -183,6 +188,16 @@ func Continue(env Env, s *State) (*OpResult, error) {
 		return nil, fmt.Errorf("rebase did not complete: %w", ErrConflict)
 	}
 
+	// Adopt PendingContinuation only when it matches the rebase we just
+	// completed (or when git's head-name was unreadable). A mismatched record
+	// belongs to another rebase and is left for `st validate` / `st repair`,
+	// matching the PendingReparent contract.
+	var cont *PendingContinuation
+	if s.PendingContinuation != nil && (conflicted == "" || s.PendingContinuation.Branch == conflicted) {
+		cont = s.PendingContinuation
+		s.PendingContinuation = nil
+	}
+
 	// The just-finished branch now sits on its parent's current tip.
 	var foreignNote string
 	if conflicted != "" {
@@ -213,30 +228,79 @@ func Continue(env Env, s *State) (*OpResult, error) {
 		}
 	}
 
-	rebased, err := restackAll(env, s)
+	// Scope the follow-up cascade to the interrupted operation's subtree (or
+	// the continued branch's own subtree when resuming a manual rebase outside
+	// st) so `st continue` never leaks into unrelated stacks or worktrees.
+	var cascadeScope []string
+	restoreTarget := conflicted
+	switch {
+	case cont != nil:
+		cascadeScope = filterTracked(s, cont.Scope)
+		if cont.OrigBranch != "" {
+			restoreTarget = cont.OrigBranch
+		}
+	case conflicted != "" && s.IsTracked(conflicted):
+		cascadeScope = []string{conflicted}
+	default:
+		cascadeScope = s.childNames(s.Trunk)
+	}
+
+	rebased, err := s.restackForestWithOrig(env, cascadeScope, restoreTarget)
 	if err != nil {
-		if conflicted != "" {
-			err = restoreHEADAfterNonConflict(env, conflicted, s.Trunk, err)
+		if target := continueRestoreTarget(g, s, restoreTarget, conflicted); target != "" {
+			err = restoreHEADAfterNonConflict(env, target, s.Trunk, err)
 		}
 		return nil, err
 	}
+	notes := skippedWorktreeNotes(s)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
-	if conflicted != "" {
-		if err := restoreHEAD(env, conflicted, s.Trunk); err != nil {
+	if target := continueRestoreTarget(g, s, restoreTarget, conflicted); target != "" {
+		if err := restoreHEAD(env, target, s.Trunk); err != nil {
 			return nil, err
 		}
 	}
 
 	res := &OpResult{Summary: "continued restack", Restacked: rebased}
 	if conflicted != "" {
-		res.Notes = []string{"completed: " + conflicted}
+		res.Notes = append(res.Notes, "completed: "+conflicted)
 	}
+	res.Notes = append(res.Notes, notes...)
 	if foreignNote != "" {
 		res.Notes = append(res.Notes, foreignNote)
 	}
 	return res, nil
+}
+
+// filterTracked keeps only branches still present in s, preserving order. A
+// continuation scope recorded before an external delete/untrack won't crash
+// the follow-up cascade on a vanished root.
+func filterTracked(s *State, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if s.IsTracked(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// continueRestoreTarget chooses where Continue restores HEAD: prefer
+// origBranch when it still exists and is not checked out in another worktree,
+// otherwise fall back to conflicted (the branch whose rebase just finished).
+func continueRestoreTarget(g Git, s *State, origBranch, conflicted string) string {
+	if origBranch != "" && g.BranchExists(origBranch) {
+		if _, elsewhere, err := s.ownerElsewhere(g, origBranch); err == nil && !elsewhere {
+			return origBranch
+		}
+	}
+	if conflicted != "" && g.BranchExists(conflicted) {
+		if _, elsewhere, err := s.ownerElsewhere(g, conflicted); err == nil && !elsewhere {
+			return conflicted
+		}
+	}
+	return ""
 }
 
 // rebaseTargetIsParentBase reports whether ontoSHA — the target the just-finished

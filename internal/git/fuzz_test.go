@@ -160,7 +160,7 @@ func FuzzParsePushPorcelain(f *testing.F) {
 				t.Fatalf("status recorded for unrequested branch %q", name)
 			}
 			switch st {
-			case PushUpdated, PushUpToDate, PushRejected:
+			case PushCreated, PushUpdated, PushUpToDate, PushRejected:
 			default:
 				t.Fatalf("branch %q got unrecognized status %d", name, st)
 			}

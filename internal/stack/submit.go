@@ -22,13 +22,49 @@ type SubmitPlanResult struct {
 	Reason string
 }
 
-// SubmitPlan computes a submit's push order: with all, the whole forest; else
-// the current stack's path bottom..current. The push itself stays in cmd.
-func SubmitPlan(env Env, s *State, all bool) (*SubmitPlanResult, error) {
-	if all {
+// SubmitScope selects which branches `st submit` pushes.
+type SubmitScope int
+
+const (
+	// SubmitStack pushes the entire current stack (BottomOf(cur) plus all its
+	// descendants in topological order), excluding unrelated sibling stacks.
+	SubmitStack SubmitScope = iota
+	// SubmitUpto pushes only the bottom..current path (omitting upstack
+	// descendants of the current branch).
+	SubmitUpto
+	// SubmitAll pushes every tracked branch in the forest in topological order.
+	SubmitAll
+)
+
+// SubmitPlan computes a submit's push order according to scope. The push
+// itself stays in cmd.
+func SubmitPlan(env Env, s *State, scope SubmitScope) (*SubmitPlanResult, error) {
+	switch scope {
+	case SubmitAll:
 		return submitAll(env, s)
+	case SubmitUpto:
+		return submitUpto(env, s)
+	default:
+		return submitStack(env, s)
 	}
-	return submitCurrent(env, s)
+}
+
+// submitStack computes the whole current-stack push order (default): every
+// branch in the stack containing the currently checked-out branch, from its
+// bottom branch (just above trunk) through all descendants in parents-first
+// topological order.
+func submitStack(env Env, s *State) (*SubmitPlanResult, error) {
+	cur, err := env.Git.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	if cur == s.Trunk {
+		return &SubmitPlanResult{Reason: "at trunk; nothing to submit"}, nil
+	}
+	if !s.IsTracked(cur) {
+		return nil, ErrNotTracked(cur)
+	}
+	return &SubmitPlanResult{Branches: s.StackBranches(cur)}, nil
 }
 
 // submitAll computes the whole-forest push order (--all): the trunk's
@@ -57,10 +93,10 @@ func submitAll(env Env, s *State) (*SubmitPlanResult, error) {
 	return &SubmitPlanResult{Branches: branches}, nil
 }
 
-// SubmitForCurrent computes the current-stack push order (no --all): every
-// branch on the path from the bottom branch (just above trunk) up to and
-// including the currently checked-out branch.
-func submitCurrent(env Env, s *State) (*SubmitPlanResult, error) {
+// submitUpto computes the downstack push order (--upto): every branch on the
+// path from the bottom branch (just above trunk) up to and including the
+// currently checked-out branch.
+func submitUpto(env Env, s *State) (*SubmitPlanResult, error) {
 	cur, err := env.Git.CurrentBranch()
 	if err != nil {
 		return nil, err

@@ -5,10 +5,22 @@ package stack
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 )
+
+// isMergedOrContained reports whether branch's commits are already in parent —
+// either by commit ancestry (ordinary/ff merge) or by exact tree-content
+// containment (squash-merge / cherry-pick).
+func isMergedOrContained(g Git, parent, name string) (bool, error) {
+	merged, err := g.IsAncestor(branchTipRef(name), branchTipRef(parent))
+	if err != nil || merged {
+		return merged, err
+	}
+	return g.ChangesContainedIn(branchTipRef(parent), branchTipRef(name))
+}
 
 // Delete removes a tracked branch, re-parents its children onto the deleted
 // branch's parent, and restacks them so the deleted branch's commits are dropped
@@ -28,7 +40,7 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	parent := b.Parent
 
 	if !force {
-		mergedIntoParent, err := g.IsAncestor(branchTipRef(name), branchTipRef(parent))
+		mergedIntoParent, err := isMergedOrContained(g, parent, name)
 		if err != nil {
 			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, parent, err)
 		}
@@ -64,7 +76,9 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		}
 		return nil, err
 	}
+	beforeParents := parentSnapshot(s)
 	formerChildren := s.RemoveBranch(name)
+	reparented := diffReparents(beforeParents, s)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
@@ -72,7 +86,7 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 	// One pass over one shared tips map (the walk order — each child, then its
 	// descendants — matches DeletePlan's appendRestackPlans exactly), instead
 	// of a fresh full ref scan per re-parented child.
-	restacked, err := s.restackForest(env, formerChildren)
+	restacked, err := s.restackForestWithOrig(env, formerChildren, start)
 	if err != nil {
 		return nil, restoreHEADAfterNonConflict(env, start, s.Trunk, err)
 	}
@@ -81,21 +95,93 @@ func Delete(env Env, s *State, name string, force bool) (*OpResult, error) {
 		return nil, err
 	}
 
-	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}, Restacked: restacked, Notes: notes}
+	res := &OpResult{Summary: fmt.Sprintf("Deleted %s", name), Deleted: []string{name}, Reparented: reparented, Restacked: restacked, Notes: notes}
 	if len(formerChildren) > 0 {
 		res.Summary = fmt.Sprintf("Deleted %s; re-parented %d branch(es) onto %s", name, len(formerChildren), parent)
 	}
 	return res, nil
 }
 
+// syncScope resolves which tracked branches sync operates on. When all is
+// true, or when HEAD is on trunk (or an untracked branch), every tracked branch
+// is in scope (whole forest). Otherwise only the current branch's connected
+// stack (BottomOf(cur) and its descendants) is in scope, leaving unrelated
+// stacks and their worktrees untouched.
+func syncScope(s *State, cur string, all bool) (scoped bool, members map[string]bool) {
+	if all || !s.IsTracked(cur) {
+		return false, nil
+	}
+	stackBranches := s.StackBranches(cur)
+	members = make(map[string]bool, len(stackBranches))
+	for _, name := range stackBranches {
+		members[name] = true
+	}
+	return true, members
+}
+
+// survivingRoots returns the restack root branches for a sync pass after
+// pruning: for a whole-forest sync every direct child of trunk; for a scoped
+// stack sync every surviving member of members whose parent is no longer in
+// members (typically trunk), sorted deterministically.
+func survivingRoots(s *State, scoped bool, members map[string]bool) []string {
+	if !scoped {
+		return s.childNames(s.Trunk)
+	}
+	var roots []string
+	for _, name := range s.BranchNames() {
+		if !members[name] {
+			continue
+		}
+		if b := s.Branches[name]; b != nil && !members[b.Parent] {
+			roots = append(roots, name)
+		}
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+// singleSurvivingChild returns the sole immediate surviving descendant of
+// prunedOrig after pruning (e.g. the new bottom branch when the merged bottom
+// branch was just pruned), or "" when there are zero or multiple surviving
+// immediate descendants.
+func singleSurvivingChild(s *State, origDescendants []string) string {
+	if len(origDescendants) == 0 {
+		return ""
+	}
+	descSet := make(map[string]bool, len(origDescendants))
+	for _, name := range origDescendants {
+		descSet[name] = true
+	}
+	var direct []string
+	for _, name := range origDescendants {
+		b, ok := s.Get(name)
+		if !ok {
+			continue
+		}
+		// An immediate surviving descendant is one whose post-prune parent is
+		// no longer inside orig's old descendant set (e.g. re-parented onto
+		// trunk or an ancestor above orig).
+		if !descSet[b.Parent] {
+			direct = append(direct, name)
+		}
+	}
+	if len(direct) != 1 {
+		return ""
+	}
+	return direct[0]
+}
+
 // Sync fetches and fast-forwards the trunk via the remote port, prunes branches
-// already merged into the trunk, restacks every remaining stack onto the updated
-// trunk, and restores the caller's branch. With noDelete, merged branches are
-// kept. With noFetch the remote is untouched — no fetch, no fast-forward — and
-// the local trunk is the single basis for both pruning and restacking: a branch
-// merged only into the cached remote ref survives until the local trunk
-// advances. Requires a clean working tree.
-func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*OpResult, error) {
+// already merged into the trunk, restacks remaining branches onto the updated
+// trunk, and restores the caller's branch (or advances to the single surviving
+// child when the current branch was pruned). When all is false and HEAD is on
+// a tracked branch, only the current stack is pruned and restacked; from trunk
+// (or with all=true) the entire forest is synced. With noDelete, merged
+// branches are kept. With noFetch the remote is untouched — no fetch, no
+// fast-forward — and the local trunk is the single basis for both pruning and
+// restacking: a branch merged only into the cached remote ref survives until
+// the local trunk advances. Requires a clean working tree.
+func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch, all bool) (*OpResult, error) {
 	g := env.Git
 	if err := requireClean(g); err != nil {
 		return nil, err
@@ -104,6 +190,13 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 	if err != nil {
 		return nil, err
 	}
+	scoped, scopeMembers := syncScope(s, orig, all)
+	var origDescendants []string
+	if s.IsTracked(orig) {
+		origDescendants = s.Descendants(orig)
+	}
+	beforeParents := parentSnapshot(s)
+
 	// Resolve where the trunk is checked out ONCE: sync's trunk operations run
 	// in the trunk's own worktree, so `st sync` works from a linked worktree
 	// (where git refuses to check out the trunk a second time).
@@ -161,30 +254,51 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 		} else if err := g.Checkout(s.Trunk); err != nil {
 			return nil, fmt.Errorf("checkout trunk %q before pruning: %w", s.Trunk, err)
 		}
-		if deleted, err = PruneMergedAgainst(env, s, trunkRef); err != nil {
+		if deleted, err = pruneMergedScoped(env, s, trunkRef, scoped, scopeMembers); err != nil {
 			if restoreErr := restoreHEAD(env, orig, s.Trunk); restoreErr != nil {
 				return nil, AlsoFailed(err, fmt.Sprintf("restore %q", orig), restoreErr)
 			}
 			return nil, err
 		}
 	}
+	reparented := diffReparents(beforeParents, s)
 	// Persist the prune before restacking so a conflict cannot leave the metadata
 	// referencing already-deleted branches.
 	if err := env.save(); err != nil {
 		return nil, err
 	}
 
-	rebased, err := restackAll(env, s)
+	// If the branch HEAD started on was pruned and had a single surviving child
+	// that isn't owned by another worktree, advance HEAD to that new bottom
+	// branch instead of stranding the caller on trunk or detached HEAD.
+	restoreTarget := orig
+	advancedTo := ""
+	if !g.BranchExists(orig) {
+		if next := singleSurvivingChild(s, origDescendants); next != "" && g.BranchExists(next) {
+			if _, elsewhere, err := s.ownerElsewhere(g, next); err == nil && !elsewhere {
+				restoreTarget = next
+				advancedTo = next
+			}
+		}
+	}
+
+	roots := survivingRoots(s, scoped, scopeMembers)
+	rebased, err := s.restackForestWithOrig(env, roots, restoreTarget)
 	if err != nil {
 		// Leaves a conflict's rebase in progress for `st continue`; restores HEAD
 		// otherwise. Same guard the other mutations use.
-		return nil, restoreHEADAfterNonConflict(env, orig, s.Trunk, err)
+		return nil, restoreHEADAfterNonConflict(env, restoreTarget, s.Trunk, err)
 	}
 	if err := env.save(); err != nil {
 		return nil, err
 	}
 	notes := []string{"trunk: " + ffResult}
-	if !g.BranchExists(orig) && trunkOwnerDir != "" {
+	if advancedTo != "" {
+		if err := restoreHEAD(env, advancedTo, s.Trunk); err != nil {
+			return nil, err
+		}
+		notes = append(notes, "switched to "+advancedTo)
+	} else if !g.BranchExists(orig) && trunkOwnerDir != "" {
 		// orig was pruned and restoreHEAD's trunk fallback cannot be checked out
 		// here (it lives in another worktree): stay where the cascade left HEAD
 		// rather than fail or hijack that worktree's branch. That is NOT always
@@ -195,15 +309,17 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 		} else {
 			notes = append(notes, "HEAD left detached; trunk is checked out in "+trunkOwnerDir)
 		}
-	} else if err := restoreHEAD(env, orig, s.Trunk); err != nil {
+	} else if err := restoreHEAD(env, restoreTarget, s.Trunk); err != nil {
 		return nil, err
 	}
 
 	return &OpResult{
-		Summary:   "sync complete",
-		Deleted:   deleted,
-		Restacked: rebased,
-		Notes:     append(notes, append(skippedWorktreeNotes(s), unreachableNotes(s)...)...),
+		Summary:    "sync complete",
+		Branch:     advancedTo,
+		Deleted:    deleted,
+		Reparented: reparented,
+		Restacked:  rebased,
+		Notes:      append(notes, append(skippedWorktreeNotes(s), unreachableNotes(s)...)...),
 	}, nil
 }
 
@@ -212,7 +328,7 @@ func Sync(env Env, r Remote, s *State, remote string, noDelete, noFetch bool) (*
 // restack — without fetching, fast-forwarding, or mutating anything. Used by
 // the CLI dry-run path against the already-fetched remote trunk ref (the
 // dry run never fetches).
-func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResult, error) {
+func SyncPlanAgainst(env Env, s *State, noDelete, all bool, trunkRef string) (*OpResult, error) {
 	g := env.Git
 	// The real Sync requires a clean tree (Sync, above), so the preview must
 	// too — otherwise it reports branches it "would restack" that the real
@@ -221,12 +337,23 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 	if err := requireClean(g); err != nil {
 		return nil, err
 	}
-	tips, err := g.TipsFor(s.TipNames())
+	orig, err := g.CurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+	scoped, scopeMembers := syncScope(s, orig, all)
+	tipNames := s.TipNames()
+	if scoped {
+		tipNames = append([]string{s.Trunk}, s.StackBranches(orig)...)
+	}
+	tips, err := g.TipsFor(tipNames)
 	if err != nil {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
-	if err := requireStateTips(s, tips); err != nil {
-		return nil, err
+	for _, name := range tipNames {
+		if err := requireBranchTip(tips, name); err != nil {
+			return nil, err
+		}
 	}
 	if trunkRef != s.Trunk && trunkRef != branchTipRef(s.Trunk) {
 		trunkTip, err := g.RevParse(trunkRef)
@@ -236,10 +363,11 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 		tips[s.Trunk] = trunkTip
 	}
 	planState := cloneState(s)
+	beforeParents := parentSnapshot(planState)
 	deleted := map[string]bool{}
 	var deletedList []string
 	if !noDelete {
-		candidates, _, err := pruneTargets(env, s, trunkRef)
+		candidates, _, err := pruneTargetsScoped(env, s, trunkRef, scoped, scopeMembers, true)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +377,9 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 			deletedList = append(deletedList, name)
 		}
 	}
-	preview, err := restackPlanAgainstWithWorktrees(env, planState, planState.Trunk, tips)
+	reparented := diffReparents(beforeParents, planState)
+	roots := survivingRoots(planState, scoped, scopeMembers)
+	preview, err := appendRestackPlans(env, planState, tips, roots...)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +389,7 @@ func SyncPlanAgainst(env Env, s *State, noDelete bool, trunkRef string) (*OpResu
 			plan = append(plan, name)
 		}
 	}
-	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Restacked: plan, Notes: preview.notes(), DryRun: true}, nil
+	return &OpResult{Summary: "sync (dry run)", Deleted: deletedList, Reparented: reparented, Restacked: plan, Notes: preview.notes(), DryRun: true}, nil
 }
 
 // PruneMerged deletes tracked branches whose commits or content are already
@@ -272,7 +402,11 @@ func PruneMerged(env Env, s *State) ([]string, error) {
 // PruneMergedAgainst is PruneMerged against an arbitrary basis ref — the local
 // trunk, or a fetched remote-tracking ref (st prune --remote, sync --dry-run).
 func PruneMergedAgainst(env Env, s *State, trunkRef string) ([]string, error) {
-	candidates, releases, err := pruneTargets(env, s, trunkRef)
+	return pruneMergedScoped(env, s, trunkRef, false, nil)
+}
+
+func pruneMergedScoped(env Env, s *State, trunkRef string, scoped bool, members map[string]bool) ([]string, error) {
+	candidates, releases, err := pruneTargetsScoped(env, s, trunkRef, scoped, members, true)
 	if err != nil {
 		return nil, err
 	}
@@ -285,42 +419,49 @@ func PruneMergedAgainst(env Env, s *State, trunkRef string) ([]string, error) {
 // is on a prunable branch it refuses rather than auto-checkout: sync owns the
 // move. No clean-tree requirement: branch deletion touches no worktree content.
 func Prune(env Env, s *State, trunkRef string) (*OpResult, error) {
-	names, err := pruneMergedNames(env, s, trunkRef)
+	names, err := pruneMergedNames(env, s, trunkRef, false, nil)
 	if err != nil {
 		return nil, err
 	}
 	if err := refusePruneCurrent(env, names); err != nil {
 		return nil, err
 	}
-	candidates, releases, err := gatePruneCandidates(env, s, names)
+	candidates, releases, err := gatePruneCandidates(env, s, names, false)
 	if err != nil {
 		return nil, err
 	}
+	beforeParents := parentSnapshot(s)
 	deleted, err := applyPrune(env, s, candidates, releases)
 	if err != nil {
 		return nil, err
 	}
 	return &OpResult{
-		Summary: fmt.Sprintf("Pruned %d merged branch(es)", len(deleted)),
-		Deleted: deleted,
+		Summary:    fmt.Sprintf("Pruned %d merged branch(es)", len(deleted)),
+		Deleted:    deleted,
+		Reparented: diffReparents(beforeParents, s),
 	}, nil
 }
 
 // PrunePlan previews Prune against trunkRef — the same merged enumeration,
 // current-branch refusal, and worktree-release gate, with nothing deleted.
 func PrunePlan(env Env, s *State, trunkRef string) (*OpResult, error) {
-	names, err := pruneMergedNames(env, s, trunkRef)
+	names, err := pruneMergedNames(env, s, trunkRef, false, nil)
 	if err != nil {
 		return nil, err
 	}
 	if err := refusePruneCurrent(env, names); err != nil {
 		return nil, err
 	}
-	candidates, _, err := gatePruneCandidates(env, s, names)
+	candidates, _, err := gatePruneCandidates(env, s, names, false)
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: "prune (dry run)", Deleted: candidates, DryRun: true}, nil
+	planState := cloneState(s)
+	beforeParents := parentSnapshot(planState)
+	for _, name := range candidates {
+		planState.RemoveBranch(name)
+	}
+	return &OpResult{Summary: "prune (dry run)", Deleted: candidates, Reparented: diffReparents(beforeParents, planState), DryRun: true}, nil
 }
 
 // refusePruneCurrent refuses a standalone prune that would delete the branch
@@ -344,8 +485,10 @@ func refusePruneCurrent(env Env, names []string) error {
 // branch is deleted instead of mid-loop. It also returns the computed release
 // plan (name → worktree path, "" when nothing is released) so the apply can
 // remove worktrees without re-probing — the gate's verdict is authoritative
-// within one locked command.
-func gatePruneCandidates(env Env, s *State, names []string) (candidates []string, releases map[string]string, err error) {
+// within one locked command. When allowCurrent is true (Sync / SyncPlanAgainst),
+// a candidate owned by the current worktree is permitted without scheduling
+// worktree removal because Sync parks HEAD elsewhere before pruning.
+func gatePruneCandidates(env Env, s *State, names []string, allowCurrent bool) (candidates []string, releases map[string]string, err error) {
 	g := env.Git
 	wts, err := g.Worktrees()
 	if err != nil {
@@ -388,6 +531,9 @@ func gatePruneCandidates(env Env, s *State, names []string) (candidates []string
 			continue
 		}
 		if sameWorktreePath(root, owner.Path) {
+			if allowCurrent {
+				continue
+			}
 			early[name] = fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, name)
 			continue
 		}
@@ -426,23 +572,31 @@ func gatePruneCandidates(env Env, s *State, names []string) (candidates []string
 	return candidates, releases, nil
 }
 
-// pruneTargets returns the deletable merged set in sorted order for the sync
-// path (HEAD already moved off any prunable branch): pruneMergedNames plus the
-// release gate and its release plan.
-func pruneTargets(env Env, s *State, trunkRef string) (candidates []string, releases map[string]string, err error) {
-	names, err := pruneMergedNames(env, s, trunkRef)
+// pruneTargetsScoped returns the deletable merged set in sorted order for the
+// sync path (optionally restricted to members when scoped is true).
+func pruneTargetsScoped(env Env, s *State, trunkRef string, scoped bool, members map[string]bool, allowCurrent bool) (candidates []string, releases map[string]string, err error) {
+	names, err := pruneMergedNames(env, s, trunkRef, scoped, members)
 	if err != nil {
 		return nil, nil, err
 	}
-	return gatePruneCandidates(env, s, names)
+	return gatePruneCandidates(env, s, names, allowCurrent)
 }
 
 // pruneMergedNames returns the tracked branches already merged into trunkRef,
-// in sorted order — tips sanity check plus the merged enumeration. Shared by
-// every prune preview and apply path.
-func pruneMergedNames(env Env, s *State, trunkRef string) ([]string, error) {
+// in sorted order — tips sanity check plus the merged enumeration. When scoped
+// is true, only branches in members are checked and returned.
+func pruneMergedNames(env Env, s *State, trunkRef string, scoped bool, members map[string]bool) ([]string, error) {
 	g := env.Git
 	names := s.BranchNames()
+	if scoped {
+		filtered := make([]string, 0, len(members))
+		for _, name := range names {
+			if members[name] {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
 	tips, err := g.TipsFor(names)
 	if err != nil {
 		return nil, fmt.Errorf("read tracked branch tips: %w", err)
@@ -452,7 +606,7 @@ func pruneMergedNames(env Env, s *State, trunkRef string) ([]string, error) {
 			return nil, fmt.Errorf("tracked branch %q does not exist", name)
 		}
 	}
-	merged, err := mergedBranches(g, s, trunkRef)
+	merged, err := mergedBranches(g, names, trunkRef)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +692,7 @@ func applyPrune(env Env, s *State, candidates []string, releases map[string]stri
 // (never a patch-id heuristic, so a branch carrying unique content is never
 // flagged). trunkRef may be the local trunk or a fetched remote-tracking ref;
 // a bare name is qualified so a tag can never shadow the trunk branch.
-func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
+func mergedBranches(g Git, names []string, trunkRef string) (map[string]bool, error) {
 	if !strings.HasPrefix(trunkRef, "refs/") {
 		trunkRef = branchTipRef(trunkRef)
 	}
@@ -549,8 +703,8 @@ func mergedBranches(g Git, s *State, trunkRef string) (map[string]bool, error) {
 	// The containment diffs are independent read-only probes — fan them out
 	// and fold the results back in sorted-name order, so the merged map and
 	// the first error are exactly what a serial pass would produce.
-	unmerged := make([]string, 0, len(s.Branches))
-	for _, name := range s.BranchNames() {
+	unmerged := make([]string, 0, len(names))
+	for _, name := range names {
 		if !merged[name] {
 			unmerged = append(unmerged, name)
 		}

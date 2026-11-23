@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -935,7 +936,7 @@ func TestParsePushPorcelain(t *testing.T) {
 				"*\trefs/heads/feat-b:refs/heads/feat-b\t[new branch]\n" +
 				"*\trefs/heads/feat-c:refs/heads/feat-c\t[new branch]\n" +
 				"Done\n",
-			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushUpdated, "feat-c": PushUpdated},
+			want: map[string]PushStatus{"feat-a": PushCreated, "feat-b": PushCreated, "feat-c": PushCreated},
 		},
 		{
 			name: "non-prefix rejection",
@@ -944,7 +945,7 @@ func TestParsePushPorcelain(t *testing.T) {
 				"!\trefs/heads/feat-b:refs/heads/feat-b\t[remote rejected] (hook declined)\n" +
 				"*\trefs/heads/feat-c:refs/heads/feat-c\t[new branch]\n" +
 				"Done\n",
-			want: map[string]PushStatus{"feat-a": PushUpdated, "feat-b": PushRejected, "feat-c": PushUpdated},
+			want: map[string]PushStatus{"feat-a": PushCreated, "feat-b": PushRejected, "feat-c": PushCreated},
 		},
 		{
 			name: "fast-forward flag is a literal space",
@@ -1032,9 +1033,9 @@ func TestPushBranchesReportsPerRefStatus(t *testing.T) {
 		t.Fatal("PushBranches succeeded while feat-b was rejected")
 	}
 	want := map[string]PushStatus{
-		"feat-a": PushUpdated,
+		"feat-a": PushCreated,
 		"feat-b": PushRejected,
-		"feat-c": PushUpdated,
+		"feat-c": PushCreated,
 	}
 	for b, wantStatus := range want {
 		if res.Status[b] != wantStatus {
@@ -1768,6 +1769,60 @@ func TestChangesContainedIn(t *testing.T) {
 	}
 	if contained {
 		t.Fatal("main moved past feat's content; feat must NOT be contained")
+	}
+
+	// Disjoint concurrent edit on the SAME file before squash-merge:
+	// main and shared-branch both edit different regions of shared.txt, then
+	// shared-branch is squash-merged onto main. The 2-way diff on shared.txt
+	// differs (main also carries its concurrent hunk), so only the 3-way
+	// merge-tree check proves shared-branch's changes are fully contained.
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	writeFile(t, "shared.txt", strings.Join(lines, "\n")+"\n")
+	mustGit(t, "add", "shared.txt")
+	mustGit(t, "commit", "-q", "-m", "add shared.txt")
+
+	mustGit(t, "checkout", "-q", "-b", "disjoint-squash")
+	branchLines := append([]string(nil), lines...)
+	branchLines[1] = "line 02 edited by branch"
+	writeFile(t, "shared.txt", strings.Join(branchLines, "\n")+"\n")
+	mustGit(t, "add", "shared.txt")
+	mustGit(t, "commit", "-q", "-m", "branch edits top of shared.txt")
+
+	mustGit(t, "checkout", "-q", "main")
+	mainLines := append([]string(nil), lines...)
+	mainLines[18] = "line 19 edited by concurrent PR"
+	writeFile(t, "shared.txt", strings.Join(mainLines, "\n")+"\n")
+	mustGit(t, "add", "shared.txt")
+	mustGit(t, "commit", "-q", "-m", "concurrent PR edits bottom of shared.txt")
+
+	// Squash-merge disjoint-squash onto the advanced main.
+	mustGit(t, "merge", "-q", "--squash", "disjoint-squash")
+	mustGit(t, "commit", "-q", "-m", "squash disjoint-squash")
+
+	contained, err = ChangesContainedIn("main", "disjoint-squash")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn disjoint-squash: %v", err)
+	}
+	if !contained {
+		t.Fatal("disjoint-squash was squash-merged onto main alongside an unrelated hunk in shared.txt; must be contained")
+	}
+	// A branch with an unmerged edit on the same shared file is still NOT contained.
+	mustGit(t, "checkout", "-q", "-b", "disjoint-extra", "disjoint-squash")
+	extraLines := append([]string(nil), branchLines...)
+	extraLines[9] = "line 10 unmerged edit"
+	writeFile(t, "shared.txt", strings.Join(extraLines, "\n")+"\n")
+	mustGit(t, "add", "shared.txt")
+	mustGit(t, "commit", "-q", "-m", "extra unmerged hunk")
+	mustGit(t, "checkout", "-q", "main")
+	contained, err = ChangesContainedIn("main", "disjoint-extra")
+	if err != nil {
+		t.Fatalf("ChangesContainedIn disjoint-extra: %v", err)
+	}
+	if contained {
+		t.Fatal("disjoint-extra carries an unmerged hunk in shared.txt; must NOT be contained")
 	}
 
 	// Rename-vs-copy: renamer renames r.txt to r-moved.txt, while main only

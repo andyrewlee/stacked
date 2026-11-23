@@ -1,7 +1,9 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/andyrewlee/stacked/internal/git"
 )
@@ -46,15 +48,6 @@ func (s *State) needsRestackAgainstTips(name string, tips map[string]string) (bo
 		return false, fmt.Errorf("resolve parent %q: branch tip not found", b.Parent)
 	}
 	return parentTip != b.ParentSHA, nil
-}
-
-func requireStateTips(s *State, tips map[string]string) error {
-	for _, name := range s.TipNames() {
-		if err := requireBranchTip(tips, name); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func requireBranchTip(tips map[string]string, name string) error {
@@ -247,6 +240,36 @@ func RestackAllPlan(env Env, s *State) (*OpResult, error) {
 // returns the names of the branches that were actually rebased.
 func (s *State) restackUpstack(env Env, name string) ([]string, error) {
 	return s.restackForest(env, s.childNames(name))
+}
+
+// recordContinuation records PendingContinuation so `st continue` knows which
+// subtree to finish and which branch to restore HEAD to after the paused
+// rebase completes. Always preserves conflictErr in the returned error chain.
+func (s *State) recordContinuation(env Env, branch string, scope []string, origBranch string, conflictErr error) error {
+	s.PendingContinuation = &PendingContinuation{
+		Branch:     branch,
+		Scope:      slices.Clone(scope),
+		OrigBranch: origBranch,
+	}
+	if saveErr := env.save(); saveErr != nil {
+		return AlsoFailed(conflictErr, "record pending continuation", saveErr)
+	}
+	return conflictErr
+}
+
+// restackForestWithOrig runs restackForest over starts and, if a rebase stops
+// on a conflict, persists PendingContinuation(starts, origBranch) so `st
+// continue` stays scoped to starts instead of cascading across unrelated stacks.
+func (s *State) restackForestWithOrig(env Env, starts []string, origBranch string) ([]string, error) {
+	rebased, err := s.restackForest(env, starts)
+	if err != nil {
+		var ce *ConflictError
+		if errors.As(err, &ce) {
+			return rebased, s.recordContinuation(env, ce.Branch, starts, origBranch, err)
+		}
+		return rebased, err
+	}
+	return rebased, nil
 }
 
 // childNames returns the names of name's direct children, sorted (Children is

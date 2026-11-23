@@ -93,8 +93,10 @@ type PushStatus int
 const (
 	// PushUnconfirmed means no usable status record arrived for the ref.
 	PushUnconfirmed PushStatus = iota
-	// PushUpdated means the remote moved the ref (new, fast-forward, or
-	// forced update).
+	// PushCreated means the remote created a brand-new ref (`*` porcelain flag).
+	PushCreated
+	// PushUpdated means the remote moved an existing ref (fast-forward, forced
+	// update, or deletion).
 	PushUpdated
 	// PushUpToDate means the remote already had the requested tip.
 	PushUpToDate
@@ -185,7 +187,9 @@ func parsePushPorcelain(out string, branches []string, res *PushResult) {
 			continue
 		}
 		switch line[0] {
-		case ' ', '*', '+', '-':
+		case '*':
+			res.Status[branch] = PushCreated
+		case ' ', '+', '-':
 			res.Status[branch] = PushUpdated
 		case '=':
 			res.Status[branch] = PushUpToDate

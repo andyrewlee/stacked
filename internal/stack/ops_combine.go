@@ -75,7 +75,9 @@ func Fold(env Env, s *State) (*OpResult, error) {
 		}
 		return nil, fmt.Errorf("deleting %q: %w", cur, err)
 	}
+	beforeParents := parentSnapshot(s)
 	s.RemoveBranch(cur)
+	reparented := diffReparents(beforeParents, s)
 	if err := env.save(); err != nil {
 		return nil, err
 	}
@@ -84,7 +86,7 @@ func Fold(env Env, s *State) (*OpResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: upstack.restacked, Notes: upstack.notes}, nil
+	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: upstack.restacked, Reparented: reparented, Notes: upstack.notes}, nil
 }
 
 // Squash collapses every commit on the current branch (since its parent) into

@@ -41,9 +41,9 @@ func renderResult(res *stack.OpResult, asJSON bool) error {
 		out("%s\n", data)
 		return nil
 	}
-	restacked, deleted, tracked := "restacked", "deleted", "tracked"
+	restacked, deleted, reparented, tracked := "restacked", "deleted", "re-parented", "tracked"
 	if res.DryRun {
-		restacked, deleted, tracked = "would restack", "would delete", "would track"
+		restacked, deleted, reparented, tracked = "would restack", "would delete", "would re-parent", "would track"
 	}
 	out("%s\n", sanitizeForTerminal(res.Summary))
 	if len(res.Restacked) > 0 {
@@ -51,6 +51,13 @@ func renderResult(res *stack.OpResult, asJSON bool) error {
 	}
 	if len(res.Deleted) > 0 {
 		out("%s: %s\n", deleted, joinTerminalNames(res.Deleted))
+	}
+	if len(res.Reparented) > 0 {
+		pairs := make([]string, 0, len(res.Reparented))
+		for _, r := range res.Reparented {
+			pairs = append(pairs, r.Branch+" -> "+r.NewParent)
+		}
+		out("%s: %s\n", reparented, joinTerminalNames(pairs))
 	}
 	if len(res.Tracked) > 0 {
 		names := make([]string, 0, len(res.Tracked))

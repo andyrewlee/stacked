@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -528,6 +529,14 @@ func sameState(s *State, raw []byte) (bool, error) {
 		return false, nil
 	}
 	if s.PendingReparent != nil && *s.PendingReparent != *prev.PendingReparent {
+		return false, nil
+	}
+	if (s.PendingContinuation == nil) != (prev.PendingContinuation == nil) {
+		return false, nil
+	}
+	if s.PendingContinuation != nil && (s.PendingContinuation.Branch != prev.PendingContinuation.Branch ||
+		s.PendingContinuation.OrigBranch != prev.PendingContinuation.OrigBranch ||
+		!slices.Equal(s.PendingContinuation.Scope, prev.PendingContinuation.Scope)) {
 		return false, nil
 	}
 	if len(s.Branches) != len(prev.Branches) {

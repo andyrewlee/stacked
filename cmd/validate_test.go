@@ -58,6 +58,18 @@ func TestValidateProblemCategories(t *testing.T) {
 			},
 			wantSub: "part of a parent cycle",
 		},
+		{
+			name:  "stale_pending_continuation",
+			setup: func(t *testing.T) { mustRun(t, "git", "branch", "a") },
+			state: func(sha string) *stack.State {
+				return &stack.State{
+					Trunk:               "main",
+					Branches:            map[string]*stack.Branch{"a": {Name: "a", Parent: "main", ParentSHA: sha}},
+					PendingContinuation: &stack.PendingContinuation{Branch: "a", Scope: []string{"a"}, OrigBranch: "a"},
+				}
+			},
+			wantSub: "has a recorded pending continuation but no rebase is in progress",
+		},
 	}
 
 	for _, c := range cases {

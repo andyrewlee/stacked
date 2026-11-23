@@ -161,10 +161,10 @@ Every command below except `__complete` and `completion` and `shell` (plus `help
 | `st squash [-m|--message <msg>] [--dry-run]` | | Squash all of the current branch's commits into one (`--dry-run` previews). |
 | `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
 | `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update the stack metadata (`--dry-run` previews the re-parenting). |
-| `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch and re-parent its children (`--dry-run` previews). |
-| `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, restack everything, prune merged branches (`--no-fetch` runs offline against the local trunk; `--dry-run` previews). |
+| `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch (merged or squash-merged, or `-f` to force) and re-parent its children (`--dry-run` previews). |
+| `st sync [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, prune merged branches, and restack the current stack (`--all` syncs the whole forest; `--no-fetch` runs offline; `--dry-run` previews). |
 | `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
-| `st submit [--all] [--remote <name>] [--dry-run]` | `ss` | Push the stack to the remote and print the repo URL and per-branch PR compare URLs (no PRs; `--all` pushes the whole forest). |
+| `st submit [--upto] [--all] [--remote <name>] [--dry-run]` | `ss` | Push the current stack to the remote (`--upto` stops at current; `--all` pushes the whole forest) and print PR compare URLs for newly created branches. |
 | `st open [--all] [--remote <name>] [--dry-run]` | | Open the PR compare URLs `st submit` prints in a browser (`--all` opens every tracked branch's; `--dry-run` prints without opening; `--json` emits the URLs as data). |
 | `st undo [<n>] [--list \| --dry-run] [--force]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews, `--force` restores refs that moved outside st). |
 | `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
@@ -317,31 +317,38 @@ with `st continue` or `st abort`. Pauses on untracked branches never block.
 #### `st continue`
 Resumes a restack that stopped on a merge conflict. After you resolve the conflict
 and `git add` the files, `st continue` completes the in-progress rebase, records
-the branch's new base, and restacks the rest of the stack — picking up exactly
-where it left off. If it hits another conflict, resolve and run `st continue`
-again.
+the branch's new base, restacks the remainder of that interrupted operation's
+subtree (never leaking into unrelated stacks or worktrees), and restores your
+original branch when possible. If it hits another conflict, resolve and run
+`st continue` again.
 
 #### `st delete <name> [-f|--force] [--dry-run]` (`rm`)
 Deletes a tracked branch, re-parents its children onto the deleted branch's parent,
-and restacks them. `-f` force-deletes an unmerged branch. `--dry-run` previews the
-deleted/restacked branches without changing anything.
+and restacks them. Without `-f`, branches already merged or squash-merged into
+their stack parent are allowed; `-f` force-deletes an unmerged branch. `--dry-run`
+previews the deleted, re-parented, and restacked branches without changing anything.
 
-#### `st sync [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` (`s`)
+#### `st sync [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
-the trunk (re-parenting their children), restacks every remaining stack onto the
-updated trunk, and restores your original branch. A branch counts as merged when
+the trunk (re-parenting their children), restacks surviving branches onto the
+updated trunk, and restores your original branch — or switches to the single
+surviving child when the current branch itself was pruned. When run from a
+tracked branch, pruning and restacking scope to the current stack so unrelated
+stacks and worktrees are left untouched; pass `--all` (or run from trunk) to
+sync the whole forest. A branch counts as merged when
 its commits are ancestors of the trunk OR when its entire diff is already in the
-trunk's tree — so a PR that squash-merged on the host is detected from git data
-alone (no API), even though the branch's tip is no ancestor. The check is exact
-tree-content containment: a branch carrying any content the trunk lacks is never
-pruned. Sync also works from inside a branch's linked worktree: the trunk
+trunk's tree — including squash-merges where another PR edited a disjoint region
+of the same file (via 3-way `git merge-tree --write-tree` on Git 2.38+, with
+exact 2-way tree diff fallback on older Git) — so squash-merged PRs are detected
+from git data alone (no API). A branch carrying any content the trunk lacks is
+never pruned. Sync also works from inside a branch's linked worktree: the trunk
 fast-forward runs in the trunk's own worktree (a dirty trunk worktree blocks
 sync with an error naming its path). `--no-delete` keeps merged branches;
 `--no-fetch` skips the fetch and fast-forward entirely — prune and restack run
 against the local trunk, so sync can run fully offline; a branch landed only on
 the remote survives until the local trunk advances. `--remote` still selects
 and validates the remote configuration without changing the offline basis.
-`--dry-run` previews the prune/restack plan without fetching or changing
+`--dry-run` previews the prune/re-parent/restack plan without fetching or changing
 anything (against the same local-trunk basis under `--no-fetch`, else the
 already-cached `refs/remotes/<remote>/<trunk>`).
 
@@ -354,17 +361,18 @@ tree; pruning the current branch is refused with "check out another branch or
 run st sync". `--dry-run` lists the same set under `"dryRun": true` without
 deleting anything.
 
-#### `st submit [--all] [--remote <name>] [--dry-run]` (`ss`)
-`--all` pushes the whole tracked forest in dependency order (trunk→tips),
-independent of where you are. Without it, pushes every branch on the current
-stack — from the bottom branch up to the
-currently checked-out branch — using `--force-with-lease`, setting each branch's
-upstream (`-u`). It is login-free and never opens PRs; it prints your repository's
-URL so you can open pull requests on your host by hand. For github.com,
-gitlab.com, and self-hosted remotes whose hostname carries a `github`/`gitlab`
-label (GitHub Enterprise, self-managed GitLab) it also prints one compare URL
-per pushed branch (`head -> base`), so each stacked PR can be opened against its correct base;
-`--json` carries the same data as `prHints` (see docs/AGENT.md).
+#### `st submit [--upto] [--all] [--remote <name>] [--dry-run]` (`ss`)
+Pushes every branch in the current stack — from its bottom branch through its
+descendants (`bottom..top`) — in dependency order using `--force-with-lease`,
+setting each branch's upstream (`-u`). Pass `--upto` to push only through the
+current branch (`bottom..current`), or `--all` to push the whole tracked forest
+independent of where you are (`--upto` and `--all` are mutually exclusive). It
+is login-free and never opens PRs; in text mode it prints your repository's URL
+and per-branch compare URLs (`head -> base`) for newly created remote branches
+(or unpushed branches under `--dry-run`) on github.com, gitlab.com, and
+self-hosted remotes whose hostname carries a `github`/`gitlab` label, omitting
+repeat compare URLs when updating branches that already exist on the remote;
+`--json` always carries the full `prHints` list (see docs/AGENT.md).
 `--dry-run` prints the plan without pushing. Most stack-mutating commands also accept
 `--json` for machine-readable output.
 
@@ -443,7 +451,8 @@ it; `--force` bypasses the refusal.
 #### `st repair`
 Fixes the drift `st validate` reports: untracks branches whose git branch was
 deleted outside st, re-parents branches with an invalid parent onto the trunk,
-clears stale pending reparents whose rebase is gone, and breaks parent cycles.
+clears stale pending reparents and pending continuations whose rebase is gone,
+and breaks parent cycles.
 Re-parented branches may then need `st restack`.
 
 #### `st completion <bash|zsh|fish>`
@@ -459,7 +468,8 @@ flat probes — no fetch, no history walk, silent-empty outside a repo. Set
 Checks the recorded stack against the actual repository and reports problems — a
 missing trunk, tracked branches whose git branch was deleted outside `stacked`,
 parents that are no longer the trunk or a tracked branch, tracked parents whose
-own git ref is gone, stale pending reparents whose rebase no longer exists, and
+own git ref is gone, stale pending reparents or pending continuations whose
+rebase no longer exists, and
 parent cycles — plus warnings for branches that have drifted and need a restack.
 Exits non-zero when any problem is found.
 

@@ -244,3 +244,51 @@ func TestSyncConflictContinue(t *testing.T) {
 	r.stOK("continue")
 	r.stOK("validate")
 }
+
+// TestContinueScopedToStackDoesNotTouchSiblingWorktree proves `st continue`
+// resumes only the interrupted operation's subtree (never leaking into an
+// unrelated stack/worktree) and restores HEAD to the original branch.
+func TestContinueScopedToStackDoesNotTouchSiblingWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("a1", "f.txt", "A\n", "a1")
+	r.create("a2", "f.txt", "A\nB\n", "a2")
+	r.stOK("checkout", "main")
+	r.create("b1", "b.txt", "B1\n", "b1")
+
+	// Advance main so unrelated b1 needs restack, and dirty b1's linked worktree.
+	r.stOK("checkout", "main")
+	r.writeFile("m.txt", "M\n")
+	r.git("add", "m.txt")
+	r.git("commit", "-q", "-m", "main moves")
+	wtB := filepath.Join(t.TempDir(), "wt-b1")
+	r.git("worktree", "add", wtB, "b1")
+	if err := os.WriteFile(filepath.Join(wtB, "b.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b1Before := r.rev("b1")
+
+	// Modify a1 -> conflict on a2.
+	r.stOK("checkout", "a1")
+	r.writeFile("f.txt", "X\n")
+	res := r.st("modify", "-a")
+	wantExit(t, res, 2)
+
+	// Resolve a2 and continue: restores HEAD to a1 and never touches/mentions b1.
+	r.writeFile("f.txt", "X\nB\n")
+	r.git("add", "f.txt")
+	cont := r.stOK("continue")
+	wantStdoutContains(t, cont, "continued restack")
+	if strings.Contains(cont.stdout, "b1") {
+		t.Fatalf("continue leaked into unrelated stack b1:\n%s", cont.stdout)
+	}
+	if cur := r.currentBranch(); cur != "a1" {
+		t.Fatalf("HEAD = %q after continue, want original branch a1", cur)
+	}
+	if got := r.rev("b1"); got != b1Before {
+		t.Fatalf("unrelated stack b1 moved during continue: %s -> %s", b1Before, got)
+	}
+	r.stOK("validate")
+}

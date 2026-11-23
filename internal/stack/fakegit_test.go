@@ -870,6 +870,9 @@ func (f *fakeGit) CheckoutDetach(ref string) error {
 	if id == "" {
 		return fmt.Errorf("unknown revision %q", ref)
 	}
+	if cur := f.callerLinkedBranch(); cur != "" {
+		delete(f.linkedWorktrees, cur)
+	}
 	f.head = ""
 	f.detachedAt = id
 	return nil

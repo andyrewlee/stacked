@@ -295,7 +295,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 						return err
 					}
 				}
-				_, err := Sync(env, &fakeRemote{exists: true, ff: "trunk fast-forwarded", git: f}, s, "origin", false, false)
+				_, err := Sync(env, &fakeRemote{exists: true, ff: "trunk fast-forwarded", git: f}, s, "origin", false, false, rng.Intn(2) == 0)
 				return err
 			}
 		}
@@ -610,7 +610,7 @@ func TestModelSyncInvariants(t *testing.T) {
 	if err := f.ForceBranch("main", aTip); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); err != nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if s.IsTracked("a") {

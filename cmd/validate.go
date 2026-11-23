@@ -125,6 +125,8 @@ func formatProblem(p stack.Problem) string {
 		return fmt.Sprintf("%s is part of a parent cycle: %s", p.Branch, p.Detail)
 	case stack.StalePendingReparent:
 		return fmt.Sprintf("%s has a recorded pending reparent onto %q but no rebase is in progress (run: st repair)", p.Branch, p.Detail)
+	case stack.StalePendingContinuation:
+		return fmt.Sprintf("%s has a recorded pending continuation but no rebase is in progress (run: st repair)", p.Branch)
 	}
 	return ""
 }

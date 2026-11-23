@@ -135,7 +135,7 @@ func TestSyncFetchFailurePropagates(t *testing.T) {
 	f.remoteRefs["refs/remotes/origin/main"] = "ignored" // remote exists for the exists check
 	boom := errors.New("fetch exploded")
 
-	_, err := Sync(env, &fakeRemote{exists: true, fetchErr: boom}, s, "origin", false, false)
+	_, err := Sync(env, &fakeRemote{exists: true, fetchErr: boom}, s, "origin", false, false, false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
 	}
@@ -156,7 +156,7 @@ func TestSyncPrunesMergedAndRestacks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSyncPrunesSquashMerged(t *testing.T) {
 		t.Fatal("test setup: feat-a should not be an ancestor of main after a squash-merge")
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestSyncKeepsSquashMergedBranchWithNewContent(t *testing.T) {
 	}
 	f.commit("wip") // new work on top of the squash-merged commits
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestSyncPlanPreviewsSquashMergedPrune(t *testing.T) {
 	mkBranch(t, env, s, f, "feat-a", "feat-b")
 	f.squashInto(t, "main", "feat-a")
 
-	res, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	res, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
 	if err != nil {
 		t.Fatalf("sync preview: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestSyncPlanAgainstSquashMergedOnRemoteTrunk(t *testing.T) {
 	remoteTip := f.newID()
 	f.commits[remoteTip] = &fakeCommit{id: remoteTip, parent: mainTip, subject: "squash feat-a", content: f.squashTokens(t, "main", "feat-a")}
 
-	res, err := SyncPlanAgainst(env, s, false, remoteTip)
+	res, err := SyncPlanAgainst(env, s, false, true, remoteTip)
 	if err != nil {
 		t.Fatalf("SyncPlanAgainst: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestSyncPrunesCurrentMergedBranchWithoutRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestSyncPersistsEachSuccessfulPrune(t *testing.T) {
 		return nil
 	}
 
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); err == nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true); err == nil {
 		t.Fatal("sync should fail when pruning b fails")
 	}
 	if !savedAfterA {
@@ -362,7 +362,7 @@ func TestSyncPruneDeletesInOneBatch(t *testing.T) {
 	}
 
 	before := f.callsSnapshot()
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); err != nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if got := f.calls["DeleteBranches"] - before["DeleteBranches"]; got != 1 {
@@ -398,7 +398,7 @@ func TestSyncPruneBatchFailureRetriesSurvivors(t *testing.T) {
 	delErr := errors.New("branch checked out elsewhere")
 	f.deleteErr["b"] = delErr
 
-	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
 	if !errors.Is(err, delErr) {
 		t.Fatalf("Sync = %v, want %v", err, delErr)
 	}
@@ -423,7 +423,7 @@ func TestSyncRestoresOriginalBranchWhenFastForwardFails(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "feat-a")
 
 	errBoom := errors.New("fast-forward failed")
-	if _, err := Sync(env, &fakeRemote{exists: true, err: errBoom, checkout: f}, s, "origin", false, false); !errors.Is(err, errBoom) {
+	if _, err := Sync(env, &fakeRemote{exists: true, err: errBoom, checkout: f}, s, "origin", false, false, false); !errors.Is(err, errBoom) {
 		t.Fatalf("Sync error = %v, want %v", err, errBoom)
 	}
 	if f.head != "feat-a" {
@@ -445,7 +445,7 @@ func TestSyncRestoresOriginalBranchWhenRestackFailsWithoutConflict(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false); !errors.Is(err, errBoom) {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false); !errors.Is(err, errBoom) {
 		t.Fatalf("Sync error = %v, want %v", err, errBoom)
 	}
 	if f.head != "feat-a" {
@@ -462,7 +462,7 @@ func TestSyncPlanSimulatesPruneBeforeRestackPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	res, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
 	if err != nil {
 		t.Fatalf("sync preview: %v", err)
 	}
@@ -496,7 +496,7 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 
 	f, s, env := setup(t)
 	before := cloneState(s)
-	_, planErr := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	_, planErr := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
 	if planErr == nil {
 		t.Fatal("sync preview must refuse a merged branch with a dirty linked worktree")
 	}
@@ -511,7 +511,7 @@ func TestSyncPlanRefusesDirtyMergedBranchWorktree(t *testing.T) {
 	}
 
 	_, liveS, liveEnv := setup(t)
-	_, liveErr := Sync(liveEnv, &fakeRemote{exists: false}, liveS, "origin", false, false)
+	_, liveErr := Sync(liveEnv, &fakeRemote{exists: false}, liveS, "origin", false, false, false)
 	if liveErr == nil {
 		t.Fatal("live Sync must refuse the same dirty linked worktree")
 	}
@@ -531,7 +531,7 @@ func TestSyncPlanRejectsPrunedMainWorktreeOwnerFromLinkedWorktree(t *testing.T) 
 	env.Git = mainOwnerFromLinkedGit(f, "feat-a", "feat-b")
 
 	before := cloneState(s)
-	_, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	_, err := SyncPlanAgainst(env, s, false, true, branchTipRef(s.Trunk))
 	if err == nil {
 		t.Fatal("sync preview pruning a branch checked out in the main worktree returned nil error")
 	}
@@ -549,7 +549,7 @@ func TestSyncPlanErrorsWhenTrackedBranchTipIsMissing(t *testing.T) {
 	delete(f.branches, "feat-a")
 
 	before := cloneState(s)
-	if _, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk)); err == nil {
+	if _, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk)); err == nil {
 		t.Fatal("sync preview with a missing tracked branch returned nil error")
 	}
 	if after := cloneState(s); !reflect.DeepEqual(after, before) {
@@ -561,7 +561,7 @@ func TestSyncPlanAgainstRemoteTrunkRestacks(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "feat-a")
 
-	local, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	local, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
 	if err != nil {
 		t.Fatalf("sync preview: %v", err)
 	}
@@ -572,7 +572,7 @@ func TestSyncPlanAgainstRemoteTrunkRestacks(t *testing.T) {
 	mainTip, _ := f.RevParse("main")
 	remoteTip := f.newID()
 	f.commits[remoteTip] = &fakeCommit{id: remoteTip, parent: mainTip, subject: "remote main"}
-	remote, err := SyncPlanAgainst(env, s, false, remoteTip)
+	remote, err := SyncPlanAgainst(env, s, false, false, remoteTip)
 	if err != nil {
 		t.Fatalf("SyncPlanAgainst: %v", err)
 	}
@@ -589,7 +589,7 @@ func TestSyncPlanAgainstMergedAndRestackPreview(t *testing.T) {
 	remoteTip := f.newID()
 	f.commits[remoteTip] = &fakeCommit{id: remoteTip, parent: mergedTip, subject: "remote main"}
 
-	res, err := SyncPlanAgainst(env, s, false, remoteTip)
+	res, err := SyncPlanAgainst(env, s, false, true, remoteTip)
 	if err != nil {
 		t.Fatalf("SyncPlanAgainst: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestSyncNoDeleteKeepsMerged(t *testing.T) {
 	if err := f.UpdateRef("refs/heads/main", aTip); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", true, false); err != nil {
+	if _, err := Sync(env, &fakeRemote{exists: false}, s, "origin", true, false, false); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if !s.IsTracked("feat-a") {
@@ -638,7 +638,7 @@ func TestSyncFastForwardsTrunkInItsOwnWorktree(t *testing.T) {
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
 	remote := &fakeRemote{exists: true, ff: "main fast-forwarded to refs/remotes/origin/main", git: f}
-	res, err := Sync(env, remote, s, "origin", false, false)
+	res, err := Sync(env, remote, s, "origin", false, false, false)
 	if err != nil {
 		t.Fatalf("sync from linked worktree: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestSyncEndsDetachedWhenOrigPrunedAndTrunkOwnedElsewhere(t *testing.T) {
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -703,7 +703,7 @@ func TestSyncFailsWhenTrunkWorktreeDirty(t *testing.T) {
 	f.markWorktreeDirty("main")
 
 	remote := &fakeRemote{exists: true, ff: "unused", git: f}
-	_, err := Sync(env, remote, s, "origin", false, false)
+	_, err := Sync(env, remote, s, "origin", false, false, false)
 	if err == nil {
 		t.Fatal("sync with a dirty trunk worktree should fail")
 	}
@@ -726,7 +726,7 @@ func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &fakeRemote{exists: true, ff: "main already up to date"}
-	if _, err := Sync(env, remote, s, "origin", false, false); err != nil {
+	if _, err := Sync(env, remote, s, "origin", false, false, false); err != nil {
 		t.Fatalf("sync on trunk: %v", err)
 	}
 	if !remote.gotCheckedOutHere || remote.gotOwnerDir != "" {
@@ -741,7 +741,7 @@ func TestSyncPassesTrunkCheckoutLocationToFastForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote2 := &fakeRemote{exists: true, ff: "main already up to date"}
-	if _, err := Sync(env2, remote2, s2, "origin", false, false); err != nil {
+	if _, err := Sync(env2, remote2, s2, "origin", false, false, false); err != nil {
 		t.Fatalf("sync off trunk: %v", err)
 	}
 	if remote2.gotCheckedOutHere || remote2.gotOwnerDir != "" {
@@ -769,7 +769,7 @@ func TestSyncNoteReportsReattachedBranchWhenSurvivorRebases(t *testing.T) {
 	}
 	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -809,7 +809,7 @@ func TestSyncNoFetchNeverTouchesRemote(t *testing.T) {
 	f.remoteRefs["refs/remotes/origin/main"] = aTip
 
 	remote := &fakeRemote{exists: true, ff: "must not be used"}
-	res, err := Sync(env, remote, s, "origin", false, true)
+	res, err := Sync(env, remote, s, "origin", false, true, false)
 	if err != nil {
 		t.Fatalf("sync --no-fetch: %v", err)
 	}
@@ -844,7 +844,7 @@ func TestSyncNoFetchFallsBackToLocalTrunk(t *testing.T) {
 	}
 
 	remote := &fakeRemote{exists: true, ff: "must not be used"}
-	res, err := Sync(env, remote, s, "origin", false, true)
+	res, err := Sync(env, remote, s, "origin", false, true, false)
 	if err != nil {
 		t.Fatalf("sync --no-fetch: %v", err)
 	}
@@ -986,7 +986,7 @@ func TestSyncFastForwardRestoreDoubleFault(t *testing.T) {
 	// shortcut).
 	remote := &fakeRemote{exists: true, err: ffErr, checkout: f}
 
-	_, err := Sync(env, remote, s, "origin", false, false)
+	_, err := Sync(env, remote, s, "origin", false, false, false)
 	if !errors.Is(err, ffErr) {
 		t.Fatalf("Sync = %v, want the fast-forward sentinel matchable", err)
 	}
@@ -1018,7 +1018,7 @@ func TestSyncDetachParkingProbeFailures(t *testing.T) {
 			boom := errors.New("probe exploded")
 			tc.arm(f, boom)
 
-			_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+			_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 			if !errors.Is(err, boom) {
 				t.Fatalf("Sync = %v, want wrapped %v", err, boom)
 			}
@@ -1044,7 +1044,7 @@ func TestSyncTrunkCheckoutFailure(t *testing.T) {
 	boom := errors.New("cannot switch to main")
 	f.checkoutErr["main"] = boom
 
-	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
 	}
@@ -1071,7 +1071,7 @@ func TestSyncPruneRestoreDoubleFault(t *testing.T) {
 	f.failErr["MergedInto"] = pruneErr
 	f.checkoutErr["feat-a"] = checkoutErr
 
-	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if !errors.Is(err, pruneErr) {
 		t.Fatalf("Sync = %v, want the prune sentinel matchable", err)
 	}
@@ -1104,7 +1104,7 @@ func TestSyncSaveCheckpointFailures(t *testing.T) {
 
 			// feat-a is unmerged and undrifted: nothing prunes, nothing
 			// restacks — only the two unconditional checkpoints run.
-			_, err := Sync(env2, &fakeRemote{exists: false}, s, "origin", false, false)
+			_, err := Sync(env2, &fakeRemote{exists: false}, s, "origin", false, false, false)
 			if !errors.Is(err, boom) {
 				t.Fatalf("Sync = %v, want wrapped %v", err, boom)
 			}
@@ -1124,7 +1124,7 @@ func TestSyncFinalRestoreFailure(t *testing.T) {
 	boom := errors.New("cannot restore feat-a")
 	f.checkoutErr["feat-a"] = boom
 
-	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	_, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("Sync = %v, want wrapped %v", err, boom)
 	}
@@ -1133,5 +1133,249 @@ func TestSyncFinalRestoreFailure(t *testing.T) {
 	}
 	if f.head != "main" {
 		t.Fatalf("HEAD = %q, want main — sync parked there for pruning", f.head)
+	}
+}
+
+func TestContinueScopedToCurrentStackAndRestoresOrig(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a1")
+	mkBranch(t, env, s, f, "a1", "a2")
+	mkBranch(t, env, s, f, "a2", "a3")
+	mkBranch(t, env, s, f, "main", "b1")
+
+	// Advance main so unrelated stack b1 is drifted and lives in a dirty worktree.
+	if err := f.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	f.commit("main-advances")
+	f.addWorktree("/wt/b1", "b1")
+	f.markWorktreeDirty("b1")
+	b1TipBefore, _ := f.RevParse("b1")
+
+	// Modify a1 and force sequential conflicts on a2 then a3.
+	if err := f.Checkout("a1"); err != nil {
+		t.Fatal(err)
+	}
+	f.conflictOn("a2")
+	f.conflictOn("a3")
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want ErrConflict on a2", err)
+	}
+	if s.PendingContinuation == nil || s.PendingContinuation.Branch != "a2" || s.PendingContinuation.OrigBranch != "a1" {
+		t.Fatalf("PendingContinuation after first conflict = %+v", s.PendingContinuation)
+	}
+
+	// First Continue finishes a2 and pauses on a3, preserving OrigBranch=a1.
+	if _, err := Continue(env, s); !errors.Is(err, ErrConflict) {
+		t.Fatalf("first Continue = %v, want ErrConflict on a3", err)
+	}
+	if s.PendingContinuation == nil || s.PendingContinuation.Branch != "a3" || s.PendingContinuation.OrigBranch != "a1" {
+		t.Fatalf("PendingContinuation after nested conflict = %+v", s.PendingContinuation)
+	}
+
+	// Second Continue finishes a3, restores HEAD to a1, and never touches b1.
+	res, err := Continue(env, s)
+	if err != nil {
+		t.Fatalf("second Continue: %v", err)
+	}
+	if s.PendingContinuation != nil {
+		t.Fatalf("PendingContinuation not cleared: %+v", s.PendingContinuation)
+	}
+	if f.head != "a1" {
+		t.Fatalf("HEAD = %q, want original branch a1 restored", f.head)
+	}
+	if b1TipAfter, _ := f.RevParse("b1"); b1TipAfter != b1TipBefore {
+		t.Fatalf("unrelated stack b1 moved: %s -> %s", b1TipBefore, b1TipAfter)
+	}
+	for _, note := range res.Notes {
+		if strings.Contains(note, "b1") {
+			t.Fatalf("Continue leaked into unrelated stack b1: notes=%v", res.Notes)
+		}
+	}
+}
+
+func TestAbortClearsPendingContinuation(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	mkBranch(t, env, s, f, "a", "b")
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
+	}
+	f.conflictOn("b")
+	if _, err := Modify(env, s, "", true, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Modify = %v, want ErrConflict", err)
+	}
+	if s.PendingContinuation == nil {
+		t.Fatal("expected PendingContinuation after conflict")
+	}
+	if _, err := Abort(env, s); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if s.PendingContinuation != nil {
+		t.Fatalf("Abort left PendingContinuation behind: %+v", s.PendingContinuation)
+	}
+}
+
+func TestDeleteSquashMergedWithoutForceAndReportsReparented(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a")
+	f.commit("a2")
+	mkBranch(t, env, s, f, "a", "b")
+	f.squashInto(t, "main", "a")
+	if err := f.Checkout("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantReparent := []Reparent{{Branch: "b", OldParent: "a", NewParent: "main"}}
+	plan, err := DeletePlan(env, s, "a", false)
+	if err != nil {
+		t.Fatalf("DeletePlan squash-merged without force: %v", err)
+	}
+	if !reflect.DeepEqual(plan.Reparented, wantReparent) {
+		t.Fatalf("DeletePlan Reparented = %+v, want %+v", plan.Reparented, wantReparent)
+	}
+
+	res, err := Delete(env, s, "a", false)
+	if err != nil {
+		t.Fatalf("Delete squash-merged without force: %v", err)
+	}
+	if !reflect.DeepEqual(res.Reparented, wantReparent) {
+		t.Fatalf("Delete Reparented = %+v, want %+v", res.Reparented, wantReparent)
+	}
+	if s.IsTracked("a") || f.BranchExists("a") {
+		t.Fatal("squash-merged branch a should have been deleted")
+	}
+	if bb, _ := s.Get("b"); bb == nil || bb.Parent != "main" {
+		t.Fatalf("b should be re-parented onto main: %+v", bb)
+	}
+}
+
+func TestSyncScopesToCurrentStackByDefault(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "a1")
+	mkBranch(t, env, s, f, "a1", "a2")
+	mkBranch(t, env, s, f, "main", "b1")
+	mkBranch(t, env, s, f, "b1", "b2")
+
+	// Squash-merge both bottoms into main, and put b1 in a dirty worktree so a
+	// whole-forest sync would refuse — proving default sync never touches stack B.
+	f.squashInto(t, "main", "a1")
+	f.squashInto(t, "main", "b1")
+	f.addWorktree("/wt/b1", "b1")
+	f.markWorktreeDirty("b1")
+	b2TipBefore, _ := f.RevParse("b2")
+
+	if err := f.Checkout("a2"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
+	if err != nil {
+		t.Fatalf("scoped SyncPlanAgainst: %v", err)
+	}
+	wantReparent := []Reparent{{Branch: "a2", OldParent: "a1", NewParent: "main"}}
+	if !reflect.DeepEqual(plan.Deleted, []string{"a1"}) {
+		t.Fatalf("plan Deleted = %v, want [a1]", plan.Deleted)
+	}
+	if !reflect.DeepEqual(plan.Reparented, wantReparent) {
+		t.Fatalf("plan Reparented = %+v, want %+v", plan.Reparented, wantReparent)
+	}
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
+	if err != nil {
+		t.Fatalf("scoped Sync: %v", err)
+	}
+	if !reflect.DeepEqual(res.Deleted, []string{"a1"}) {
+		t.Fatalf("Deleted = %v, want [a1]", res.Deleted)
+	}
+	if !reflect.DeepEqual(res.Reparented, wantReparent) {
+		t.Fatalf("Reparented = %+v, want %+v", res.Reparented, wantReparent)
+	}
+	if !s.IsTracked("b1") || !f.BranchExists("b1") {
+		t.Fatal("scoped Sync touched unrelated stack b1")
+	}
+	if b2TipAfter, _ := f.RevParse("b2"); b2TipAfter != b2TipBefore {
+		t.Fatalf("scoped Sync moved unrelated stack b2: %s -> %s", b2TipBefore, b2TipAfter)
+	}
+
+	// Clean /wt/b1 and sync with all=true: now stack B is pruned and restacked too.
+	delete(f.dirtyWT, "b1")
+	allRes, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
+	if err != nil {
+		t.Fatalf("Sync --all: %v", err)
+	}
+	if !reflect.DeepEqual(allRes.Deleted, []string{"b1"}) {
+		t.Fatalf("Sync --all Deleted = %v, want [b1]", allRes.Deleted)
+	}
+	if b2, _ := s.Get("b2"); b2 == nil || b2.Parent != "main" {
+		t.Fatalf("b2 should be re-parented onto main after Sync --all: %+v", b2)
+	}
+}
+
+func TestSyncAdvancesHEADToSingleSurvivingChild(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	mkBranch(t, env, s, f, "feat-b", "feat-c")
+	f.addWorktree("/wt/trunk", "main")
+	f.addWorktree("/wt/feat-a", "feat-a")
+	f.repoRoot = "/wt/feat-a"
+	f.head = "feat-a"
+	f.mainBranch = "main"
+	f.squashInto(t, "main", "feat-a")
+	f.checkoutErr["main"] = errors.New("fatal: 'main' is already checked out at '/wt/trunk'")
+
+	// Dry-run inside feat-a's linked worktree must succeed without "you are inside it".
+	plan, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
+	if err != nil {
+		t.Fatalf("SyncPlanAgainst inside merged branch worktree: %v", err)
+	}
+	if !reflect.DeepEqual(plan.Deleted, []string{"feat-a"}) {
+		t.Fatalf("plan Deleted = %v, want [feat-a]", plan.Deleted)
+	}
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Branch != "feat-b" {
+		t.Fatalf("res.Branch = %q, want feat-b", res.Branch)
+	}
+	if f.head != "feat-b" {
+		t.Fatalf("HEAD = %q, want feat-b", f.head)
+	}
+	wantReparent := []Reparent{{Branch: "feat-b", OldParent: "feat-a", NewParent: "main"}}
+	if !reflect.DeepEqual(res.Reparented, wantReparent) {
+		t.Fatalf("Reparented = %+v, want %+v", res.Reparented, wantReparent)
+	}
+	foundSwitched := false
+	for _, note := range res.Notes {
+		if note == "switched to feat-b" {
+			foundSwitched = true
+		}
+	}
+	if !foundSwitched {
+		t.Fatalf("Notes = %v, want \"switched to feat-b\"", res.Notes)
+	}
+}
+
+func TestSyncDoesNotGuessChildWhenMultipleSurvivingChildren(t *testing.T) {
+	f, s, env := newEnvState()
+	mkBranch(t, env, s, f, "main", "feat-a")
+	mkBranch(t, env, s, f, "feat-a", "feat-b")
+	mkBranch(t, env, s, f, "feat-a", "feat-c")
+	f.squashInto(t, "main", "feat-a")
+	if err := f.Checkout("feat-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, false)
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if res.Branch != "" {
+		t.Fatalf("res.Branch = %q, want empty with multiple surviving children", res.Branch)
+	}
+	if f.head != "main" {
+		t.Fatalf("HEAD = %q, want main fallback with multiple surviving children", f.head)
 	}
 }

@@ -6,23 +6,65 @@ package stack
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 )
+
+// Reparent records one surviving tracked branch whose recorded parent changed
+// as a result of an operation (delete, sync, prune, fold).
+type Reparent struct {
+	Branch    string `json:"branch"`
+	OldParent string `json:"oldParent"`
+	NewParent string `json:"newParent"`
+}
 
 // OpResult is the typed outcome of a stack-mutating operation. The CLI renders
 // it as text or JSON; the engine never prints.
 type OpResult struct {
-	Summary   string   `json:"summary"`
-	Branch    string   `json:"branch,omitempty"`
-	Restacked []string `json:"restacked,omitempty"`
-	Deleted   []string `json:"deleted,omitempty"`
-	Notes     []string `json:"notes,omitempty"`
+	Summary    string     `json:"summary"`
+	Branch     string     `json:"branch,omitempty"`
+	Restacked  []string   `json:"restacked,omitempty"`
+	Deleted    []string   `json:"deleted,omitempty"`
+	Reparented []Reparent `json:"reparented,omitempty"`
+	Notes      []string   `json:"notes,omitempty"`
 	// Tracked maps each branch a bulk adopt (`st track --all`) recorded to the
 	// parent it was inferred under; unset for every other command.
 	Tracked map[string]string `json:"tracked,omitempty"`
 	// DryRun marks a preview: the Restacked/Deleted lists are what *would* happen,
 	// nothing was changed.
 	DryRun bool `json:"dryRun,omitempty"`
+}
+
+// parentSnapshot captures each tracked branch's recorded parent before a
+// topology-mutating operation so diffReparents can report the exact effective
+// oldParent -> newParent transitions for surviving branches.
+func parentSnapshot(s *State) map[string]string {
+	snap := make(map[string]string, len(s.Branches))
+	for name, b := range s.Branches {
+		snap[name] = b.Parent
+	}
+	return snap
+}
+
+// diffReparents compares before against s's current branches (sorted) and
+// returns one Reparent entry for each surviving branch whose recorded parent
+// changed.
+func diffReparents(before map[string]string, s *State) []Reparent {
+	var reparented []Reparent
+	for _, name := range s.BranchNames() {
+		oldParent, ok := before[name]
+		if !ok {
+			continue
+		}
+		if b := s.Branches[name]; b != nil && b.Parent != oldParent {
+			reparented = append(reparented, Reparent{
+				Branch:    name,
+				OldParent: oldParent,
+				NewParent: b.Parent,
+			})
+		}
+	}
+	return reparented
 }
 
 // ErrDirty is returned when an operation needs a clean working tree but the tree
@@ -215,7 +257,7 @@ type upstackResult struct {
 // error it restores HEAD before returning; on a conflict it leaves the rebase in
 // progress for `st continue`.
 func finishUpstack(env Env, s *State, anchor string) (upstackResult, error) {
-	rebased, err := s.restackUpstack(env, anchor)
+	rebased, err := s.restackForestWithOrig(env, s.childNames(anchor), anchor)
 	if err != nil {
 		return upstackResult{}, restoreHEADAfterNonConflict(env, anchor, s.Trunk, err)
 	}
@@ -298,14 +340,10 @@ func cloneState(s *State) *State {
 		p := *s.PendingReparent
 		cp.PendingReparent = &p
 	}
+	if s.PendingContinuation != nil {
+		c := *s.PendingContinuation
+		c.Scope = slices.Clone(c.Scope)
+		cp.PendingContinuation = &c
+	}
 	return cp
-}
-
-// restackAll restacks every stack rooted on the trunk, parents before children,
-// reading live tips at each step. Used by sync and continue. The whole forest is
-// exactly the trunk's upstack (every tracked branch descends from the trunk), so
-// it delegates to the one canonical restack path — restackUpstack — which
-// Descendants(trunk) walks in the same sorted, parents-first order.
-func restackAll(env Env, s *State) ([]string, error) {
-	return s.restackUpstack(env, s.Trunk)
 }

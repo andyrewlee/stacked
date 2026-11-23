@@ -495,7 +495,7 @@ func TestMergedBranchesQualifiesBareBasis(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "a")
 
 	f.mergedIntoRefs = nil
-	if _, err := mergedBranches(f, s, "main"); err != nil {
+	if _, err := mergedBranches(f, s.BranchNames(), "main"); err != nil {
 		t.Fatalf("mergedBranches: %v", err)
 	}
 	if len(f.mergedIntoRefs) != 1 || f.mergedIntoRefs[0] != "refs/heads/main" {
@@ -1676,7 +1676,7 @@ func TestSyncPlanRefusesDirtyTree(t *testing.T) {
 	mkBranch(t, env, s, f, "main", "a")
 	f.clean = false
 
-	if _, err := SyncPlanAgainst(env, s, false, branchTipRef("main")); !errors.Is(err, ErrDirty) {
+	if _, err := SyncPlanAgainst(env, s, false, false, branchTipRef("main")); !errors.Is(err, ErrDirty) {
 		t.Fatalf("SyncPlanAgainst on dirty tree = %v, want ErrDirty", err)
 	}
 }
@@ -2118,7 +2118,7 @@ func TestRequireCleanGuards(t *testing.T) {
 		{"Squash", func(env Env, s *State) (*OpResult, error) { return Squash(env, s, "m") }},
 		{"Onto", func(env Env, s *State) (*OpResult, error) { return Onto(env, s, "main") }},
 		{"Sync", func(env Env, s *State) (*OpResult, error) {
-			return Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+			return Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
 		}},
 	}
 	for _, c := range cases {
@@ -2390,7 +2390,7 @@ func TestSyncWarnsUnreachable(t *testing.T) {
 	lost, _ := s.Get("lost")
 	lost.Parent = "ghost"
 
-	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false)
+	res, err := Sync(env, &fakeRemote{exists: false}, s, "origin", false, false, true)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}

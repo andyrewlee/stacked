@@ -48,6 +48,16 @@ type PendingReparent struct {
 	ParentSHA string `json:"parentSHA"`
 }
 
+// PendingContinuation records the restack scope and originating branch of an
+// operation whose cascade paused on conflicts, so `st continue` finishes only
+// that operation's remaining branches (without leaking into unrelated stacks
+// or worktrees) and restores HEAD to OrigBranch when the cascade completes.
+type PendingContinuation struct {
+	Branch     string   `json:"branch"`
+	Scope      []string `json:"scope,omitempty"`
+	OrigBranch string   `json:"origBranch,omitempty"`
+}
+
 // State is the complete stacked metadata for a repository: the trunk branch
 // name and the set of tracked branches keyed by branch name.
 type State struct {
@@ -63,6 +73,8 @@ type State struct {
 	Branches map[string]*Branch `json:"branches"`
 	// PendingReparent is set only while an onto rebase is paused on conflicts.
 	PendingReparent *PendingReparent `json:"pendingReparent,omitempty"`
+	// PendingContinuation is set while any restack cascade is paused on conflicts.
+	PendingContinuation *PendingContinuation `json:"pendingContinuation,omitempty"`
 
 	// skippedWorktrees collects branches the current restack skipped because they
 	// live in a linked worktree that is locked, dirty, or has a rebase already
@@ -301,4 +313,15 @@ func (s *State) BottomOf(name string) string {
 		b = next
 	}
 	return b.Name
+}
+
+// StackBranches returns every branch in the tracked stack containing name
+// (starting at BottomOf(name) and walking all its descendants in topological
+// parents-first order). Returns nil when name is the trunk or is not tracked.
+func (s *State) StackBranches(name string) []string {
+	if !s.IsTracked(name) {
+		return nil
+	}
+	bottom := s.BottomOf(name)
+	return append([]string{bottom}, s.Descendants(bottom)...)
 }

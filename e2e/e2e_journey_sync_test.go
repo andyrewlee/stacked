@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -414,4 +415,121 @@ func TestSyncFlagArms(t *testing.T) {
 	if summary, _ := dry["summary"].(string); summary == "" {
 		t.Fatalf("summary empty in %v", dry)
 	}
+}
+
+// TestSyncPrunesDisjointConcurrentSquashMergeAndDeleteWithoutForce drives the
+// real 3-way merge-tree squash-merge detection when a concurrent PR edited a
+// disjoint region of the same file on main: both `st delete` without -f and
+// `st sync` recognize the squash-merged branch, re-parent its child (emitting
+// structured Reparented), and `st sync` from the merged bottom branch advances
+// HEAD directly to the single surviving child.
+func TestSyncPrunesDisjointConcurrentSquashMergeAndDeleteWithoutForce(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	r.writeFile("shared.txt", strings.Join(lines, "\n")+"\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "add shared.txt")
+
+	// feat-a edits top of shared.txt; feat-b stacks on feat-a.
+	branchLines := append([]string(nil), lines...)
+	branchLines[1] = "line 02 edited by feat-a"
+	r.create("feat-a", "shared.txt", strings.Join(branchLines, "\n")+"\n", "feat-a")
+	r.create("feat-b", "b.txt", "b\n", "feat-b")
+
+	// Main concurrently edits bottom of shared.txt, then squash-merges feat-a.
+	r.stOK("checkout", "main")
+	mainLines := append([]string(nil), lines...)
+	mainLines[18] = "line 19 edited concurrently"
+	r.writeFile("shared.txt", strings.Join(mainLines, "\n")+"\n")
+	r.git("add", "shared.txt")
+	r.git("commit", "-q", "-m", "concurrent edit on main")
+	r.git("merge", "-q", "--squash", "feat-a")
+	r.git("commit", "-q", "-m", "squash feat-a")
+
+	// st delete without -f must recognize the squash-merge via 3-way containment
+	// and report structured reparented in --dry-run --json.
+	r.stOK("checkout", "feat-a")
+	delDry := r.stOK("delete", "feat-a", "--dry-run", "--json")
+	var delPayload struct {
+		Deleted    []string `json:"deleted"`
+		Reparented []struct {
+			Branch    string `json:"branch"`
+			OldParent string `json:"oldParent"`
+			NewParent string `json:"newParent"`
+		} `json:"reparented"`
+	}
+	if err := json.Unmarshal([]byte(delDry.stdout), &delPayload); err != nil {
+		t.Fatalf("delete --dry-run --json invalid: %v\n%s", err, delDry.stdout)
+	}
+	if len(delPayload.Deleted) != 1 || delPayload.Deleted[0] != "feat-a" {
+		t.Fatalf("delete dry-run deleted = %v, want [feat-a]", delPayload.Deleted)
+	}
+	if len(delPayload.Reparented) != 1 || delPayload.Reparented[0].Branch != "feat-b" || delPayload.Reparented[0].NewParent != "main" {
+		t.Fatalf("delete dry-run reparented = %+v, want feat-b -> main", delPayload.Reparented)
+	}
+
+	// st sync from feat-a prunes feat-a, re-parents + restacks feat-b, and
+	// advances HEAD straight to the single surviving child feat-b.
+	res := r.stOK("sync")
+	wantStdoutContains(t, res, "deleted: feat-a")
+	wantStdoutContains(t, res, "re-parented: feat-b -> main")
+	wantStdoutContains(t, res, "switched to feat-b")
+	if cur := r.currentBranch(); cur != "feat-b" {
+		t.Fatalf("HEAD = %q after sync pruned feat-a, want feat-b", cur)
+	}
+	if r.branchExists("feat-a") {
+		t.Fatal("feat-a should have been pruned")
+	}
+	r.stOK("validate")
+}
+
+// TestSyncScopesToCurrentStackAndIsolatesSiblingWorktree proves default `st
+// sync` from a tracked branch only prunes/restacks the current stack and does
+// not fail on or modify an unrelated sibling stack living in a dirty worktree.
+func TestSyncScopesToCurrentStackAndIsolatesSiblingWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	r.initStack()
+
+	r.create("a1", "a1.txt", "a1\n", "a1")
+	r.create("a2", "a2.txt", "a2\n", "a2")
+	r.stOK("checkout", "main")
+	r.create("b1", "b1.txt", "b1\n", "b1")
+
+	// Merge both a1 and b1 into main.
+	r.stOK("checkout", "main")
+	r.git("merge", "-q", "--no-ff", "a1", "-m", "merge a1")
+	r.git("merge", "-q", "--no-ff", "b1", "-m", "merge b1")
+
+	// Park b1 in a dirty linked worktree so a whole-forest sync would refuse.
+	wtB := filepath.Join(t.TempDir(), "wt-b1")
+	r.git("worktree", "add", wtB, "b1")
+	if err := os.WriteFile(filepath.Join(wtB, "b1.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sync from a1: succeeds without failing on dirty b1, prunes a1, switches to a2.
+	r.stOK("checkout", "a1")
+	res := r.stOK("sync")
+	wantStdoutContains(t, res, "deleted: a1")
+	wantStdoutContains(t, res, "switched to a2")
+	if cur := r.currentBranch(); cur != "a2" {
+		t.Fatalf("HEAD = %q, want a2", cur)
+	}
+	if r.branchExists("a1") {
+		t.Fatal("a1 should be pruned")
+	}
+	if !r.branchExists("b1") {
+		t.Fatal("unrelated sibling b1 must not be touched by scoped sync")
+	}
+	// Whole-forest --all DOES see b1 and refuses its dirty worktree.
+	allRes := r.st("sync", "--all")
+	wantExit(t, allRes, 1)
+	wantStderrContains(t, allRes, "uncommitted changes in its worktree")
 }

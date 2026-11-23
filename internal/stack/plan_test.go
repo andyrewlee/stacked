@@ -153,7 +153,7 @@ func TestSyncPlanPreviewsPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := SyncPlanAgainst(env, s, false, branchTipRef(s.Trunk))
+	plan, err := SyncPlanAgainst(env, s, false, false, branchTipRef(s.Trunk))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,6 +705,9 @@ func assertPlanResultFields(t *testing.T, preview, actual *OpResult) {
 	}
 	if !reflect.DeepEqual(preview.Deleted, actual.Deleted) {
 		t.Fatalf("Deleted preview=%v actual=%v", preview.Deleted, actual.Deleted)
+	}
+	if !reflect.DeepEqual(preview.Reparented, actual.Reparented) {
+		t.Fatalf("Reparented preview=%+v actual=%+v", preview.Reparented, actual.Reparented)
 	}
 	if !reflect.DeepEqual(preview.Notes, actual.Notes) {
 		t.Fatalf("Notes preview=%v actual=%v", preview.Notes, actual.Notes)

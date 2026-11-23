@@ -128,7 +128,7 @@ func runOpen(args []string) error {
 // bare open is just the current branch.
 func openBranches(env stack.Env, state *stack.State, all bool) (branches []string, reason string, err error) {
 	if all {
-		plan, err := stack.SubmitPlan(env, state, true)
+		plan, err := stack.SubmitPlan(env, state, stack.SubmitAll)
 		if err != nil {
 			return nil, "", err
 		}

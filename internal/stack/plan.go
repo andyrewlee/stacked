@@ -43,19 +43,22 @@ func FoldPlan(env Env, s *State) (*OpResult, error) {
 		return nil, fmt.Errorf("read branch tips: %w", err)
 	}
 	planState := cloneState(s)
+	beforeParents := parentSnapshot(planState)
 	planState.RemoveBranch(cur)
+	reparented := diffReparents(beforeParents, planState)
 	tips[parent] = curTip
 	preview, err := finishUpstackPlan(env, planState, parent, tips)
 	if err != nil {
 		return nil, err
 	}
 	return &OpResult{
-		Summary:   fmt.Sprintf("would fold %s into %s", cur, parent),
-		Branch:    parent,
-		Restacked: preview.restacked,
-		Deleted:   []string{cur},
-		Notes:     preview.notes(),
-		DryRun:    true,
+		Summary:    fmt.Sprintf("would fold %s into %s", cur, parent),
+		Branch:     parent,
+		Restacked:  preview.restacked,
+		Deleted:    []string{cur},
+		Reparented: reparented,
+		Notes:      preview.notes(),
+		DryRun:     true,
 	}, nil
 }
 
@@ -174,7 +177,7 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 	parent := b.Parent
 
 	if !force {
-		mergedIntoParent, err := g.IsAncestor(branchTipRef(name), branchTipRef(parent))
+		mergedIntoParent, err := isMergedOrContained(g, parent, name)
 		if err != nil {
 			return nil, fmt.Errorf("check whether %q is merged into %q: %w", name, parent, err)
 		}
@@ -204,13 +207,15 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 		return nil, err
 	}
 	planState := cloneState(s)
+	beforeParents := parentSnapshot(planState)
 	formerChildren := planState.RemoveBranch(name)
+	reparented := diffReparents(beforeParents, planState)
 	preview, err := appendRestackPlans(env, planState, tips, formerChildren...)
 	if err != nil {
 		return nil, err
 	}
 
-	res := &OpResult{Summary: fmt.Sprintf("would delete %s", name), Deleted: []string{name}, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}
+	res := &OpResult{Summary: fmt.Sprintf("would delete %s", name), Deleted: []string{name}, Reparented: reparented, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}
 	if len(formerChildren) > 0 {
 		res.Summary = fmt.Sprintf("would delete %s; re-parented %d branch(es) onto %s", name, len(formerChildren), parent)
 	}
