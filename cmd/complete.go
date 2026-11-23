@@ -46,12 +46,9 @@ type completionCtx struct {
 
 	locals      map[string]string
 	localsDone  bool
-	wts         []git.Worktree
-	wtsDone     bool
 	cur         string
 	curDone     bool
 	fetchLocals func() map[string]string
-	fetchWts    func() []git.Worktree
 	fetchCur    func() string
 }
 
@@ -61,14 +58,6 @@ func (c *completionCtx) localTips() map[string]string {
 		c.locals, c.localsDone = c.fetchLocals(), true
 	}
 	return c.locals
-}
-
-// worktrees returns the repository's worktrees, or nil when the probe failed.
-func (c *completionCtx) worktrees() []git.Worktree {
-	if !c.wtsDone {
-		c.wts, c.wtsDone = c.fetchWts(), true
-	}
-	return c.wts
 }
 
 // current returns the checked-out branch, or "" on detached HEAD or failure.
@@ -118,7 +107,6 @@ func runCompleteEndpoint(args []string) error {
 		seen:        seen,
 		s:           s,
 		fetchLocals: func() map[string]string { l, _ := git.Tips(); return l },
-		fetchWts:    func() []git.Worktree { w, _ := git.Worktrees(); return w },
 		fetchCur:    func() string { b, _ := currentBranch(); return b },
 	}
 	for _, name := range c.Completion(cc) {
@@ -182,7 +170,7 @@ func completionCursor(fs *flag.FlagSet, words []string) (flagName string, positi
 // so the policy can be exercised without a repo. In production the endpoint
 // calls c.Completion directly with lazily-fetched probes.
 func completeCandidates(cmd, flagName string, positionals []string, seen map[string]bool,
-	s *stack.State, locals map[string]string, wts []git.Worktree, cur string,
+	s *stack.State, locals map[string]string, _ []git.Worktree, cur string,
 ) []string {
 	c, ok := byName[cmd]
 	if !ok || c.Completion == nil {
@@ -194,7 +182,6 @@ func completeCandidates(cmd, flagName string, positionals []string, seen map[str
 		seen:        seen,
 		s:           s,
 		fetchLocals: func() map[string]string { return locals },
-		fetchWts:    func() []git.Worktree { return wts },
 		fetchCur:    func() string { return cur },
 	})
 }
@@ -219,29 +206,6 @@ func minusNames(names []string, excl map[string]bool) []string {
 		}
 	}
 	return kept
-}
-
-// linkedOwnerNames returns the set of branches owning a LINKED worktree — the
-// main worktree's branch (usually trunk) is not "its own worktree" for `st
-// worktree` purposes, matching LinkedOwnerOf.
-func linkedOwnerNames(wts []git.Worktree) map[string]bool {
-	main, _ := stack.MainWorktree(wts)
-	owners := map[string]bool{}
-	for _, wt := range wts {
-		if wt.Branch != "" && wt.Path != main.Path {
-			owners[wt.Branch] = true
-		}
-	}
-	return owners
-}
-
-func sortedKeys(set map[string]bool) []string {
-	names := make([]string, 0, len(set))
-	for n := range set {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // completableName reports whether name can occupy one output line without

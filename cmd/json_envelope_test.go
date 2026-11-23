@@ -9,6 +9,7 @@ package cmd
 import (
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/andyrewlee/stacked/internal/stack"
@@ -119,21 +120,18 @@ func TestJSONEnvelopeNotInitialized(t *testing.T) {
 		success bool   // command runs fine without stack state
 	}{
 		{name: "abort", code: "error"}, // tolerated uninit, then "no rebase in progress"
-		{name: "absorb", code: "not_initialized"},
 		{name: "bottom", code: "not_initialized"},
 		{name: "checkout", code: "not_initialized"},
 		{name: "continue", code: "not_initialized"},
 		{name: "create", args: []string{"x"}, code: "not_initialized"},
 		{name: "delete", args: []string{"x"}, code: "not_initialized"},
+		{name: "doctor", code: "not_initialized"},
 		{name: "down", code: "not_initialized"},
-		{name: "fold", code: "not_initialized"},
 		{name: "guide", success: true}, // static text, never touches state
 		{name: "log", code: "not_initialized"},
 		{name: "modify", code: "not_initialized"},
 		{name: "onto", args: []string{"x"}, code: "not_initialized"},
-		{name: "prune", code: "not_initialized"},
 		{name: "rename", args: []string{"a", "b"}, code: "not_initialized"},
-		{name: "repair", code: "not_initialized"},
 		{name: "restack", code: "not_initialized"},
 		{name: "squash", code: "not_initialized"},
 		{name: "status", code: "not_initialized"},
@@ -144,9 +142,6 @@ func TestJSONEnvelopeNotInitialized(t *testing.T) {
 		{name: "undo", success: true}, // empty journal is a documented success: {"undone":false}
 		{name: "untrack", args: []string{"x"}, code: "not_initialized"},
 		{name: "up", code: "not_initialized"},
-		{name: "validate", code: "not_initialized"},
-		{name: "worktree", args: []string{"x"}, code: "not_initialized"},
-		{name: "worktree", args: []string{"ls"}, success: true}, // pure `git worktree list`
 	}
 	for _, tc := range cases {
 		run := tc.name + " " + jsonJoin(tc.args)
@@ -186,8 +181,7 @@ func TestJSONEnvelopeUsageError(t *testing.T) {
 		{"delete"},                // missing branch name
 		{"onto"},                  // missing target
 		{"rename", "a", "b", "c"}, // too many positionals (one or two are legal)
-		{"worktree"},              // no subcommand at all
-		{"undo", "1", "2"},        // rejects extra positionals
+		{"undo", "extra"},         // rejects positionals
 		{"status", "extra"},       // rejects positionals
 		{"untrack", "a", "b"},     // rejects positionals past the optional branch
 	}
@@ -206,8 +200,6 @@ func TestJSONEnvelopeDirty(t *testing.T) {
 		{"restack"},
 		{"restack", "--all"},
 		{"restack", "--dry-run"},
-		{"fold"},
-		{"fold", "--dry-run"},
 		{"squash"},
 		{"squash", "--dry-run"},
 		{"onto", "feat-a"},
@@ -256,9 +248,7 @@ func TestJSONEnvelopeLocked(t *testing.T) {
 		{"undo"},
 		{"abort"},
 		{"continue"},
-		{"repair"},
-		{"worktree", "x"},
-		{"worktree", "rm", "x"},
+		{"doctor", "--fix"},
 		{"init", "--trunk", "main"},
 		{"checkout", "feat-a"},
 		{"co", "feat-a"},
@@ -278,10 +268,9 @@ func TestJSONEnvelopeLocked(t *testing.T) {
 	for _, args := range [][]string{
 		{"status"},
 		{"log"},
-		{"validate"},
+		{"doctor"},
 		{"checkout"}, // bare checkout only lists; it never moves HEAD
 		{"restack", "--dry-run"},
-		{"fold", "--dry-run"},
 		{"sync", "--dry-run"},
 	} {
 		var code int
@@ -332,11 +321,9 @@ func TestJSONEnvelopePausedElsewhere(t *testing.T) {
 	mustRun(t, "git", "add", "a.txt")
 	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
 
-	wt, err := materializeWorktree("feat-a")
-	if err != nil {
-		t.Fatalf("materializeWorktree: %v", err)
-	}
-	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+	wtPath := filepath.Join(t.TempDir(), "wt-feat-a")
+	mustRun(t, "git", "worktree", "add", "-q", wtPath, "feat-a")
+	if err := exec.Command("git", "-C", wtPath, "rebase", "main").Run(); err == nil {
 		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
 	}
 	resetProcCaches()
@@ -345,7 +332,7 @@ func TestJSONEnvelopePausedElsewhere(t *testing.T) {
 	if env.Error.Branch != "feat-a" {
 		t.Fatalf("paused envelope branch = %q, want feat-a", env.Error.Branch)
 	}
-	if env.Error.Worktree == "" || !sameExistingPath(env.Error.Worktree, wt.Path) {
-		t.Fatalf("paused envelope worktree = %q, want %q", env.Error.Worktree, wt.Path)
+	if env.Error.Worktree == "" || !sameExistingPath(env.Error.Worktree, wtPath) {
+		t.Fatalf("paused envelope worktree = %q, want %q", env.Error.Worktree, wtPath)
 	}
 }

@@ -97,12 +97,13 @@ change the engine and these still hold, the topology bookkeeping is sound.
 
 ## Test layers
 
-- `internal/stack/*_test.go` — engine over the fake git (incl. conflicts + sync).
+- `internal/stack/*_test.go` — engine over the fake git (incl. conflicts, sync, and GitHub PR sync).
   **The inner loop.**
-- `cmd/*_test.go` — the adapter layer: dispatch, flag parsing, output rendering.
+- `internal/gh/*_test.go` — zero-dependency `gh` CLI wrapper tests.
+- `cmd/*_test.go` — the adapter layer: dispatch, flag parsing, output rendering, mock `gh` integration.
   The cmd suite silences command stdout; when debugging a failure, run with
   `ST_TEST_DEBUG=1 go test ./cmd/...` to un-silence it.
-- `e2e/e2e_test.go` — the real binary as a hermetic subprocess; contributes to
+- `e2e/*_test.go` — the real binary as a hermetic subprocess; contributes to
   coverage via `GOCOVERDIR`.
 
 A historical manual-QA snapshot lives at `docs/qa/FEATURE_STORIES.csv`

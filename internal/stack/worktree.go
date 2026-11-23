@@ -1,123 +1,10 @@
 package stack
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/andyrewlee/stacked/internal/git"
 )
-
-const repoKeyHashBytes = 6
-
-// worktreesRoot is the central per-repo directory under the user's home where
-// lazily-materialized worktrees live: ~/.stacked/worktrees. This mirrors the
-// existing .git/stacked/ naming and keeps linked worktrees OUT of the repo tree
-// so test runners, linters, and watchers never walk into them.
-func worktreesRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".stacked", "worktrees"), nil
-}
-
-// StableRepoKey returns the repo path segment for generated worktrees. The
-// readable prefix comes from the repository basename, while the hash input is a
-// stable repository identity such as GitCommonDir.
-func StableRepoKey(repoBase, identityPath string) (string, error) {
-	absIdentity, err := filepath.Abs(identityPath)
-	if err != nil {
-		return "", err
-	}
-	absIdentity = filepath.Clean(absIdentity)
-	sum := sha256.Sum256([]byte(absIdentity))
-	return fmt.Sprintf("%s-%x", sanitizeSegment(repoBase), sum[:repoKeyHashBytes]), nil
-}
-
-// StableRepoBase returns the human-readable basename to pair with a common git
-// dir identity. For normal repositories, GitCommonDir points at the main
-// worktree's .git directory even when called from a linked worktree, so its
-// parent is the stable basename. Other layouts fall back to the current repo
-// root's basename.
-func StableRepoBase(repoRoot, commonDir string) string {
-	cleanCommon := filepath.Clean(commonDir)
-	if filepath.Base(cleanCommon) == ".git" {
-		parent := filepath.Dir(cleanCommon)
-		if parent != "." && parent != string(os.PathSeparator) {
-			return filepath.Base(parent)
-		}
-	}
-	return filepath.Base(repoRoot)
-}
-
-// WorktreePath returns the canonical on-disk path a worktree for branch would
-// live under: ~/.stacked/worktrees/<repo-key>/<encoded-branch>. It is a PURE
-// path computation — the worktree need not exist. repo is sanitized into one
-// path segment, while branch is losslessly encoded into one path segment.
-func WorktreePath(repo, branch string) (string, error) {
-	root, err := worktreesRoot()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, sanitizeSegment(repo), encodeBranchSegment(branch)), nil
-}
-
-// sanitizeSegment turns an arbitrary identifier into a single safe path
-// segment: path separators and other risky characters become dashes, and any
-// leading dots are stripped so the segment can never escape its parent or be a
-// hidden/relative entry.
-func sanitizeSegment(s string) string {
-	repl := func(r rune) rune {
-		switch r {
-		case '/', '\\', ':', ' ':
-			return '-'
-		default:
-			return r
-		}
-	}
-	out := strings.Map(repl, s)
-	out = strings.Trim(out, "-")
-	out = strings.TrimLeft(out, ".")
-	if out == "" {
-		return "_"
-	}
-	return out
-}
-
-// encodeBranchSegment encodes an arbitrary branch name into a single
-// filesystem-safe path segment without collapsing distinct branch names. Safe
-// ASCII branch bytes stay readable; unsafe bytes are percent-encoded.
-func encodeBranchSegment(s string) string {
-	if s == "" {
-		return "~"
-	}
-	var out strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if isSafeBranchSegmentByte(c) && (i != 0 || c != '.') {
-			out.WriteByte(c)
-			continue
-		}
-		out.WriteByte('%')
-		out.WriteByte(upperHex[c>>4])
-		out.WriteByte(upperHex[c&0x0f])
-	}
-	return out.String()
-}
-
-const upperHex = "0123456789ABCDEF"
-
-func isSafeBranchSegmentByte(c byte) bool {
-	return (c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') ||
-		c == '-' ||
-		c == '_' ||
-		c == '.'
-}
 
 // OwnerOf returns the worktree that has branch checked out, and whether one
 // exists. git forbids rebasing a branch checked out in another worktree, so the
@@ -131,10 +18,7 @@ func OwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool) {
 	return git.Worktree{}, false
 }
 
-// MainWorktree returns the repository's main (non-linked) worktree. `git worktree
-// list` always reports the main worktree first, so it is the slice's first
-// element; the slice preserves that order end to end. Returns false for an empty
-// slice.
+// MainWorktree returns the repository's main (non-linked) worktree.
 func MainWorktree(worktrees []git.Worktree) (git.Worktree, bool) {
 	if len(worktrees) == 0 {
 		return git.Worktree{}, false
@@ -142,11 +26,8 @@ func MainWorktree(worktrees []git.Worktree) (git.Worktree, bool) {
 	return worktrees[0], true
 }
 
-// LinkedOwnerOf returns the LINKED worktree that has branch checked out, and
-// whether one exists. Unlike OwnerOf it ignores the main worktree, so it answers
-// the question `st worktree add`/`rm` actually care about — "does branch have its
-// OWN separate worktree?" — rather than treating the main tree (where the current
-// branch already lives) as a removable/duplicate worktree.
+// LinkedOwnerOf returns the linked worktree that has branch checked out,
+// ignoring the main worktree.
 func LinkedOwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool) {
 	main, _ := MainWorktree(worktrees)
 	for _, wt := range worktrees {
@@ -159,25 +40,13 @@ func LinkedOwnerOf(worktrees []git.Worktree, branch string) (git.Worktree, bool)
 
 // PausedRebaseOwners maps each branch that has a rebase paused in a detached
 // worktree to that worktree, in one pass over a caller-fetched worktree list.
-// A worktree mid-rebase lists as `detached` with no branch attribute, so
-// OwnerOf/LinkedOwnerOf cannot see the branch its --continue/--abort will
-// eventually update-ref — only rebase-merge|rebase-apply/head-name names it.
-// Git itself refuses `branch -D` and `rebase --onto` for such a branch, so an
-// op that reaches it fails mid-mutation; the mutation gate and undo use this
-// map to refuse UP FRONT instead (untracked heads like "detached HEAD" never
-// match a tracked name, so foreign pauses on branches st does not manage do
-// not block anything).
 func PausedRebaseOwners(g Git, wts []git.Worktree) (map[string]git.Worktree, error) {
 	var paused map[string]git.Worktree
 	for _, wt := range wts {
 		if wt.Branch != "" {
-			continue // attached worktrees report their owner branch directly
+			continue
 		}
 		if WorktreeStale(g, wt) {
-			// A dead registration's rebase-merge dir is gone with the
-			// worktree — it cannot hold a live pause, and probing the path
-			// only leaks `git -C` failure noise. `git worktree prune` clears
-			// the row.
 			continue
 		}
 		inRebase, err := g.RebaseInProgressIn(wt.Path)
@@ -203,32 +72,15 @@ func PausedRebaseOwners(g Git, wts []git.Worktree) (map[string]git.Worktree, err
 }
 
 // WorktreeStale reports whether a worktree registration is dead: git already
-// marked it prunable, or its directory is simply gone. The prunable attribute
-// only exists on newer gits, so the port's stat-backed DirExists covers the
-// floor — a row whose path stat fails for another reason (e.g. permission)
-// counts as PRESENT (see DirExists): the probe that runs on it reports the
-// real error instead of the registration being misclassified as stale.
-// The dir check goes through the port so the fake git controls it.
+// marked it prunable, or its directory is simply gone.
 func WorktreeStale(g Git, wt git.Worktree) bool {
 	return wt.Prunable || !g.DirExists(wt.Path)
 }
 
-// ownerElsewhere reports whether branch is checked out in a worktree OTHER than
-// the one this process runs in. In a single-tree repo (or when branch is the
-// current branch here) it returns false, so the in-place rebase path is taken
-// and existing behavior is preserved. The returned Worktree is branch's owner.
 func (s *State) ownerElsewhere(g Git, branch string) (git.Worktree, bool, error) {
 	return s.ownerElsewhereWith(g, branch, "")
 }
 
-// ownerElsewhereWith is ownerElsewhere with the caller's known current branch
-// as a hint: the restack cascade already threads HEAD's position
-// (expectedHEAD), so passing it avoids one CurrentBranch spawn per
-// worktree-owned branch. curHint == "" means unknown (detached HEAD, or a
-// caller without the threading discipline) and falls back to the live read.
-// The fallback deliberately ignores the CurrentBranch error, exactly like the
-// original: on a detached HEAD cur is "" and the branch counts as owned
-// elsewhere.
 func (s *State) ownerElsewhereWith(g Git, branch, curHint string) (git.Worktree, bool, error) {
 	wts, err := g.Worktrees()
 	if err != nil {
@@ -239,24 +91,18 @@ func (s *State) ownerElsewhereWith(g Git, branch, curHint string) (git.Worktree,
 	}
 	owner, ok := OwnerOf(wts, branch)
 	if !ok {
-		return git.Worktree{}, false, nil // not checked out anywhere: rebase here
+		return git.Worktree{}, false, nil
 	}
 	cur := curHint
 	if cur == "" {
 		cur, _ = g.CurrentBranch()
 	}
 	if branch == cur {
-		return git.Worktree{}, false, nil // checked out HERE: rebase in place
+		return git.Worktree{}, false, nil
 	}
 	return owner, true, nil
 }
 
-// ownerElsewhereFrom is the snapshot variant of ownerElsewhereWith: it answers
-// the same question against a worktree list the caller already fetched, so a
-// loop over many branches (absorb's pre-flight checks every target) pays ONE
-// `git worktree list` total instead of one per branch. cur must be the
-// caller's known current branch — passing "" treats every owned branch as
-// owned elsewhere, matching the detached-HEAD arm of ownerElsewhereWith.
 func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, bool) {
 	if !IsMultiWorktree(wts) {
 		return git.Worktree{}, false
@@ -270,13 +116,7 @@ func ownerElsewhereFrom(wts []git.Worktree, branch, cur string) (git.Worktree, b
 
 // restackInWorktree rebases name onto parentTip inside its owning worktree
 // (git -C <path>), gated on that worktree having no lock, no paused rebase
-// and no dirty tree. A locked, paused-rebase or dirty owner is SKIPPED
-// (recorded in s.skippedWorktrees, never clobbered) — the lock wins first
-// (a standing hold, no probe needed), then the rebase probe because a
-// paused-but-clean rebase would otherwise pass the clean gate, and aborting
-// a rebase this process did not start must never happen. A conflict during
-// the cross-worktree rebase is rolled back in that worktree and surfaced as
-// an error, rather than left paused where the main process cannot drive it.
+// and no dirty tree.
 func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip string, owner git.Worktree, verdicts map[string]wtVerdict) (bool, error) {
 	reason, err := worktreeRestackDisposition(env, owner, name, verdicts)
 	if err != nil {
@@ -287,34 +127,18 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 		return false, nil
 	}
 	if err := env.Git.RebaseOntoIn(owner.Path, parentTip, b.ParentSHA, name); err != nil {
-		// Roll back the owner worktree's rebase so it is never left paused; the
-		// main process's continue/abort operate on the cwd and could not finish it.
 		rebaseErr := fmt.Errorf("rebasing %q in its worktree %q: %w (resolve it there, then re-run)", name, owner.Path, err)
-		// …but abort ONLY a rebase this spawn provably started: the disposition
-		// verdict above was a snapshot, and a foreign rebase can begin in the
-		// owner between the probe and the spawn. Aborting a rebase this process
-		// did not start must never happen — the head-name file identifies ours
-		// (st's spawn is `git rebase --onto <tip> <base> <name>`, so head-name
-		// records name). The residual ambiguity — a foreign rebase on the SAME
-		// branch name appearing in the same window — is accepted: it would need
-		// the branch checked out there plus identical timing.
 		inRebase, probeErr := env.Git.RebaseInProgressIn(owner.Path)
 		if probeErr != nil {
 			return false, AlsoFailed(rebaseErr, fmt.Sprintf("verify the paused rebase in %q belongs to this command; resolve it there", owner.Path), probeErr)
 		}
 		if !inRebase {
-			return false, rebaseErr // the spawn failed before pausing anything
+			return false, rebaseErr
 		}
 		if headName, hnErr := env.Git.RebaseHeadNameIn(owner.Path); hnErr != nil || headName != name {
-			// A foreign (or unidentifiable) rebase paused in the owner — leave
-			// it intact; the user resolves it in that worktree.
 			return false, fmt.Errorf("%w (a rebase is in progress in %q that this command did not start; it was left untouched)", rebaseErr, owner.Path)
 		}
 		if abortErr := env.Git.RebaseAbortIn(owner.Path); abortErr != nil {
-			// Decide by probe, not the error's wording — git's stderr is for
-			// humans, never control flow. When no rebase is left paused the
-			// rollback's goal is met whatever the abort complained about; a
-			// still-paused (or unconfirmable) rebase stays an AlsoFailed.
 			inRebase, probeErr := env.Git.RebaseInProgressIn(owner.Path)
 			if probeErr == nil && !inRebase {
 				return false, rebaseErr
@@ -330,10 +154,6 @@ func (s *State) restackInWorktree(env Env, name string, b *Branch, parentTip str
 	return true, nil
 }
 
-// wtVerdict is the precomputed gate answer for one worktree path: whether a
-// rebase is paused there and whether the tree is clean. The error fields
-// record which probe failed so the consumer wraps it with its own branch
-// context — preserving the serial loop's error wording and position.
 type wtVerdict struct {
 	paused    bool
 	clean     bool
@@ -341,14 +161,6 @@ type wtVerdict struct {
 	cleanErr  error
 }
 
-// probeWorktrees fans out the per-worktree gate probes over distinct paths,
-// replacing the serial per-branch probes loops like the restack cascade
-// and worktree rm --all paid. checkRebase controls whether the rebase-state
-// probe runs: when it does, the clean probe runs only on unpaused worktrees —
-// preserving the serial gate's check order (a paused-but-clean rebase must not
-// report clean). A probe error is recorded on that path's verdict rather than
-// aborting the fan-out, so the first CONSUMER reports it at its own position,
-// exactly where the serial loop would have surfaced it.
 func probeWorktrees(g Git, paths []string, checkRebase bool) map[string]wtVerdict {
 	var uniq []string
 	seen := map[string]bool{}
@@ -358,9 +170,6 @@ func probeWorktrees(g Git, paths []string, checkRebase bool) map[string]wtVerdic
 			uniq = append(uniq, p)
 		}
 	}
-	// ParallelProbes' contract is slot writes: each fn writes only its own
-	// index (a map write per goroutine would race), and the map is assembled
-	// after the fan completes.
 	slots := make([]wtVerdict, len(uniq))
 	_ = git.ParallelProbes(len(uniq), func(i int) error {
 		path := uniq[i]
@@ -394,9 +203,6 @@ func probeWorktrees(g Git, paths []string, checkRebase bool) map[string]wtVerdic
 	return verdicts
 }
 
-// wtSkipReason names why a restack skipped a branch living in a foreign
-// worktree — a git-side lock, a paused rebase, or a dirty tree. The zero
-// value is "proceed": the disposition returns it alongside no skip.
 type wtSkipReason int
 
 const (
@@ -407,25 +213,10 @@ const (
 	wtSkipStale
 )
 
-// worktreeRestackDisposition answers whether a foreign-owned worktree's
-// branch proceeds to a restack or is skipped — and for a skip, which reason
-// (wtSkipReason) to report. The gate order is the contract: a lock wins
-// first — it is a standing hold that needs no probe — then the rebase
-// check, because a paused-but-clean rebase would pass the clean gate, and
-// aborting a rebase this process did not start must never happen. Both the
-// apply path (restackInWorktree) and the dry-run preview
-// (wouldSkipWorktreeRestack) consume it — the shared piece is the gate
-// ORDER, so a new gate lands once. verdicts, when non-nil, carries
-// precomputed answers (probeWorktrees); a path missing from the map is
-// probed live, so callers without a batch (single restacks) behave exactly
-// as before.
 func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verdicts map[string]wtVerdict) (wtSkipReason, error) {
 	if owner.Locked {
 		return wtSkipLocked, nil
 	}
-	// A dead registration cannot be probed — its path is gone. Keep the row
-	// as the branch's owner (git still considers it checked out until prune)
-	// and skip, naming the remedy, rather than surfacing a `git -C` failure.
 	if WorktreeStale(env.Git, owner) {
 		return wtSkipStale, nil
 	}
@@ -461,26 +252,11 @@ func worktreeRestackDisposition(env Env, owner git.Worktree, branch string, verd
 	return wtSkipNone, nil
 }
 
-// cascadeWorktrees is the per-cascade worktree snapshot: one `worktree list`
-// plus the batched gate verdicts for every foreign-owned path the walk can
-// touch. restackForest builds it once so the per-branch loop pays no
-// `worktree list` and no serial `git -C` probes. Foreign worktree entries are
-// immutable for the cascade's duration (a rebase inside an owning worktree
-// never changes its checked-out branch), but the caller's own entry moves
-// with every in-place rebase — headMoved threads that. A nil
-// *cascadeWorktrees means "probe live" — the single-branch restack path keeps
-// its old spawns.
 type cascadeWorktrees struct {
 	wts      []git.Worktree
 	verdicts map[string]wtVerdict
 }
 
-// newCascadeWorktrees snapshots the worktree list and pre-probes the gate
-// answers for every branch in the walk that is foreign-owned (checked out in
-// another worktree). cur is the cascade's initial expectedHEAD — a walked
-// branch equal to it is by definition owned by this worktree, and HEAD only
-// ever lands on in-place-rebased (non-foreign) branches during the walk, so
-// the foreign set is stable for the cascade's duration.
 func newCascadeWorktrees(env Env, s *State, starts []string, idx map[string][]string, cur string) (*cascadeWorktrees, error) {
 	wts, err := env.Git.Worktrees()
 	if err != nil {
@@ -494,8 +270,6 @@ func newCascadeWorktrees(env Env, s *State, starts []string, idx map[string][]st
 	for _, start := range starts {
 		for _, name := range append([]string{start}, descendantsOf(idx, start)...) {
 			if owner, elsewhere := ownerElsewhereFrom(wts, name, cur); elsewhere && !WorktreeStale(env.Git, owner) {
-				// Stale owners stay out of the batch — a dead path can only
-				// fail the probe; the disposition reports staleness itself.
 				paths = append(paths, owner.Path)
 			}
 		}
@@ -504,15 +278,6 @@ func newCascadeWorktrees(env Env, s *State, starts []string, idx map[string][]st
 	return cw, nil
 }
 
-// headMoved keeps the snapshot honest when an in-place rebase moves HEAD
-// oldHEAD → newHEAD: the caller's own worktree is the unique entry owning
-// oldHEAD (git forbids two worktrees on one branch), so it flips to newHEAD.
-// Without this the stale entry keeps claiming the vacated branch — owned by
-// the caller's own path — and ownerElsewhereFrom would misroute its rebase
-// into restackInWorktree, which aborts conflicts instead of pausing them in
-// place. oldHEAD == "" means the caller was detached at snapshot time; its
-// entry has Branch "" and is invisible to OwnerOf, so there is nothing to
-// flip (a "" match would wrongly flip every detached foreign entry).
 func (cw *cascadeWorktrees) headMoved(oldHEAD, newHEAD string) {
 	if oldHEAD == "" || oldHEAD == newHEAD {
 		return
@@ -524,107 +289,7 @@ func (cw *cascadeWorktrees) headMoved(oldHEAD, newHEAD string) {
 	}
 }
 
-// releaseOwnedWorktree tears down the linked worktree that owns branch, if any,
-// so a follow-up branch deletion is not refused by git ("checked out in another
-// worktree"). It is a no-op in a single-tree repo, when branch is checked out
-// here (the current worktree, which git lets us delete from after a checkout
-// elsewhere), or when branch owns no worktree. It rejects a branch owned by the
-// main worktree while the command runs elsewhere: the main worktree is not a
-// removable linked worktree.
-//
-// DESIGN: only a CLEAN owning worktree is auto-removed. A dirty one is left in
-// place and an error is returned so the caller deletes nothing — in-progress
-// work in another worktree is never silently discarded; the user is told to
-// commit/stash or `st worktree rm` first.
-func (s *State) releaseOwnedWorktree(env Env, branch string) error {
-	path, err := s.ownedWorktreeReleaseTarget(env, branch)
-	if err != nil {
-		return err
-	}
-	if path == "" {
-		return nil
-	}
-	if err := env.Git.WorktreeRemove(path, false); err != nil {
-		return fmt.Errorf("removing worktree %q for %q: %w", path, branch, err)
-	}
-	return nil
-}
-
-func (s *State) ownedWorktreeReleaseTarget(env Env, branch string) (string, error) {
-	wts, err := env.Git.Worktrees()
-	if err != nil {
-		return "", err
-	}
-	if !IsMultiWorktree(wts) {
-		return "", nil
-	}
-	owner, ok := OwnerOf(wts, branch)
-	if !ok {
-		return "", nil
-	}
-	main, _ := MainWorktree(wts)
-	// The shared classifier owns the gate order — main-owner, inside-cwd,
-	// locked, stale, dirty — and this site keeps no paused gate: a paused
-	// worktree classifies through its dirty index, as it always did.
-	verdict, err := ClassifyWorktreeRemoval(env.Git, owner.Path, main.Path, RemovalProbes{
-		Locked: owner.Locked,
-		Stale:  WorktreeStale(env.Git, owner),
-		Clean: func(path string) (bool, error) {
-			clean, err := env.Git.IsCleanIn(path)
-			if err != nil {
-				return false, fmt.Errorf("checking worktree %q for %q: %w", path, branch, err)
-			}
-			return clean, nil
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	switch verdict {
-	case RemovalCheckedOutMain:
-		// A branch checked out in the main worktree is not removable state —
-		// nothing here releases a worktree. When it is ALSO the caller's
-		// current branch the delete/fold callers' checkout dance handles it;
-		// only refuse when it is checked out there and the caller stands
-		// elsewhere.
-		if cur, _ := env.Git.CurrentBranch(); branch == cur {
-			return "", nil
-		}
-		return "", fmt.Errorf("branch %q is checked out in the main worktree %q; switch away from it there before deleting it", branch, owner.Path)
-	case RemovalInsideCaller:
-		// Linked owner: never remove the worktree the caller is standing
-		// in — RepoRoot (not CurrentBranch) decides, so a detached HEAD
-		// inside the worktree is caught too.
-		return "", fmt.Errorf("cannot remove worktree %q for %q: you are inside it; run from the main worktree (or another worktree)", owner.Path, branch)
-	case RemovalLocked:
-		return "", fmt.Errorf("branch %q's worktree %q is locked (git worktree lock); unlock it (`st worktree unlock %s`) before deleting it", branch, owner.Path, branch)
-	case RemovalStale:
-		return "", fmt.Errorf("branch %q's worktree %q is a stale registration (the directory is gone); run `git worktree prune` to release it before deleting %q", branch, owner.Path, branch)
-	case RemovalDirty:
-		return "", fmt.Errorf("branch %q has uncommitted changes in its worktree %q; commit/stash there or run `st worktree rm %s` first", branch, owner.Path, branch)
-	}
-	return owner.Path, nil
-}
-
 // IsMultiWorktree reports whether the repository has more than one worktree.
-// The whole worktree feature is gated on this: when only the main worktree
-// exists it returns false and every caller short-circuits to today's
-// single-tree behavior, which must stay byte-for-byte unchanged.
 func IsMultiWorktree(worktrees []git.Worktree) bool {
 	return len(worktrees) > 1
-}
-
-// CwdWithinWorktree reports whether the process's own working directory sits
-// inside the worktree rooted at dir. Removal paths call it before deleting a
-// worktree: removing the tree the caller is standing in would leave it in a
-// deleted directory (or fail mid-operation on gits that refuse). The probe is
-// fail-closed — a RepoRoot error surfaces rather than guessing "not inside".
-// Unlike a CurrentBranch comparison it does not depend on HEAD being attached,
-// so a detached HEAD inside the worktree is still caught.
-func CwdWithinWorktree(g Git, dir string) (bool, error) {
-	root, err := g.RepoRoot()
-	if err != nil {
-		return false, fmt.Errorf("locating the current worktree root: %w", err)
-	}
-	return sameWorktreePath(root, dir), nil
 }

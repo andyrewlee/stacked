@@ -34,15 +34,14 @@ func (g *branchStubGit) RepoRoot() (string, error) {
 	return g.root, g.rootErr
 }
 
-func (g *branchStubGit) Checkout(name string) error              { return nil }
-func (g *branchStubGit) CheckoutDetach(ref string) error         { return nil }
-func (g *branchStubGit) RenameBranch(o, n string) error          { return nil }
-func (g *branchStubGit) WorktreeRemove(dir string, f bool) error { return nil }
-func (g *branchStubGit) RebaseOnto(a, b, c string) error         { return nil }
-func (g *branchStubGit) RebaseOntoIn(d, a, b, c string) error    { return nil }
-func (g *branchStubGit) RebaseContinue() error                   { return nil }
-func (g *branchStubGit) RebaseAbort() error                      { return nil }
-func (g *branchStubGit) RebaseAbortIn(dir string) error          { return nil }
+func (g *branchStubGit) Checkout(name string) error           { return nil }
+func (g *branchStubGit) CheckoutDetach(ref string) error      { return nil }
+func (g *branchStubGit) RenameBranch(o, n string) error       { return nil }
+func (g *branchStubGit) RebaseOnto(a, b, c string) error      { return nil }
+func (g *branchStubGit) RebaseOntoIn(d, a, b, c string) error { return nil }
+func (g *branchStubGit) RebaseContinue() error                { return nil }
+func (g *branchStubGit) RebaseAbort() error                   { return nil }
+func (g *branchStubGit) RebaseAbortIn(dir string) error       { return nil }
 
 // rebaseRecordingGit is a stack.Git stub that records the arguments each
 // rebase method received and returns a configured error. Embedding the port
@@ -85,6 +84,15 @@ func (g *rebaseRecordingGit) RebaseAbortIn(dir string) error {
 // the memoized worktree list — on failure too, because a failed rebase can
 // still have moved or detached HEAD in a worktree. These tests are serial:
 // they mutate the package-global cache.
+func seedWorktreeCache(t *testing.T, wts []git.Worktree) {
+	t.Helper()
+	worktreeCacheState.Lock()
+	worktreeCacheState.probed = true
+	worktreeCacheState.wts = wts
+	worktreeCacheState.Unlock()
+	t.Cleanup(resetProcCaches)
+}
+
 func TestCachedPortRebaseInvalidatesOwnership(t *testing.T) {
 	sentinel := errors.New("rebase exploded")
 
@@ -186,7 +194,6 @@ func TestCachedPortCurrentBranchMemo(t *testing.T) {
 // read re-probes and observes the new HEAD.
 func TestCachedPortCurrentBranchInvalidates(t *testing.T) {
 	mutations := map[string]func(c *cachedPort) error{
-		"WorktreeRemove": func(c *cachedPort) error { return c.WorktreeRemove("/wt", false) },
 		"Checkout":       func(c *cachedPort) error { return c.Checkout("b") },
 		"CheckoutDetach": func(c *cachedPort) error { return c.CheckoutDetach("deadbeef") },
 		"RenameBranch":   func(c *cachedPort) error { return c.RenameBranch("o", "n") },

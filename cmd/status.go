@@ -11,31 +11,31 @@ import (
 
 func init() {
 	register(&Command{
-		Name:    "status",
-		Aliases: []string{"stat"},
-		Summary: "Show current branch, its parent/children, and restack state",
-		Usage:   "st status [--json]",
-		Run:     runStatus,
+		Name:       "status",
+		Aliases:    []string{"stat"},
+		Summary:    "Show current branch, its parent/children, commits, and restack state (--pr for GitHub PR)",
+		Usage:      "st status [--pr] [--json]",
+		Run:        runStatus,
+		NewFlagSet: statusFlagSet,
 	})
 }
 
-// runStatus summarizes the current branch's position in the stack: its role
-// (trunk/tracked/untracked), parent, children, whether it needs a restack, and
-// whether the working tree is clean. With --json it emits the same data as JSON.
 func runStatus(args []string) error {
-	asJSON, err := parsePlain("status", args)
-	if err != nil {
+	var o statusOpts
+	fs := newStatusFlags(&o)
+	if err := parseFlagSet(fs, args); err != nil {
 		return err
 	}
+	if err := rejectArgs("status", fs.Args()); err != nil {
+		return err
+	}
+	asJSON := o.asJSON
 
 	s, err := loadState()
 	if err != nil {
 		return err
 	}
 
-	// A paused restack leaves HEAD detached; detect it before reading the current
-	// branch so status can still report where the rebase stopped (and the
-	// conflicted files) instead of failing with "detached HEAD".
 	var rebaseInProgress bool
 	var rebaseBranch string
 	var conflictedFiles []string
@@ -53,8 +53,6 @@ func runStatus(args []string) error {
 
 	cur, err := currentBranch()
 	if err != nil {
-		// A detached HEAD is expected mid-rebase; report the rebase state with no
-		// current branch rather than failing.
 		if !rebaseInProgress || !errors.Is(err, git.ErrDetachedHEAD) {
 			return err
 		}
@@ -70,8 +68,14 @@ func runStatus(args []string) error {
 	}
 
 	parent := ""
+	var commits []git.CommitInfo
 	if b, ok := s.Get(cur); ok {
 		parent = b.Parent
+		if b.ParentSHA != "" {
+			if list, cerr := git.CommitList(b.ParentSHA, cur); cerr == nil {
+				commits = list
+			}
+		}
 	}
 
 	children := []string{}
@@ -79,9 +83,11 @@ func runStatus(args []string) error {
 		children = append(children, c.Name)
 	}
 
+	p := newGitPort()
+
 	var needs *bool
 	if s.IsTracked(cur) {
-		n, err := s.NeedsRestack(newGitPort(), cur)
+		n, err := s.NeedsRestack(p, cur)
 		if err != nil {
 			return err
 		}
@@ -93,9 +99,6 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	// The current branch's live tip — one batched cat-file probe — lets a
-	// poller spot external ref movement without its own rev-parse. Empty when
-	// HEAD is detached or the ref is gone.
 	tip := ""
 	if cur != "" {
 		tips, err := git.TipsFor([]string{cur})
@@ -105,12 +108,8 @@ func runStatus(args []string) error {
 		tip = tips[cur]
 	}
 
-	// Published state compares the live tip to the local tracking ref — the
-	// last fetch/push, not the server's current state. status resolves "the"
-	// remote as origin, the single-remote default every command shares; with
-	// no origin there is no remote context and the field stays absent.
 	published := ""
-	if cur != "" && newGitPort().remoteExists("origin") {
+	if cur != "" && p.remoteExists("origin") {
 		states, err := git.PublishedStates("origin", []string{cur})
 		if err != nil {
 			return err
@@ -118,8 +117,21 @@ func runStatus(args []string) error {
 		published = string(states[cur])
 	}
 
-	// In a multi-worktree repo, report where the current branch lives. Gated so
-	// single-tree output is byte-for-byte unchanged (worktreePath stays "").
+	trunkBehind := trunkBehindCount(p, s.Trunk)
+
+	var prInfo *prStatus
+	if o.pr {
+		openPRs, err := loadOpenPRsForDisplay()
+		if err != nil {
+			return err
+		}
+		if cur != "" {
+			if pr, ok := openPRs[cur]; ok {
+				prInfo = makePRStatus(&pr, parent)
+			}
+		}
+	}
+
 	worktreePath := ""
 	if wts, err := worktrees(); err != nil {
 		return err
@@ -131,20 +143,23 @@ func runStatus(args []string) error {
 
 	if asJSON {
 		payload := struct {
-			Branch           string   `json:"branch"`
-			Trunk            string   `json:"trunk"`
-			Role             string   `json:"role"`
-			Parent           string   `json:"parent,omitempty"`
-			Tip              string   `json:"tip,omitempty"`
-			Published        string   `json:"published,omitempty"`
-			Children         []string `json:"children"`
-			NeedsRestack     *bool    `json:"needsRestack,omitempty"`
-			WorktreeClean    bool     `json:"worktreeClean"`
-			RebaseInProgress bool     `json:"rebaseInProgress,omitempty"`
-			RebaseBranch     string   `json:"rebaseBranch,omitempty"`
-			ConflictedFiles  []string `json:"conflictedFiles,omitempty"`
-			Worktree         string   `json:"worktree,omitempty"`
-		}{cur, s.Trunk, role, parent, tip, published, children, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath}
+			Branch           string           `json:"branch"`
+			Trunk            string           `json:"trunk"`
+			TrunkBehind      int              `json:"trunkBehind,omitempty"`
+			Role             string           `json:"role"`
+			Parent           string           `json:"parent,omitempty"`
+			Tip              string           `json:"tip,omitempty"`
+			Published        string           `json:"published,omitempty"`
+			Children         []string         `json:"children"`
+			Commits          []git.CommitInfo `json:"commits,omitempty"`
+			NeedsRestack     *bool            `json:"needsRestack,omitempty"`
+			WorktreeClean    bool             `json:"worktreeClean"`
+			RebaseInProgress bool             `json:"rebaseInProgress,omitempty"`
+			RebaseBranch     string           `json:"rebaseBranch,omitempty"`
+			ConflictedFiles  []string         `json:"conflictedFiles,omitempty"`
+			Worktree         string           `json:"worktree,omitempty"`
+			PR               *prStatus        `json:"pr,omitempty"`
+		}{cur, s.Trunk, trunkBehind, role, parent, tip, published, children, commits, needs, clean, rebaseInProgress, rebaseBranch, conflictedFiles, worktreePath, prInfo}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return err
@@ -191,6 +206,10 @@ func runStatus(args []string) error {
 		out("restack:  up to date\n")
 	}
 
+	if trunkBehind > 0 {
+		out("trunk:    %d commit(s) behind origin/%s (run: st sync)\n", trunkBehind, sanitizeForTerminal(s.Trunk))
+	}
+
 	if clean {
 		out("worktree: clean\n")
 	} else {
@@ -198,6 +217,9 @@ func runStatus(args []string) error {
 	}
 	if worktreePath != "" {
 		out("worktree path: %s\n", sanitizeForTerminal(worktreePath))
+	}
+	if prInfo != nil {
+		out("pr:       %s %s\n", formatPRTag(prInfo), sanitizeForTerminal(prInfo.URL))
 	}
 	if rebaseInProgress {
 		out("rebase:   in progress on %s (run: st continue / st abort)\n", sanitizeForTerminal(rebaseBranch))

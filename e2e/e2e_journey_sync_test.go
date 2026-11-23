@@ -528,8 +528,10 @@ func TestSyncScopesToCurrentStackAndIsolatesSiblingWorktree(t *testing.T) {
 	if !r.branchExists("b1") {
 		t.Fatal("unrelated sibling b1 must not be touched by scoped sync")
 	}
-	// Whole-forest --all DOES see b1 and refuses its dirty worktree.
-	allRes := r.st("sync", "--all")
-	wantExit(t, allRes, 1)
-	wantStderrContains(t, allRes, "uncommitted changes in its worktree")
+	// Whole-forest --all DOES see b1 and skips it (never deleting a foreign worktree).
+	allRes := r.stOK("sync", "--all")
+	wantStdoutContains(t, allRes, "skipped pruning b1")
+	if !r.branchExists("b1") {
+		t.Fatal("b1 in foreign worktree must not be deleted by sync --all")
+	}
 }

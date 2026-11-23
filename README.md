@@ -1,23 +1,30 @@
 # stacked
 
-`stacked` is a minimal, **login-free** CLI for managing **stacked diffs** on top of
-plain `git`. The CLI command is `st`.
+`stacked` is a sharp, zero-dependency CLI for managing **stacked diffs** on top of
+plain `git`, with native GitHub stacked-PR support via `gh`. The CLI command is `st`.
 
 A *stack* is a chain of small branches where each one is based on the branch below
 it instead of all on `main`. This keeps each change small and reviewable while you
-keep building on top. The hard part of stacking by hand is keeping every branch
-rebased on its parent as the parent changes — `stacked` automates exactly that.
+keep building on top. `stacked` automates rebasing your stack as lower branches
+change, pruning merged branches, and keeping GitHub PR bases and stack links in sync.
 
-`stacked` is a thin, ergonomic layer over `git`:
+`stacked` is a thin, ergonomic layer over `git` (and optionally `gh`):
 
-- **No host API.** It never opens pull requests or calls a forge API. Remote Git
-  commands still contact your configured remotes: `st sync` fetches and `st
-  submit` pushes your branches; you open PRs yourself (`st open` just launches
-  the printed compare URLs in your browser).
-- **No third-party dependencies.** It is written in pure Go using only the standard
-  library and shells out to your system `git`.
+- **Native GitHub stacked PRs via `gh`.** When `gh` is on your `PATH` and your
+  remote is GitHub, `st submit` retargets open PR bases *before* pushing, pushes
+  your stack with `--force-with-lease`, creates missing PRs bottom-up, and
+  maintains an idempotent stack-navigation block in multi-PR stacks. `st sync -s`
+  fetches, prunes merged PRs (including squash-merged PRs via GitHub + 3-way
+  merge-tree), restacks survivors, retargets PRs, and force-pushes in one command.
+  Pass `--no-pr` (or omit `gh`) for pure git push-only mode.
+- **No third-party dependencies.** Written in pure Go using only the standard
+  library, shelling out to your system `git` and `gh`.
+- **Untracked-file safe.** Untracked files (agent plans, notes, scratch files)
+  never block stack operations (`restack`, `sync`, `modify`, `delete`, `onto`,
+  `squash`) and are never swept into commits (`st modify` defaults to staged
+  changes; `-a` stages modified *tracked* files only, matching `git commit -a`).
 - **Local metadata only.** The stack topology (which branch's parent is which) is
-  stored in a single JSON file inside your repo's `.git` directory.
+  stored in a single JSON file inside your repo's common `.git` directory.
 
 ## How the local metadata works
 
@@ -132,45 +139,35 @@ a coverage gate, and the engine you'll touch most tests in milliseconds. See
 ## Commands
 
 Run `st help` (or `st <command> -h`) at any time. Flags may be placed
-before or after a positional branch name — the exception is `st undo`'s
-count positional, which parses flags only before it (`st undo --json 2`,
-not `st undo 2 --json`).
+before or after a positional branch name.
 
-Every command below except `__complete` and `completion` and `shell` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
+Every command below except `__complete` and `completion` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
 
 | Command | Aliases | Summary |
 | --- | --- | --- |
 | `st init [--trunk <name>]` | | Initialize stack tracking in this repo. |
-| `st create <name> [-m|--message <msg>] [-a|--all] [--worktree] [--dry-run]` | `c` | Create a new branch stacked on the current branch (`--dry-run` previews). |
-| `st log [--json]` | `ls` | Show the stack as a tree (trunk at the bottom); `--json` for scripting. |
-| `st status [--json]` | `stat` | Show the current branch, its parent/children, and restack state. |
-| `st commits [<branch>] [--json]` | | List the commits in a branch's recorded stack range (base..tip). |
+| `st create <name> [-m|--message <msg>] [-a|--all] [--dry-run]` | `c` | Create a new branch stacked on the current branch (`--dry-run` previews). |
+| `st log [--all] [--pr] [--json]` | `ls` | Show the current stack as a tree (`--all` for whole forest, `--pr` for GitHub PR status). |
+| `st status [--pr] [--json]` | `stat` | Show the current branch, its parent/children, commits, trunk lag, and restack state (`--pr` for GitHub PR). |
 | `st checkout [name]` | `co` | Check out a tracked branch, or list branches when no name is given. |
 | `st up [n]` | `u` | Move up the stack to a child branch. |
 | `st down [n]` | `d` | Move down the stack toward trunk. |
 | `st top` | `t` | Jump to the top (leaf) of the current stack. |
 | `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
-| `st track [name] [--parent <branch>] [--all] [--dry-run]` | | Start tracking a git branch (the current one when no name is given), or every untracked branch with `--all` (`--dry-run` previews the inferred map). |
-| `st untrack [name] [--dry-run]` | | Stop tracking a branch (re-parents its children; `--dry-run` previews the re-parenting). |
-| `st modify [-m|--message <msg>] [-a|--all] [--commit] [--dry-run]` | `amend`, `m` | Amend (or add) a commit, then restack everything above (`--dry-run` previews). |
-| `st absorb [--dry-run]` | | Absorb staged hunks into the stack commits that own their lines (`--dry-run` previews the mapping). |
+| `st track [name] [--parent <branch>] [--all] [--dry-run]` | | Start tracking a git branch (the current one when no name is given), or every untracked branch with `--all` (`--dry-run` previews). |
+| `st untrack [name] [--dry-run]` | | Stop tracking a branch (re-parents its children; `--dry-run` previews). |
+| `st modify [-m|--message <msg>] [-a|--all] [--commit] [--dry-run]` | `amend`, `m` | Amend (or add) a commit from staged changes (`-a` stages modified tracked files), then restack upstack. |
 | `st restack [--all] [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--all` restacks the whole forest; `--dry-run` previews). |
 | `st continue` | | Resume a restack interrupted by a merge conflict. |
 | `st abort` | | Abort an in-progress restack/rebase. |
-| `st fold [--dry-run]` | | Fold the current branch into its parent (parent absorbs its commits; `--dry-run` previews). |
 | `st squash [-m|--message <msg>] [--dry-run]` | | Squash all of the current branch's commits into one (`--dry-run` previews). |
 | `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
-| `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update the stack metadata (`--dry-run` previews the re-parenting). |
+| `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update the stack metadata (`--dry-run` previews). |
 | `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch (merged or squash-merged, or `-f` to force) and re-parent its children (`--dry-run` previews). |
-| `st sync [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, prune merged branches, and restack the current stack (`--all` syncs the whole forest; `--no-fetch` runs offline; `--dry-run` previews). |
-| `st prune [--remote <name>] [--dry-run]` | | Delete tracked branches already merged into the trunk (`sync`'s prune step standalone; `--dry-run` previews). |
-| `st submit [--upto] [--all] [--remote <name>] [--dry-run]` | `ss` | Push the current stack to the remote (`--upto` stops at current; `--all` pushes the whole forest) and print PR compare URLs for newly created branches. |
-| `st open [--all] [--remote <name>] [--dry-run]` | | Open the PR compare URLs `st submit` prints in a browser (`--all` opens every tracked branch's; `--dry-run` prints without opening; `--json` emits the URLs as data). |
-| `st undo [<n>] [--list \| --dry-run] [--force]` | | Undo the last stack-mutating command(s) — `<n>` rewinds the newest n journal entries (`--list` lists the journal, `--dry-run` previews, `--force` restores refs that moved outside st). |
-| `st validate` | `doctor` | Check the stack state for drift or inconsistencies. |
-| `st repair` | | Reconcile the metadata with the repository (fix drift). |
-| `st worktree <branch> [--dry-run] \| --all [--dry-run] \| ls\|list \| rm\|remove <branch> \| rm --all \| lock\|unlock <branch> [--reason s]` | `wt` | Materialize, list, or remove a branch's own worktree, or lock/unlock it (`--dry-run` on the add forms previews paths and `.worktreeinclude` copies; a locked worktree is never restacked into or removed). |
-| `st shell install [bash\|zsh\|fish]` | | Print the shell integration that teleports `cd` into a branch's worktree. |
+| `st sync [-s|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, prune merged branches, and restack (`-s`/`--submit` pushes and updates PRs after). |
+| `st submit [--draft] [--no-pr] [--title <t>] [--body <b>] [--upto] [--all] [--remote <name>] [--dry-run]` | `ss` | Push the current stack and create/retarget/update GitHub PRs (`--no-pr` for push-only; `--upto`/`--all` control scope). |
+| `st undo [--force]` | | Undo the last stack-mutating command (`--force` restores refs that moved outside st). |
+| `st doctor [--fix] [--all]` | `validate` | Check the stack state for drift or inconsistencies (`--fix` repairs metadata; `--all` checks drift across all stacks). |
 | `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
 | `st guide` | | Print the recommended workflow (handy for agents). |
 | `st help` / `st version` | `-h`/`-v` | Show help / print the version. |
@@ -186,292 +183,123 @@ st init                 # auto-detect trunk
 st init --trunk main
 ```
 
-#### `st create <name> [-m <msg>] [-a|--all] [--worktree] [--dry-run]`
+#### `st create <name> [-m <msg>] [-a|--all] [--dry-run]`
 Creates `<name>` off the current branch, switches to it, and tracks it. `-a`
-stages all changes first; `-m` commits the staged changes onto the new branch
-(`-a` requires `-m` — there is nothing to commit without a message). `--dry-run`
-previews the create — including the worktree path and `.worktreeinclude` copies
-with `--worktree` — without changing anything.
-
-With `--worktree`, the branch is created and tracked and its own linked
-worktree is materialized in one command — the main worktree's HEAD does not
-move (with `st shell install` your shell teleports into the new worktree; without
-it the path is printed). `--worktree` cannot be combined with `-m`/`-a`: commit
-inside the new worktree instead.
+stages modified tracked changes first (matching `git commit -a`; untracked files
+must still be staged with `git add`); `-m` commits the staged changes onto the
+new branch (`-a` requires `-m`). `--dry-run` previews without changing anything.
 
 ```sh
-st create feat-a -m "add A"
-st create feat-b --worktree   # branch + its own worktree, main HEAD unmoved
+git add a.txt && st create feat-a -m "add A"
 ```
 
-#### `st log` (`ls`)
-Renders the stack as a tree with the trunk at the bottom and each branch above its
-parent. The current branch is marked `◉`, others `○`, drifted branches are tagged
-`(needs restack)`, and each branch shows its top commit subject. In a
-multi-worktree repo each branch that lives in a linked worktree is also tagged
-with `(worktree: <path>)` (and `dirty` when that worktree has uncommitted
-changes); `--json` adds matching `worktree`/`dirty` fields. A branch whose
-worktree sits paused mid-rebase keeps those fields — the pause detaches its
-worktree's HEAD, so attribution comes from the rebase head-name — and adds
-`paused` plus `conflictedFiles` (the unmerged paths the pause is waiting on);
-a `git worktree lock` hold shows as `locked`. Single-tree output is unchanged.
+#### `st log [--all] [--pr]` (`ls`)
+Renders the current stack as a tree with the trunk at the bottom and each branch
+above its parent (on trunk, detached HEAD, or with `--all`, shows the whole
+forest). The current branch is marked `◉`, others `○`, drifted branches are tagged
+`(needs restack)`, trunk shows `(N behind origin/<trunk>)` from cached remote refs
+with zero network calls, and each branch shows its top commit subject. With `--pr`,
+open GitHub PRs are annotated with number, draft badge, CI check status
+(`✓`/`✗`/`⋯`), and base mismatch warnings. In a multi-worktree repo, branches
+checked out in *other* linked worktrees are annotated with `(worktree: <path>)`
+(the caller's own worktree path is omitted to keep output clean).
 
-#### `st status` (`stat`)
+#### `st status [--pr]` (`stat`)
 Prints the current branch's role (trunk / tracked / untracked), its parent and
-children, whether it needs a restack, and whether the working tree is clean. In a
-multi-worktree repo it also prints `worktree path:` for the current branch
-(`worktree` in `--json`).
-
-#### `st commits [<branch>]`
-Lists the commits in a branch's stack range — `sha subject` per line, newest
-first — from its recorded base (`parentSHA`, the model's claim about where the
-branch sits) to its live tip; the default `<branch>` is the current one.
-`--json` emits `{ "branch", "parentSHA", "commits": [{ "sha", "subject" }] }`.
-The trunk is refused (it has no stack base — it *is* the base).
+children, whether it needs a restack, whether local trunk is behind `origin/<trunk>`,
+and whether the working tree is clean (ignoring untracked files). `--json` also
+includes `commits` (the branch's `parentSHA..tip` commits) and `trunkBehind`.
+With `--pr`, attaches open GitHub PR metadata.
 
 #### `st checkout [name]` (`co`)
 Checks out a tracked branch (or the trunk). With no argument, lists the trunk and
-all tracked branches, marking the current one with `*`. If the branch lives in its
-own worktree (see `st worktree`), checkout *teleports* there instead of switching
-in place — with the shell shim installed your shell `cd`s into the worktree; without
-it the path is printed.
+all tracked branches, marking the current one with `*`. If the branch is checked
+out in another git worktree, checkout refuses cleanly naming that worktree path.
 
-#### `st worktree <branch> [--dry-run] | --all [--dry-run] | ls|list | rm|remove <branch> | rm --all` (`wt`)
-Make a branch a "place you can be" on its own — useful for running multiple agents
-on different branches of one stack in parallel. To create a *new* branch straight
-into its own worktree, use `st create <name> --worktree`; `st worktree <branch>`
-materializes a git worktree for an existing tracked branch under
-`~/.stacked/worktrees/` using
-a collision-resistant repo key and encoded branch segment (outside the repo, so
-runners/linters never walk into it). If `.worktreeinclude` exists, entries are
-copied into the worktree via copy-on-write reflink when available. The file is a
-newline-separated list of repo-root-relative paths or shell-glob patterns —
-`*` and `?` within a path segment, and a segment of exactly `**` matching any
-number of directories (this is shell globbing, not gitignore syntax: no
-negation). Blank lines and `#` comments are ignored, and tracked or
-non-ignored matches are skipped. `st worktree ls` lists every worktree;
-`st worktree rm <branch>` removes a branch's worktree. `st worktree --all`
-materializes a worktree for every tracked branch that lacks one, in one call —
-the branch checked out in the main worktree is skipped, and a rerun is a
-no-op. `st worktree rm --all` is the bulk teardown: it removes the linked worktree
-of every tracked branch that has one — worktrees belonging to untracked
-branches are left alone — skipping dirty ones (in-progress work is never
-discarded), the branch checked out in the main worktree, and the worktree the
-caller is standing in ("you are inside it" — removing it would delete the
-process's own cwd). A worktree paused
-mid-rebase is refused by `rm` and skipped by `rm --all` as "a rebase is in
-progress there" — it lists as `detached`, but `st` still knows which branch
-its rebase owns. The add forms take `--dry-run` — `st worktree <branch>
---dry-run` and `st worktree --all --dry-run` report each worktree path and
-the `.worktreeinclude` copies a real run would make without creating
-anything. The stack metadata is
-shared across all worktrees, so every `st` command sees the same stack.
-
-#### `st shell install [bash|zsh|fish]`
-Prints a tiny shell function that wraps `st` so navigation commands can change your
-shell's directory (a CLI process cannot do that to its parent). Install it with, e.g.,
-`eval "$(st shell install)"` in your shell rc. Without it, teleporting commands print
-the destination path instead.
-
-#### `st up [n]` (`u`) / `st down [n]` (`d`)
-Walk `n` levels up (toward leaves) or down (toward trunk) and check out the result.
-`up` stops at a branch point with multiple children and tells you to pick one.
-
-#### `st top` (`t`) / `st bottom` (`b`)
-Jump to the leaf of the current stack (`top`) or to the bottom branch just above
-trunk (`bottom`).
+#### `st up [n]` (`u`) / `st down [n]` (`d`) / `st top` (`t`) / `st bottom` (`b`)
+Navigate the stack: `up`/`down` step `n` levels; `top` jumps to the leaf; `bottom`
+jumps to the lowest branch above trunk.
 
 #### `st track [name] [--parent <branch>] [--all] [--dry-run]` / `st untrack [name] [--dry-run]`
-`track` starts managing an existing git branch — the current one, or the one
-named — with the parent inferred from the commit graph or set with `--parent`.
-`--all` adopts every untracked local branch in one pass, inferring each
-branch's parent from the merge base (branches that share no history with the
-trunk are skipped and reported in `notes`); `--all --dry-run` prints the
-inferred parent map as `would track:` pairs and records nothing. `untrack`
-stops managing a branch and re-parents its children onto that branch's parent
-(the git branch is not deleted); `untrack --dry-run` previews the
-re-parenting without changing anything.
+`track` adopts an existing git branch (inferring its parent from the commit graph
+or using `--parent`; `--all` adopts every untracked local branch in one pass).
+`untrack` stops managing a branch and re-parents its children onto its parent
+without deleting the git branch.
 
 #### `st modify [-m <msg>] [-a|--all] [--commit] [--dry-run]` (`amend`, `m`)
-Amends the current branch's tip (or, with `--commit`, adds a new commit), then
-restacks every descendant so the rest of the stack rebases onto the new tip. A
-bare `st modify` stages all changes and amends without editing the message.
-`--dry-run` previews the amend (or `--commit`) plus the descendant restacks
-without changing anything.
+Amends the current branch's tip (or, with `--commit`, adds a new commit) using
+**staged changes** by default — untracked files are never swept in. Pass `-a` to
+stage modified tracked files (like `git commit -a`). Automatically restacks every
+descendant onto the new tip.
 
 #### `st restack [--all] [--dry-run]` (`r`)
 Rebases the current branch onto its parent's current tip, then restacks its entire
 upstack in topological order. From the trunk — or with `--all` from anywhere —
-restacks every tracked branch in the forest. Your
-original branch is restored when done. Requires a clean working tree (commit or
-stash first). If a rebase hits a conflict, resolve it, stage the files with
-`git add`, then run `st continue`. When a dependent branch lives in its own
-worktree (see `st worktree`), it is rebased *inside that worktree* — git won't
-let it be rebased from here — as long as that worktree is clean; a dirty
-dependent worktree is skipped with a note rather than clobbered. Similarly,
-every mutating command refuses while a tracked branch (or the trunk) has a
-rebase paused in a linked worktree — git would refuse mid-operation anyway,
-so `st` fails upfront naming the branch and its worktree; resolve it there
-with `st continue` or `st abort`. Pauses on untracked branches never block.
-
-#### `st continue`
-Resumes a restack that stopped on a merge conflict. After you resolve the conflict
-and `git add` the files, `st continue` completes the in-progress rebase, records
-the branch's new base, restacks the remainder of that interrupted operation's
-subtree (never leaking into unrelated stacks or worktrees), and restores your
-original branch when possible. If it hits another conflict, resolve and run
-`st continue` again.
+restacks every tracked branch in the forest. Untracked files do not block restack;
+only tracked staged/unstaged edits do. When a dependent branch lives in another
+clean linked git worktree, it is rebased inside that worktree; dirty or locked
+(`git worktree lock`) dependent worktrees are skipped with a note rather than
+clobbered. On conflict, resolve, `git add`, and run `st continue` (or `st abort`).
 
 #### `st delete <name> [-f|--force] [--dry-run]` (`rm`)
 Deletes a tracked branch, re-parents its children onto the deleted branch's parent,
 and restacks them. Without `-f`, branches already merged or squash-merged into
-their stack parent are allowed; `-f` force-deletes an unmerged branch. `--dry-run`
-previews the deleted, re-parented, and restacked branches without changing anything.
+their stack parent are allowed; `-f` force-deletes an unmerged branch. Never
+deletes another git worktree on disk (refuses if the branch is checked out in
+another worktree).
 
-#### `st sync [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` (`s`)
+#### `st sync [-s|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` (`s`)
 Fetches the remote, fast-forwards the trunk, deletes branches already merged into
 the trunk (re-parenting their children), restacks surviving branches onto the
 updated trunk, and restores your original branch — or switches to the single
-surviving child when the current branch itself was pruned. When run from a
-tracked branch, pruning and restacking scope to the current stack so unrelated
-stacks and worktrees are left untouched; pass `--all` (or run from trunk) to
-sync the whole forest. A branch counts as merged when
-its commits are ancestors of the trunk OR when its entire diff is already in the
-trunk's tree — including squash-merges where another PR edited a disjoint region
-of the same file (via 3-way `git merge-tree --write-tree` on Git 2.38+, with
-exact 2-way tree diff fallback on older Git) — so squash-merged PRs are detected
-from git data alone (no API). A branch carrying any content the trunk lacks is
-never pruned. Sync also works from inside a branch's linked worktree: the trunk
-fast-forward runs in the trunk's own worktree (a dirty trunk worktree blocks
-sync with an error naming its path). `--no-delete` keeps merged branches;
-`--no-fetch` skips the fetch and fast-forward entirely — prune and restack run
-against the local trunk, so sync can run fully offline; a branch landed only on
-the remote survives until the local trunk advances. `--remote` still selects
-and validates the remote configuration without changing the offline basis.
-`--dry-run` previews the prune/re-parent/restack plan without fetching or changing
-anything (against the same local-trunk basis under `--no-fetch`, else the
-already-cached `refs/remotes/<remote>/<trunk>`).
+surviving child when the current branch itself was pruned. Scopes to the current
+stack when on a tracked branch (pass `--all` or run from trunk for the whole
+forest).
 
-#### `st prune [--remote <name>] [--dry-run]`
-Deletes every tracked branch already merged into the trunk — the prune step of
-`st sync` as a standalone command. It never fetches: mergedness is measured
-against the local trunk, or `refs/remotes/<remote>/<trunk>` with `--remote`
-(a missing tracking ref fails loudly). It never moves HEAD and needs no clean
-tree; pruning the current branch is refused with "check out another branch or
-run st sync". `--dry-run` lists the same set under `"dryRun": true` without
-deleting anything.
+A branch counts as merged when:
+- Its commits are ancestors of trunk, OR
+- Its entire diff is already contained in trunk's tree (3-way `git merge-tree --write-tree`
+  on Git 2.38+, with 2-way tree diff fallback on older Git), OR
+- On GitHub remotes with `gh` available, its PR is marked `MERGED` on GitHub.
 
-#### `st submit [--upto] [--all] [--remote <name>] [--dry-run]` (`ss`)
-Pushes every branch in the current stack — from its bottom branch through its
-descendants (`bottom..top`) — in dependency order using `--force-with-lease`,
-setting each branch's upstream (`-u`). Pass `--upto` to push only through the
-current branch (`bottom..current`), or `--all` to push the whole tracked forest
-independent of where you are (`--upto` and `--all` are mutually exclusive). It
-is login-free and never opens PRs; in text mode it prints your repository's URL
-and per-branch compare URLs (`head -> base`) for newly created remote branches
-(or unpushed branches under `--dry-run`) on github.com, gitlab.com, and
-self-hosted remotes whose hostname carries a `github`/`gitlab` label, omitting
-repeat compare URLs when updating branches that already exist on the remote;
-`--json` always carries the full `prHints` list (see docs/AGENT.md).
-`--dry-run` prints the plan without pushing. Most stack-mutating commands also accept
-`--json` for machine-readable output.
+Pass `-s` / `--submit` to immediately retarget surviving PRs, force-push restacked
+branches, and refresh PR stack blocks right after syncing.
 
-#### `st open [--all] [--remote <name>] [--dry-run]`
-Opens the compare URLs `st submit` prints — the current branch's, or every
-tracked branch's under `--all` — in your browser (`open` on macOS, `xdg-open`
-elsewhere on unix, `rundll32` on Windows). It is read-only: nothing is pushed
-or written, and no host API is called — a browser spawn is a local process
-launch, not a network call. `--dry-run` prints the URLs it would open and
-`--json` emits them as data; neither spawns anything. When the remote's host
-isn't a recognized github/gitlab shape the command reports "nothing to open"
-rather than guessing a URL.
+#### `st submit [--draft] [--no-pr] [--title <t>] [--body <b>] [--upto] [--all] [--remote <name>] [--dry-run]` (`ss`)
+Pushes every branch in the current stack (`bottom..top`; `--upto` stops at current;
+`--all` pushes the whole forest) in dependency order using `--force-with-lease`,
+setting upstream (`-u`).
 
-#### `st abort`
-Aborts an in-progress restack (`git rebase --abort`). Branches that already
-restacked keep their new positions; the conflicted branch is rolled back and still
-needs a restack.
+When the remote is GitHub and `gh` is on `PATH` (unless `--no-pr` is passed):
+1. **Retargets open PR bases before pushing** so GitHub never auto-closes child
+   PRs when a parent merges or moves.
+2. **Force-pushes** every branch in the scope.
+3. **Creates missing PRs bottom-up** (defaulting title/body from the branch's
+   top commit; override the current branch with `--title`/`--body`, or open as
+   drafts with `--draft`).
+4. **Updates stack links idempotently** via `<!-- st:stack:start -->`...`<!-- st:stack:end -->`
+   markers while preserving author prose outside the block (omitted on single-PR
+   stacks unless already present).
 
-#### `st fold [--dry-run]`
-Folds the current branch into its parent: the parent advances to include the
-branch's commits, the branch is deleted, and its children are re-parented onto the
-parent. The branch must be in sync first (`st restack` if needed). `--dry-run`
-previews the fold and any descendant restacks without changing anything.
+#### `st squash [-m <msg>] [--dry-run]` / `st onto <target> [--dry-run]` (`move`) / `st rename [old] <new> [--dry-run]` (`mv`)
+- `squash`: collapses all commits on the current branch into one, then restacks descendants.
+- `onto`: re-parents the current branch onto `target` and rebases it and its descendants.
+- `rename`: renames a branch (`git branch -m`) and updates stack metadata and child pointers.
 
-#### `st squash [-m <msg>] [--dry-run]`
-Collapses every commit on the current branch (since its parent) into one, then
-restacks its descendants. With no `-m`, the message is composed from the existing
-commit subjects. `--dry-run` previews the squash and descendant restacks without
-changing anything.
+#### `st undo [--force]`
+Reverts the last stack-mutating command: rolls back metadata and resets recorded
+branches to their prior tips without touching your working tree. Refuses if a
+branch moved outside `st` since the command ran unless `--force` is passed.
 
-#### `st onto <target> [--dry-run]` (`move`)
-Re-parents the current branch onto `target` (the trunk or a tracked branch) and
-rebases it and its descendants there. `target` may not be the branch itself or one
-of its descendants. On conflict, resolve and run `st continue`. `--dry-run`
-previews the move and descendant restacks without changing anything.
-
-#### `st rename [old] <new> [--dry-run]` (`mv`)
-Renames a branch (the current one by default) with `git branch -m` and updates the
-stack metadata: the branch's record, the trunk name if applicable, and every
-child's parent pointer. `--dry-run` previews the rename and the children's
-re-parenting without changing anything.
-
-#### `st undo [<n>] [--list | --dry-run]`
-Reverts the last stack-mutating command: the metadata is rolled back and each
-recorded branch is reset to its prior tip. It does **not** touch your working
-tree, so uncommitted changes are preserved (run `git status` to review). The
-journal keeps the last several operations.
-
-`st undo <n>` rewinds the newest `n` journal entries newest-first — the
-numbering matches `--list` (index 1 is what a bare `st undo` reverts). Each
-step is its own unit: a refusal mid-sequence stops with a "stopped at step k
-of n" report and the already-undone prefix stays undone. A count beyond the
-journal depth refuses outright.
-
-`st undo --dry-run [<n>]` previews the next undo — or each of the next `n`
-steps in order — against *live* refs and worktrees —
-what it would restore, which created branches/worktrees it would delete, and
-every blocker a real run would refuse on — changing nothing. `--list` previews
-the recorded journal alone: entries are
-listed newest-first as `1: create (created feat-a; on main)`, where index 1 is
-what a bare `st undo` would revert.
-
-Undo also guards against outside changes: if a recorded branch's tip moved
-since the operation (someone committed on it with plain `git`, or a deleted
-branch was recreated), `st undo` refuses rather than silently rewinding it —
-`--dry-run` reports the branch as `ref_moved_since:<name>`. `st undo --force`
-restores the recorded tips anyway and names the refs it overwrote. Entries
-written by older versions — and entries kept for failed operations whose refs
-`st abort`/`st continue` may legitimately have moved — restore unconditionally
-with a note saying so. Undo likewise refuses when a branch it would rewrite
-has a rebase paused in a linked worktree (`paused_rebase:<name>` in
-`--dry-run`) — a later `git rebase --continue`/`--abort` would overwrite the
-restored tip anyway. Pauses on branches the entry does not touch never block
-it; `--force` bypasses the refusal.
-
-#### `st repair`
-Fixes the drift `st validate` reports: untracks branches whose git branch was
-deleted outside st, re-parents branches with an invalid parent onto the trunk,
-clears stale pending reparents and pending continuations whose rebase is gone,
-and breaks parent cycles.
-Re-parented branches may then need `st restack`.
+#### `st doctor [--fix] [--all]` (`validate`)
+Checks the recorded stack against git and reports problems (missing trunk/branches,
+invalid parents, cycles, stale pending reparent/continuation) plus drift warnings
+for the current stack (or all stacks with `--all`). Exits non-zero when any
+problem is found. Pass `--fix` to repair metadata inconsistencies automatically.
 
 #### `st completion <bash|zsh|fish>`
-Prints a shell completion script for st's subcommands, e.g.
-`st completion zsh > "${fpath[1]}/_st"`. The scripts complete branch names
-live for `checkout`, `onto`, `track`, `worktree` (and `rm`'s owned
-branches), `delete`, `untrack`, `commits`, and `rename`, via a hidden read-only
-`st __complete` endpoint that answers in
-flat probes — no fetch, no history walk, silent-empty outside a repo. Set
-`ST_COMPLETE_BIN` to point the hooks at a different st binary.
-
-#### `st validate` (`doctor`)
-Checks the recorded stack against the actual repository and reports problems — a
-missing trunk, tracked branches whose git branch was deleted outside `stacked`,
-parents that are no longer the trunk or a tracked branch, tracked parents whose
-own git ref is gone, stale pending reparents or pending continuations whose
-rebase no longer exists, and
-parent cycles — plus warnings for branches that have drifted and need a restack.
-Exits non-zero when any problem is found.
+Prints a shell completion script for `st` subcommands and dynamic branch completion
+via the hidden `st __complete` endpoint.
 
 ## A real stacked-diff workflow
 
@@ -480,63 +308,39 @@ Exits non-zero when any problem is found.
 st init
 
 # 1. build the first change as its own small branch
-echo 'A' > a.txt && git add -A
+echo 'A' > a.txt && git add a.txt
 st create feat-a -m "add A"
 
 # 2. stack a second change on top of the first
-echo 'B' > b.txt && git add -A
+echo 'B' > b.txt && git add b.txt
 st create feat-b -m "add B"
 
-# 3. see the stack (trunk at the bottom, current branch marked ◉, colorized on a TTY)
-st log
-#     ◉ feat-b  add B
-#   ○ feat-a  add A
-# ○ main
+# 3. inspect the stack (with optional GitHub PR & CI status)
+st log --pr
 
-# 4. drop down to revise the first branch
-st down                       # now on feat-a
+# 4. push the stack and create stacked GitHub PRs with stack navigation links
+st submit
 
-# 5. amend feat-a; feat-b is automatically restacked onto the new feat-a
-echo 'A2' >> a.txt
+# 5. drop down to revise the first branch; feat-b auto-restacks
+st down
+echo 'A2' >> a.txt && git add a.txt
 st modify -m "add A (revised)"
-# Amended feat-a with new message
-# restacked: feat-b
+st submit
 
-# 6. if anything ever drifts, fix the whole stack in one shot
-st restack                    # no-op here: everything up to date
-
-# 7. pull in trunk updates, fast-forward main, restack, prune merged branches
-st sync
-
-# 8. push the whole stack to the remote (no PRs are opened)
-st submit                     # or: st submit --dry-run
+# 6. once PR #1 merges on GitHub: fetch, prune feat-a, restack feat-b onto main,
+#    retarget PR #2 -> main, force-push, and refresh stack links in one shot
+st sync --submit
 ```
 
 ## Notes & limitations
 
-- `stacked` shells out to your system `git`; it is a convenience layer, not a
-  reimplementation of git.
-- The stack metadata is local to the repo (under the common git dir, so linked
-  worktrees share it) and is not shared via the remote. A teammate cloning the
-  repo starts with an empty stack until they `track` branches.
+- `stacked` shells out to your system `git` (and `gh` for GitHub PR operations);
+  it is a sharp layer, not a reimplementation of git or a separate login flow.
+- Stack metadata is local to the repo (under the common git dir, so externally
+  managed `git worktree`s share it). `st` never creates or deletes worktrees on
+  disk.
 - Mutating commands — plus HEAD-moving navigation (`checkout <branch>`,
-  `up`/`down`/`top`/`bottom`) and `init` — take an advisory lock so two `st`
-  invocations don't clobber each other's metadata or move HEAD mid-mutation:
-  flock on unix-like platforms, an exclusive lock file elsewhere
-  (e.g. Windows).
+  `up`/`down`/`top`/`bottom`) and `init` — take an advisory lock so concurrent
+  `st` invocations don't clobber metadata or move HEAD mid-mutation.
 - On a rebase conflict during a restack, resolve it, `git add` the files, and run
-  `st continue` (or `st abort` to back out). `stacked` records progress as each
-  branch lands, then restacks the rest of the stack.
-- `st undo` reverts the last mutating command's metadata and branch positions but
-  does not modify your working tree.
-- `stacked` deliberately opens no pull requests. After `st submit`, `st open`
-  launches the PR compare URLs in your browser (or open them on your host
-  yourself).
-- `st absorb` is deliberately strict. `st absorb --dry-run` maps staged hunks
-  to the stack commits that own their lines; bare `st absorb` applies any
-  zero-refusal plan — each owning branch tip is amended with its own hunks,
-  then one cascade restacks everything above (one `st undo` reverts it all).
-  Anything ambiguous is refused with the reason rather than guessed: hunks
-  spanning several commits, pure additions, lines owned by trunk/history or by
-  a commit tipped only by an off-path branch, non-tip targets, and
-  binary/mode/rename records. Any refusal leaves the whole plan unapplied.
+  `st continue` (or `st abort` to back out).

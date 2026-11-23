@@ -9,14 +9,11 @@ import (
 // binds a *xxxOpts that its Run reads, and the no-arg xxxFlagSet() wrapper feeds
 // the same declaration to help introspection (Command.NewFlagSet). So `help
 // --json` reports exactly what Run parses, by construction — no second
-// declaration to drift. Aliases (-m/--message, -a/--all, -f/--force) bind to one
-// field so command-line last-wins is preserved. (completion/shell take no
-// flags at all — they declare emptyFlagSet; commands whose only flag is --json
-// need no entry — help derives that from newFlagSet.)
+// declaration to drift. Aliases (-m/--message, -a/--all, -f/--force, -s/--submit)
+// bind to one field so command-line last-wins is preserved.
 
 // emptyFlagSet declares the flag set for commands that take no flags at all
-// (completion, shell), so help introspection reports zero flags through the
-// same mechanism as every other command instead of a name special-case.
+// (completion, __complete), so help introspection reports zero flags.
 func emptyFlagSet(name string) func() *flag.FlagSet {
 	return func() *flag.FlagSet { return flag.NewFlagSet(name, flag.ContinueOnError) }
 }
@@ -32,72 +29,36 @@ func withDefaults(fs *flag.FlagSet, name string) *flag.FlagSet {
 }
 
 type createOpts struct {
-	asJSON   bool
-	message  string
-	all      bool
-	worktree bool
-	dryRun   bool
+	asJSON  bool
+	message string
+	all     bool
+	dryRun  bool
 }
 
 func newCreateFlags(o *createOpts) *flag.FlagSet {
 	fs := newFlagSet("create", &o.asJSON)
 	fs.StringVar(&o.message, "m", "", "commit message for the new branch")
 	fs.StringVar(&o.message, "message", "", "commit message for the new branch")
-	fs.BoolVar(&o.all, "a", false, "stage all changes before committing")
-	fs.BoolVar(&o.all, "all", false, "stage all changes before committing")
-	fs.BoolVar(&o.worktree, "worktree", false, "create the branch in its own worktree instead of switching to it")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the branch (and, with --worktree, the worktree path and copied files) without creating anything")
+	fs.BoolVar(&o.all, "a", false, "stage tracked changes before committing")
+	fs.BoolVar(&o.all, "all", false, "stage tracked changes before committing")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the branch without creating anything")
 	return withDefaults(fs, "create")
 }
 
 func createFlagSet() *flag.FlagSet { return newCreateFlags(&createOpts{}) }
 
-type absorbOpts struct {
-	asJSON bool
-	dryRun bool
-}
-
-func newAbsorbFlags(o *absorbOpts) *flag.FlagSet {
-	fs := newFlagSet("absorb", &o.asJSON)
-	fs.BoolVar(&o.dryRun, "dry-run", false, "show the hunk-to-commit mapping and refusals without changing anything")
-	return withDefaults(fs, "absorb")
-}
-
-func absorbFlagSet() *flag.FlagSet { return newAbsorbFlags(&absorbOpts{}) }
-
 type undoOpts struct {
 	asJSON bool
-	list   bool
-	dryRun bool
 	force  bool
 }
 
 func newUndoFlags(o *undoOpts) *flag.FlagSet {
 	fs := newFlagSet("undo", &o.asJSON)
-	fs.BoolVar(&o.list, "list", false, "show the undo journal without reverting anything")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "preview what the next undo would restore/delete without changing anything")
 	fs.BoolVar(&o.force, "force", false, "restore recorded tips even when a branch moved outside st since the command ran")
 	return withDefaults(fs, "undo")
 }
 
 func undoFlagSet() *flag.FlagSet { return newUndoFlags(&undoOpts{}) }
-
-type worktreeOpts struct {
-	asJSON bool
-	all    bool
-	dryRun bool
-	reason string
-}
-
-func newWorktreeFlags(o *worktreeOpts) *flag.FlagSet {
-	fs := newFlagSet("worktree", &o.asJSON)
-	fs.BoolVar(&o.all, "all", false, "materialize a worktree for every tracked branch that lacks one")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the worktrees and .worktreeinclude copies an add would create, without creating anything")
-	fs.StringVar(&o.reason, "reason", "", "note recorded with `st worktree lock` (lock only)")
-	return withDefaults(fs, "worktree")
-}
-
-func worktreeFlagSet() *flag.FlagSet { return newWorktreeFlags(&worktreeOpts{}) }
 
 type modifyOpts struct {
 	asJSON  bool
@@ -111,10 +72,8 @@ func newModifyFlags(o *modifyOpts) *flag.FlagSet {
 	fs := newFlagSet("modify", &o.asJSON)
 	fs.StringVar(&o.message, "m", "", "commit message")
 	fs.StringVar(&o.message, "message", "", "commit message")
-	// Default to staging all changes so a bare invocation (and the "amend" alias)
-	// behaves like "stage all + amend"; only -a=false disables it.
-	fs.BoolVar(&o.all, "a", true, "stage all tracked changes before amending/committing")
-	fs.BoolVar(&o.all, "all", true, "stage all tracked changes before amending/committing")
+	fs.BoolVar(&o.all, "a", false, "stage tracked changes before amending/committing")
+	fs.BoolVar(&o.all, "all", false, "stage tracked changes before amending/committing")
 	fs.BoolVar(&o.commit, "commit", false, "create a new commit instead of amending the tip")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "preview the amend/commit and its upstack restack without changing anything")
 	return withDefaults(fs, "modify")
@@ -122,9 +81,6 @@ func newModifyFlags(o *modifyOpts) *flag.FlagSet {
 
 func modifyFlagSet() *flag.FlagSet { return newModifyFlags(&modifyOpts{}) }
 
-// untrack and rename take positional branch names plus --dry-run, so they get
-// declared flag sets like the flag-rich commands rather than the --json-only
-// fallback help introspection would otherwise show.
 type untrackOpts struct {
 	asJSON bool
 	dryRun bool
@@ -167,19 +123,6 @@ func newDeleteFlags(o *deleteOpts) *flag.FlagSet {
 
 func deleteFlagSet() *flag.FlagSet { return newDeleteFlags(&deleteOpts{}) }
 
-type foldOpts struct {
-	asJSON bool
-	dryRun bool
-}
-
-func newFoldFlags(o *foldOpts) *flag.FlagSet {
-	fs := newFlagSet("fold", &o.asJSON)
-	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be folded/restacked without changing anything")
-	return withDefaults(fs, "fold")
-}
-
-func foldFlagSet() *flag.FlagSet { return newFoldFlags(&foldOpts{}) }
-
 type initOpts struct {
 	asJSON bool
 	trunk  string
@@ -210,57 +153,39 @@ func newTrackFlags(o *trackOpts) *flag.FlagSet {
 
 func trackFlagSet() *flag.FlagSet { return newTrackFlags(&trackOpts{}) }
 
-type commitsOpts struct {
-	asJSON bool
-}
-
-func newCommitsFlags(o *commitsOpts) *flag.FlagSet {
-	return withDefaults(newFlagSet("commits", &o.asJSON), "commits")
-}
-
-func commitsFlagSet() *flag.FlagSet { return newCommitsFlags(&commitsOpts{}) }
-
 type submitOpts struct {
 	asJSON bool
 	all    bool
 	upto   bool
 	remote string
+	draft  bool
+	noPR   bool
+	title  string
+	body   string
 	dryRun bool
 }
 
 func newSubmitFlags(o *submitOpts) *flag.FlagSet {
 	fs := newFlagSet("submit", &o.asJSON)
-	fs.BoolVar(&o.all, "all", false, "push every tracked branch in the forest, not just the current stack")
-	fs.BoolVar(&o.upto, "upto", false, "push only up to the current branch (bottom..current), omitting upstack descendants")
+	fs.BoolVar(&o.all, "all", false, "submit every tracked branch in the forest, not just the current stack")
+	fs.BoolVar(&o.upto, "upto", false, "submit only up to the current branch (bottom..current), omitting upstack descendants")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to push to")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed without pushing")
+	fs.BoolVar(&o.draft, "draft", false, "create newly opened GitHub PRs as drafts")
+	fs.BoolVar(&o.noPR, "no-pr", false, "push branches only; skip GitHub PR creation, retargeting, and stack-block updates")
+	fs.StringVar(&o.title, "title", "", "explicit PR title when creating a PR for the current branch")
+	fs.StringVar(&o.body, "body", "", "explicit PR body when creating a PR for the current branch")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would be pushed/synced without changing anything")
 	return withDefaults(fs, "submit")
 }
 
 func submitFlagSet() *flag.FlagSet { return newSubmitFlags(&submitOpts{}) }
-
-type openOpts struct {
-	asJSON bool
-	all    bool
-	remote string
-	dryRun bool
-}
-
-func newOpenFlags(o *openOpts) *flag.FlagSet {
-	fs := newFlagSet("open", &o.asJSON)
-	fs.BoolVar(&o.all, "all", false, "open every tracked branch's compare URL, not just the current branch's")
-	fs.StringVar(&o.remote, "remote", "origin", "remote whose URL the compare links derive from")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "print the compare URLs without opening them")
-	return withDefaults(fs, "open")
-}
-
-func openFlagSet() *flag.FlagSet { return newOpenFlags(&openOpts{}) }
 
 type syncOpts struct {
 	asJSON   bool
 	all      bool
 	noDelete bool
 	noFetch  bool
+	submit   bool
 	remote   string
 	dryRun   bool
 }
@@ -270,27 +195,14 @@ func newSyncFlags(o *syncOpts) *flag.FlagSet {
 	fs.BoolVar(&o.all, "all", false, "sync every tracked stack in the forest, not just the current stack")
 	fs.BoolVar(&o.noDelete, "no-delete", false, "do not delete merged branches")
 	fs.BoolVar(&o.noFetch, "no-fetch", false, "skip fetch/fast-forward; prune+restack against the local trunk")
+	fs.BoolVar(&o.submit, "s", false, "push and update GitHub PRs for the surviving stack after syncing")
+	fs.BoolVar(&o.submit, "submit", false, "push and update GitHub PRs for the surviving stack after syncing")
 	fs.StringVar(&o.remote, "remote", "origin", "remote to fetch and fast-forward from")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would be pruned/restacked without changing anything")
 	return withDefaults(fs, "sync")
 }
 
 func syncFlagSet() *flag.FlagSet { return newSyncFlags(&syncOpts{}) }
-
-type pruneOpts struct {
-	asJSON bool
-	remote string
-	dryRun bool
-}
-
-func newPruneFlags(o *pruneOpts) *flag.FlagSet {
-	fs := newFlagSet("prune", &o.asJSON)
-	fs.StringVar(&o.remote, "remote", "", "measure merged branches against <name>/<trunk> instead of the local trunk")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "list the merged branches that would be deleted")
-	return withDefaults(fs, "prune")
-}
-
-func pruneFlagSet() *flag.FlagSet { return newPruneFlags(&pruneOpts{}) }
 
 type restackOpts struct {
 	asJSON bool
@@ -335,3 +247,46 @@ func newSquashFlags(o *squashOpts) *flag.FlagSet {
 }
 
 func squashFlagSet() *flag.FlagSet { return newSquashFlags(&squashOpts{}) }
+
+type logOpts struct {
+	asJSON bool
+	all    bool
+	pr     bool
+}
+
+func newLogFlags(o *logOpts) *flag.FlagSet {
+	fs := newFlagSet("log", &o.asJSON)
+	fs.BoolVar(&o.all, "all", false, "show every tracked stack in the forest, not just the current stack")
+	fs.BoolVar(&o.pr, "pr", false, "annotate branches with open GitHub PR status via gh")
+	return withDefaults(fs, "log")
+}
+
+func logFlagSet() *flag.FlagSet { return newLogFlags(&logOpts{}) }
+
+type statusOpts struct {
+	asJSON bool
+	pr     bool
+}
+
+func newStatusFlags(o *statusOpts) *flag.FlagSet {
+	fs := newFlagSet("status", &o.asJSON)
+	fs.BoolVar(&o.pr, "pr", false, "include open GitHub PR status for the current branch via gh")
+	return withDefaults(fs, "status")
+}
+
+func statusFlagSet() *flag.FlagSet { return newStatusFlags(&statusOpts{}) }
+
+type doctorOpts struct {
+	asJSON bool
+	fix    bool
+	all    bool
+}
+
+func newDoctorFlags(o *doctorOpts) *flag.FlagSet {
+	fs := newFlagSet("doctor", &o.asJSON)
+	fs.BoolVar(&o.fix, "fix", false, "reconcile metadata inconsistencies automatically")
+	fs.BoolVar(&o.all, "all", false, "check restack drift warnings for every stack, not just the current stack")
+	return withDefaults(fs, "doctor")
+}
+
+func doctorFlagSet() *flag.FlagSet { return newDoctorFlags(&doctorOpts{}) }

@@ -182,7 +182,7 @@ func TestLogWarnsUnreachable(t *testing.T) {
 	}
 	if !strings.Contains(text, "unreachable") || !strings.Contains(text, "lost") ||
 		!strings.Contains(text, "cy-a") || !strings.Contains(text, "cy-b") ||
-		!strings.Contains(text, "st repair") {
+		!strings.Contains(text, "st doctor --fix") {
 		t.Fatalf("log text missing the unreachable warning:\n%s", text)
 	}
 
@@ -576,11 +576,9 @@ func TestLogJSONPausedRebaseWorktree(t *testing.T) {
 	mustRun(t, "git", "add", "a.txt")
 	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
 
-	wt, err := materializeWorktree("feat-a")
-	if err != nil {
-		t.Fatalf("materializeWorktree: %v", err)
-	}
-	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+	wtPath := filepath.Join(t.TempDir(), "wt-feat-a")
+	mustRun(t, "git", "worktree", "add", "-q", wtPath, "feat-a")
+	if err := exec.Command("git", "-C", wtPath, "rebase", "main").Run(); err == nil {
 		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
 	}
 	resetProcCaches()
@@ -603,8 +601,8 @@ func TestLogJSONPausedRebaseWorktree(t *testing.T) {
 	if node == nil {
 		t.Fatalf("log tree missing feat-a:\n%s", jsonOut)
 	}
-	if !sameExistingPath(node.Worktree, wt.Path) {
-		t.Fatalf("paused branch worktree = %q, want %q", node.Worktree, wt.Path)
+	if !sameExistingPath(node.Worktree, wtPath) {
+		t.Fatalf("paused branch worktree = %q, want %q", node.Worktree, wtPath)
 	}
 	if !node.Paused {
 		t.Fatalf("paused branch did not report paused:true:\n%s", jsonOut)
@@ -627,7 +625,7 @@ func TestLogJSONPausedRebaseWorktree(t *testing.T) {
 
 	// A `git worktree lock` on the paused worktree surfaces as `locked` on the
 	// same node — the hold plan 007's restack/removal gates honor.
-	mustRun(t, "git", "worktree", "lock", wt.Path)
+	mustRun(t, "git", "worktree", "lock", wtPath)
 	resetProcCaches()
 	jsonOut = captureStdout(t, func() {
 		if err := runLog([]string{"--json"}); err != nil {
@@ -662,11 +660,9 @@ func TestLogTextPausedRebaseWorktree(t *testing.T) {
 	mustRun(t, "git", "add", "a.txt")
 	mustRun(t, "git", "commit", "-q", "-m", "diverge main")
 
-	wt, err := materializeWorktree("feat-a")
-	if err != nil {
-		t.Fatalf("materializeWorktree: %v", err)
-	}
-	if err := exec.Command("git", "-C", wt.Path, "rebase", "main").Run(); err == nil {
+	wtPath := filepath.Join(t.TempDir(), "wt-feat-a")
+	mustRun(t, "git", "worktree", "add", "-q", wtPath, "feat-a")
+	if err := exec.Command("git", "-C", wtPath, "rebase", "main").Run(); err == nil {
 		t.Fatal("git -C wt rebase main succeeded — fixture did not pause mid-rebase")
 	}
 	resetProcCaches()
@@ -800,76 +796,6 @@ func TestStatusDirtyWorktree(t *testing.T) {
 
 // --- commits -----------------------------------------------------------------
 
-type commitsPayload struct {
-	Branch    string `json:"branch"`
-	ParentSHA string `json:"parentSHA"`
-	Commits   []struct {
-		SHA     string `json:"sha"`
-		Subject string `json:"subject"`
-	} `json:"commits"`
-}
-
-// TestCommitsTextAndJSON pins the read surface: text prints sha+subject
-// newest-first, JSON carries the recorded base it measured against.
-func TestCommitsTextAndJSON(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "add a")
-	mustRun(t, "git", "commit", "-q", "--allow-empty", "-m", "add a2")
-
-	text := captureStdout(t, func() {
-		if err := runCommits(nil); err != nil {
-			t.Fatalf("commits: %v", err)
-		}
-	})
-	tip := mustRun(t, "git", "rev-parse", "feat-a")
-	base := mustRun(t, "git", "rev-parse", "main")
-	first := mustRun(t, "git", "rev-parse", "feat-a^")
-	for _, want := range []string{tip + " add a2", first + " add a\n"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("commits text missing %q:\n%s", want, text)
-		}
-	}
-	// Newest first: add a2 precedes add a.
-	if strings.Index(text, "add a2") > strings.Index(text, "add a\n") {
-		t.Fatalf("commits not newest-first:\n%s", text)
-	}
-
-	jsonOut := captureStdout(t, func() {
-		if err := runCommits([]string{"--json"}); err != nil {
-			t.Fatalf("commits --json: %v", err)
-		}
-	})
-	var p commitsPayload
-	decodeStrictJSON(t, "commits --json", jsonOut, &p)
-	if p.Branch != "feat-a" || p.ParentSHA != base {
-		t.Fatalf("commits payload = %+v, want branch feat-a base %s", p, base)
-	}
-	if len(p.Commits) != 2 || p.Commits[0].SHA != tip || p.Commits[0].Subject != "add a2" ||
-		p.Commits[1].SHA != first || p.Commits[1].Subject != "add a" {
-		t.Fatalf("commits list = %+v, want [tip add a2, first add a]", p.Commits)
-	}
-
-	// A positional selects another tracked branch; untracked refuses.
-	mustCreate(t, "feat-b", "b.txt", "b\n", "add b")
-	jsonOut = captureStdout(t, func() {
-		if err := runCommits([]string{"feat-a", "--json"}); err != nil {
-			t.Fatalf("commits feat-a --json: %v", err)
-		}
-	})
-	var p2 commitsPayload
-	decodeStrictJSON(t, "commits feat-a --json", jsonOut, &p2)
-	if p2.Branch != "feat-a" || len(p2.Commits) != 2 {
-		t.Fatalf("commits feat-a payload = %+v", p2)
-	}
-	if err := runCommits([]string{"scratch"}); err == nil || !strings.Contains(err.Error(), "not tracked") {
-		t.Fatalf("commits on untracked err = %v, want the not-tracked refusal", err)
-	}
-	if err := runCommits([]string{"main"}); err == nil || !strings.Contains(err.Error(), "trunk") {
-		t.Fatalf("commits on trunk err = %v, want the trunk refusal", err)
-	}
-}
-
 // --- init ------------------------------------------------------------------
 
 func TestInitJSONFreshAndRepeatedShape(t *testing.T) {
@@ -908,200 +834,7 @@ func TestInitJSONFreshAndRepeatedShape(t *testing.T) {
 
 // --- create --worktree -----------------------------------------------------
 
-func TestCreateWorktreeJSONShapeAndState(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	write(t, ".gitignore", "secret.env\n")
-	write(t, "secret.env", "TOKEN=1\n")
-	write(t, ".worktreeinclude", "secret.env\n")
-	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
-	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
-	parentTip := mustRun(t, "git", "rev-parse", "main")
-
-	type createWorktreeJSON struct {
-		Branch   string   `json:"branch"`
-		Parent   string   `json:"parent"`
-		Worktree string   `json:"worktree"`
-		Copied   []string `json:"copied"`
-		Switched bool     `json:"switched"`
-		Summary  string   `json:"summary"`
-	}
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-x", "--worktree", "--json"}); err != nil {
-			t.Fatalf("create feat-x --worktree --json: %v", err)
-		}
-	})
-	requireJSONObjectKeys(t, "create --worktree --json", out, "branch", "parent", "worktree", "copied", "switched", "summary")
-	var created createWorktreeJSON
-	decodeStrictJSON(t, "create --worktree --json", out, &created)
-	if created.Branch != "feat-x" || created.Parent != "main" || created.Worktree == "" {
-		t.Fatalf("create --worktree payload = %+v", created)
-	}
-	if created.Switched {
-		t.Fatalf("create --worktree switched = true without the shell shim")
-	}
-	if created.Summary != "Created feat-x on top of main" {
-		t.Fatalf("create --worktree summary = %q", created.Summary)
-	}
-	if want := []string{"secret.env"}; !reflect.DeepEqual(created.Copied, want) {
-		t.Fatalf("create --worktree copied = %v, want %v", created.Copied, want)
-	}
-	if cur := curBranch(t); cur != "main" {
-		t.Fatalf("current branch = %q, want main", cur)
-	}
-	if got := mustRun(t, "git", "rev-parse", "feat-x"); got != parentTip {
-		t.Fatalf("feat-x tip = %s, want parent tip %s", got, parentTip)
-	}
-	if b, ok := stateT(t).Get("feat-x"); !ok || b.Parent != "main" || b.ParentSHA != parentTip {
-		t.Fatalf("tracked feat-x = %+v, ok=%v; want parent main at %s", b, ok, parentTip)
-	}
-	if _, err := os.Stat(filepath.Join(created.Worktree, "secret.env")); err != nil {
-		t.Fatalf("gitignored .worktreeinclude file not copied into created worktree: %v", err)
-	}
-}
-
-func TestCreateWorktreeRejectsCommitFlags(t *testing.T) {
-	for _, args := range [][]string{
-		{"feat-x", "--worktree", "-m", "msg"},
-		{"feat-x", "--worktree", "-a"},
-	} {
-		newRepo(t)
-		mustInit(t)
-		err := runCreate(args)
-		if err == nil || err.Error() != createWorktreeCommitFlagErr {
-			t.Fatalf("runCreate(%v) error = %v, want %q", args, err, createWorktreeCommitFlagErr)
-		}
-	}
-}
-
-func TestCreateWorktreeRejectsExistingBranch(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustRun(t, "git", "branch", "feat-x", "main")
-
-	err := runCreate([]string{"feat-x", "--worktree"})
-	want := `branch "feat-x" already exists`
-	if err == nil || err.Error() != want {
-		t.Fatalf("create existing --worktree error = %v, want %q", err, want)
-	}
-}
-
 // --- worktree --------------------------------------------------------------
-
-func TestWorktreeJSONCreateListRemoveShapes(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	write(t, ".gitignore", "secret.env\n")
-	write(t, "secret.env", "TOKEN=1\n")
-	write(t, ".worktreeinclude", "secret.env\na.txt\n")
-	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
-	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	resetProcCaches()
-
-	type worktreeCreateJSON struct {
-		Branch  string   `json:"branch"`
-		Path    string   `json:"path"`
-		Copied  []string `json:"copied"`
-		Summary string   `json:"summary"`
-	}
-	createOut := captureStdout(t, func() {
-		if err := runWorktree([]string{"feat-a", "--json"}); err != nil {
-			t.Fatalf("worktree feat-a --json: %v", err)
-		}
-	})
-	requireJSONObjectKeys(t, "worktree create --json", createOut, "branch", "path", "copied", "summary")
-	var created worktreeCreateJSON
-	decodeStrictJSON(t, "worktree create --json", createOut, &created)
-	t.Cleanup(func() {
-		resetProcCaches()
-		_ = runWorktree([]string{"rm", "feat-a"})
-	})
-	if created.Branch != "feat-a" || created.Path == "" || created.Summary != "created worktree" {
-		t.Fatalf("worktree create payload = %+v, want created feat-a worktree", created)
-	}
-	if want := []string{"secret.env"}; !reflect.DeepEqual(created.Copied, want) {
-		t.Fatalf("worktree create copied = %v, want %v", created.Copied, want)
-	}
-
-	resetProcCaches()
-	listOut := captureStdout(t, func() {
-		if err := runWorktree([]string{"ls", "--json"}); err != nil {
-			t.Fatalf("worktree ls --json: %v", err)
-		}
-	})
-	var rawEntries []json.RawMessage
-	if err := json.Unmarshal([]byte(listOut), &rawEntries); err != nil {
-		t.Fatalf("worktree ls --json did not emit an array: %v\n%s", err, listOut)
-	}
-	for i, raw := range rawEntries {
-		requireJSONObjectKeys(t, fmt.Sprintf("worktree ls --json entry %d", i), string(raw), "path", "branch", "head")
-	}
-	type worktreeListJSON struct {
-		Path     string `json:"path"`
-		Branch   string `json:"branch"`
-		Head     string `json:"head"`
-		Bare     bool   `json:"bare"`
-		Detached bool   `json:"detached"`
-		Locked   bool   `json:"locked"`
-	}
-	var listed []worktreeListJSON
-	decodeStrictJSON(t, "worktree ls --json", listOut, &listed)
-	if len(listed) != 2 {
-		t.Fatalf("worktree ls entries = %+v, want main and feat-a", listed)
-	}
-	byBranch := map[string]worktreeListJSON{}
-	for _, entry := range listed {
-		if entry.Path == "" || entry.Branch == "" || entry.Head == "" {
-			t.Fatalf("worktree ls entry missing populated fields: %+v", entry)
-		}
-		byBranch[entry.Branch] = entry
-	}
-	if byBranch["main"].Path != root {
-		if !sameExistingPath(byBranch["main"].Path, root) {
-			t.Fatalf("main worktree path = %q, want %q", byBranch["main"].Path, root)
-		}
-	}
-	listedFeatPath := byBranch["feat-a"].Path
-	if !sameExistingPath(listedFeatPath, created.Path) {
-		t.Fatalf("feat-a worktree path = %q, want %q", listedFeatPath, created.Path)
-	}
-
-	resetProcCaches()
-	type worktreeRemoveJSON struct {
-		Branch  string `json:"branch"`
-		Removed string `json:"removed"`
-	}
-	removeOut := captureStdout(t, func() {
-		if err := runWorktree([]string{"rm", "feat-a", "--json"}); err != nil {
-			t.Fatalf("worktree rm feat-a --json: %v", err)
-		}
-	})
-	requireJSONObjectKeys(t, "worktree rm --json", removeOut, "branch", "removed")
-	var removed worktreeRemoveJSON
-	decodeStrictJSON(t, "worktree rm --json", removeOut, &removed)
-	if removed.Branch != "feat-a" || removed.Removed != listedFeatPath {
-		t.Fatalf("worktree rm payload = %+v, want feat-a removed from %q", removed, listedFeatPath)
-	}
-	if _, err := os.Stat(removed.Removed); !os.IsNotExist(err) {
-		t.Fatalf("worktree path still exists after rm: %v", err)
-	}
-	if created.Path != removed.Removed {
-		if _, err := os.Stat(created.Path); !os.IsNotExist(err) {
-			t.Fatalf("created worktree path still exists after rm: %v", err)
-		}
-	}
-}
 
 // --- submit ----------------------------------------------------------------
 
@@ -1200,7 +933,7 @@ func TestSubmitDryRunJSONShape(t *testing.T) {
 	mustCheckout(t, "feat-b")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1265,7 +998,7 @@ func TestPublishedStatesAcrossSurfaces(t *testing.T) {
 	mustCheckout(t, "feat-missing")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1387,7 +1120,7 @@ func TestSubmitPRHintsGitHubJSON(t *testing.T) {
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1418,7 +1151,7 @@ func TestSubmitPRHintsGitLabJSON(t *testing.T) {
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1454,7 +1187,7 @@ func TestSubmitPRHintsGitLabMixedCaseHostJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1481,7 +1214,7 @@ func TestSubmitPRHintsUnknownRemoteJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -1753,7 +1486,7 @@ func TestCompletionShells(t *testing.T) {
 		}
 		// Second-word completions: representative flags and sub-verbs from the
 		// per-command generator must appear in every shell's script.
-		for _, tok := range []string{"--dry-run", "--worktree", "ls", "rm"} {
+		for _, tok := range []string{"--dry-run", "--submit", "--pr", "--fix"} {
 			if !strings.Contains(out, tok) {
 				t.Fatalf("completion %s missing per-command token %q:\n%s", shell, tok, out)
 			}
@@ -1765,17 +1498,17 @@ func TestCompletionShells(t *testing.T) {
 // come from the same constructors help --json uses, sub-verbs from the
 // hand-maintained map, deduped and sorted.
 func TestCommandCompletions(t *testing.T) {
-	toks := commandCompletions(byName["worktree"])
-	want := []string{"--all", "--dry-run", "--json", "--reason", "list", "lock", "ls", "remove", "rm", "unlock"}
+	toks := commandCompletions(byName["doctor"])
+	want := []string{"--all", "--fix", "--json"}
 	if !reflect.DeepEqual(toks, want) {
-		t.Fatalf("worktree completions = %v, want %v", toks, want)
+		t.Fatalf("doctor completions = %v, want %v", toks, want)
 	}
 	toks = commandCompletions(byName["restack"])
 	want = []string{"--all", "--dry-run", "--json"}
 	if !reflect.DeepEqual(toks, want) {
 		t.Fatalf("restack completions = %v, want %v", toks, want)
 	}
-	// completion/shell declare no flags: sub-verbs only.
+	// completion declares no flags: sub-verbs only.
 	toks = commandCompletions(byName["completion"])
 	want = []string{"bash", "fish", "zsh"}
 	if !reflect.DeepEqual(toks, want) {
@@ -1871,7 +1604,7 @@ func TestNoArgReadOnlyCommandsRejectPositionalArgs(t *testing.T) {
 		{"guide", runGuide},
 		{"log", runLog},
 		{"status", runStatus},
-		{"validate", runValidate},
+		{"doctor", runDoctor},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1991,56 +1724,6 @@ func TestContinueJSONAfterConflict(t *testing.T) {
 	}
 	if inProgress, _ := git.RebaseInProgress(); inProgress {
 		t.Fatal("rebase still in progress after continue --json")
-	}
-}
-
-// TestDeleteJSONRemovesOwnedWorktree deletes a branch that owns a clean linked
-// worktree through the JSON path: mutate routes the engine through
-// cachedPort{git.QuietShell}, so the worktree teardown runs through its WorktreeRemove
-// override (the text path takes cachedPort{git.Shell} instead).
-func TestDeleteJSONRemovesOwnedWorktree(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	resetProcCaches() // the in-place checkout bypassed the cached port
-
-	var wt struct {
-		Branch  string   `json:"branch"`
-		Path    string   `json:"path"`
-		Copied  []string `json:"copied,omitempty"`
-		Summary string   `json:"summary"`
-	}
-	wtOut := captureStdout(t, func() {
-		if err := runWorktree([]string{"feat-a", "--json"}); err != nil {
-			t.Fatalf("worktree feat-a --json: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "worktree feat-a --json", wtOut, &wt)
-	if wt.Path == "" || wt.Branch != "feat-a" {
-		t.Fatalf("worktree feat-a --json = %s, want a path for feat-a", wtOut)
-	}
-
-	out := captureStdout(t, func() {
-		if err := runDelete([]string{"feat-a", "--force", "--json"}); err != nil {
-			t.Fatalf("delete --json feat-a: %v", err)
-		}
-	})
-	var res stack.OpResult
-	decodeStrictJSON(t, "delete --json feat-a", out, &res)
-	if len(res.Deleted) != 1 || res.Deleted[0] != "feat-a" {
-		t.Fatalf("delete --json deleted = %v, want [feat-a]", res.Deleted)
-	}
-	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
-		t.Fatalf("delete --json left owned worktree at %q: %v", wt.Path, err)
-	}
-	if stateT(t).IsTracked("feat-a") {
-		t.Fatal("delete --json left feat-a tracked")
-	}
-	list := mustRun(t, "git", "worktree", "list", "--porcelain")
-	if strings.Contains(list, "refs/heads/feat-a") {
-		t.Fatalf("delete --json left feat-a registered as a worktree:\n%s", list)
 	}
 }
 
@@ -2189,7 +1872,7 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 	collect("status --json", func() error { return runStatus([]string{"--json"}) })
 	collect("checkout --json", func() error { return runCheckout([]string{"--json"}) })
 	collect("checkout feat-a --json", func() error { return runCheckout([]string{"feat-a", "--json"}) })
-	collect("validate --json", func() error { return runValidate([]string{"--json"}) })
+	collect("doctor --json", func() error { return runDoctor([]string{"--json"}) })
 	collect("log --json", func() error { return runLog([]string{"--json"}) })
 	// Navigation moves HEAD; the emitted keys do not depend on the destination.
 	collect("top --json", func() error { return runTop([]string{"--json"}) })
@@ -2217,604 +1900,13 @@ func TestAgentDocDocumentsEmittedKeys(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "op-a", "a.txt", "a\n", "add a")
-	collect("repair --json", func() error { return runRepair([]string{"--json"}) })
-	// `undo --dry-run --json` is intentionally NOT collected: its
-	// `observed.tips` map keys off branch names, which would surface here as
-	// undocumented "keys" — same reason `undo --list`'s `refs` map stays out.
+	collect("doctor --fix --json", func() error { return runDoctor([]string{"--fix", "--json"}) })
 	collect("undo --json", func() error { return runUndo([]string{"--json"}) })
 
 	for k := range keys {
 		if !documentsKey(doc, k) {
 			t.Errorf("docs/AGENT.md does not document emitted JSON key %q", k)
 		}
-	}
-}
-
-// TestWorktreeAllJSONAggregateAndIdempotency strict-decodes the aggregate
-// payload of `st worktree --all`: from the trunk every tracked branch is
-// materialized, the rerun reports the same set as already existing, and the
-// current tracked branch is skipped rather than failed.
-func TestWorktreeAllJSONAggregateAndIdempotency(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
-	mustCheckout(t, "main")
-	resetProcCaches()
-
-	type allResult struct {
-		Created []struct {
-			Branch  string   `json:"branch"`
-			Path    string   `json:"path"`
-			Copied  []string `json:"copied"`
-			Summary string   `json:"summary"`
-		} `json:"created"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"--all", "--json"}); err != nil {
-			t.Fatalf("worktree --all: %v", err)
-		}
-	})
-	var got allResult
-	decodeStrictJSON(t, "worktree --all", out, &got)
-	if len(got.Created) != 3 || len(got.Skipped) != 0 || got.Failed != nil {
-		t.Fatalf("first run = %+v, want 3 created, 0 skipped", got)
-	}
-	for i, want := range []string{"feat-a", "feat-b", "feat-c"} {
-		if got.Created[i].Branch != want || got.Created[i].Path == "" || got.Created[i].Summary != "created worktree" {
-			t.Fatalf("created[%d] = %+v, want %s freshly created", i, got.Created[i], want)
-		}
-	}
-
-	// Idempotent rerun: same three branches, now already existing.
-	out = captureStdout(t, func() {
-		if err := runWorktree([]string{"--all", "--json"}); err != nil {
-			t.Fatalf("worktree --all rerun: %v", err)
-		}
-	})
-	var rerun allResult
-	decodeStrictJSON(t, "worktree --all rerun", out, &rerun)
-	if len(rerun.Created) != 3 || rerun.Failed != nil {
-		t.Fatalf("rerun = %+v, want 3 rows", rerun)
-	}
-	for i := range rerun.Created {
-		if rerun.Created[i].Summary != "worktree already exists" {
-			t.Fatalf("rerun created[%d] = %+v, want already-exists summary", i, rerun.Created[i])
-		}
-	}
-}
-
-// TestWorktreeAllDryRunIncludesJSON pins the bulk dry-run's fanned-out tree
-// listings: each branch's predicted copied set matches what the real run then
-// copies, nothing materializes under --dry-run, and the rows stay in branch
-// order.
-func TestWorktreeAllDryRunIncludesJSON(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	write(t, ".gitignore", "secret.env\n")
-	write(t, ".worktreeinclude", "secret.env\n")
-	write(t, "secret.env", "TOKEN=1\n")
-	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
-	mustRun(t, "git", "commit", "-q", "-m", "worktree config")
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "main")
-	resetProcCaches()
-
-	type allResult struct {
-		Created []struct {
-			Branch  string   `json:"branch"`
-			Path    string   `json:"path"`
-			Copied  []string `json:"copied"`
-			Summary string   `json:"summary"`
-		} `json:"created"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-		DryRun bool `json:"dryRun"`
-	}
-
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"--all", "--dry-run", "--json"}); err != nil {
-			t.Fatalf("worktree --all --dry-run: %v", err)
-		}
-	})
-	var dry allResult
-	decodeStrictJSON(t, "worktree --all --dry-run", out, &dry)
-	if !dry.DryRun || len(dry.Created) != 2 || len(dry.Skipped) != 0 || dry.Failed != nil {
-		t.Fatalf("dry run = %+v, want 2 predicted rows, dryRun true", dry)
-	}
-	for i, want := range []string{"feat-a", "feat-b"} {
-		row := dry.Created[i]
-		if row.Branch != want || row.Summary != "would create worktree" {
-			t.Fatalf("dry created[%d] = %+v, want %s predicted", i, row, want)
-		}
-		if !reflect.DeepEqual(row.Copied, []string{"secret.env"}) {
-			t.Fatalf("dry created[%d] copied = %v, want [secret.env]", i, row.Copied)
-		}
-		if _, err := os.Stat(row.Path); !os.IsNotExist(err) {
-			t.Fatalf("dry run materialized %s", row.Path)
-		}
-	}
-
-	// Parity: the real run copies exactly what the dry run predicted, in the
-	// same branch order.
-	out = captureStdout(t, func() {
-		if err := runWorktree([]string{"--all", "--json"}); err != nil {
-			t.Fatalf("worktree --all: %v", err)
-		}
-	})
-	var real allResult
-	decodeStrictJSON(t, "worktree --all", out, &real)
-	if len(real.Created) != 2 || real.Failed != nil {
-		t.Fatalf("real run = %+v, want 2 created", real)
-	}
-	for i := range real.Created {
-		if real.Created[i].Branch != dry.Created[i].Branch ||
-			real.Created[i].Path != dry.Created[i].Path ||
-			!reflect.DeepEqual(real.Created[i].Copied, dry.Created[i].Copied) {
-			t.Fatalf("real created[%d] = %+v, dry predicted %+v", i, real.Created[i], dry.Created[i])
-		}
-		if _, err := os.Stat(filepath.Join(real.Created[i].Path, "secret.env")); err != nil {
-			t.Fatalf("secret.env not copied into %s: %v", real.Created[i].Path, err)
-		}
-	}
-}
-
-// TestWorktreeAllManifestErrorFailsUpFront pins the hoisted selection: a
-// malformed .worktreeinclude fails the whole --all before the first branch
-// materializes, rather than surfacing mid-loop after earlier branches
-// already exist.
-func TestWorktreeAllManifestErrorFailsUpFront(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "main")
-	write(t, ".worktreeinclude", "dist/[\n")
-	resetProcCaches()
-
-	var runErr error
-	captureStdout(t, func() {
-		runErr = runWorktree([]string{"--all"})
-	})
-	if runErr == nil || !strings.Contains(runErr.Error(), "dist/[") {
-		t.Fatalf("worktree --all = %v, want the manifest error naming the line", runErr)
-	}
-	// Nothing materialized: the main worktree is still the only one.
-	list := mustRun(t, "git", "worktree", "list", "--porcelain")
-	if n := strings.Count(list, "worktree "); n != 1 {
-		t.Fatalf("git worktree list shows %d worktrees, want only the main one:\n%s", n, list)
-	}
-}
-
-// TestWorktreeAllSkipsCurrentBranch pins decision 2: the branch checked out in
-// the main worktree is a skip with a reason, never an error.
-func TestWorktreeAllSkipsCurrentBranch(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "feat-a")
-	resetProcCaches()
-
-	type allResult struct {
-		Created []struct {
-			Branch  string   `json:"branch"`
-			Path    string   `json:"path"`
-			Copied  []string `json:"copied"`
-			Summary string   `json:"summary"`
-		} `json:"created"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"--all", "--json"}); err != nil {
-			t.Fatalf("worktree --all: %v", err)
-		}
-	})
-	var got allResult
-	decodeStrictJSON(t, "worktree --all skip", out, &got)
-	if len(got.Created) != 1 || got.Created[0].Branch != "feat-b" {
-		t.Fatalf("created = %+v, want only feat-b", got.Created)
-	}
-	if len(got.Skipped) != 1 || got.Skipped[0].Branch != "feat-a" || got.Skipped[0].Reason != "checked out in the main worktree" {
-		t.Fatalf("skipped = %+v, want feat-a with main-worktree reason", got.Skipped)
-	}
-}
-
-// TestWorktreeAllPartialFailureJSON pins decision 1: the loop stops at the
-// first failure, emitting what succeeded plus the failing branch (submit's
-// partial-result shape), and the command exits non-zero.
-func TestWorktreeAllPartialFailureJSON(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "main")
-	resetProcCaches()
-
-	// Occupy feat-b's computed worktree path with a FILE so `git worktree add`
-	// fails for it while feat-a succeeds.
-	key, _, err := repoIdentifier()
-	if err != nil {
-		t.Fatalf("repoIdentifier: %v", err)
-	}
-	bPath, err := stack.WorktreePath(key, "feat-b")
-	if err != nil {
-		t.Fatalf("WorktreePath: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(bPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(bPath, []byte("in the way\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var runErr error
-	out := captureStdout(t, func() {
-		runErr = runWorktree([]string{"--all", "--json"})
-	})
-	if runErr == nil {
-		t.Fatal("worktree --all succeeded despite an occupied worktree path")
-	}
-	type allResult struct {
-		Created []struct {
-			Branch  string   `json:"branch"`
-			Path    string   `json:"path"`
-			Copied  []string `json:"copied"`
-			Summary string   `json:"summary"`
-		} `json:"created"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	var got allResult
-	decodeStrictJSON(t, "worktree --all partial", out, &got)
-	if len(got.Created) != 1 || got.Created[0].Branch != "feat-a" {
-		t.Fatalf("created = %+v, want feat-a only", got.Created)
-	}
-	if got.Failed == nil || got.Failed.Branch != "feat-b" || got.Failed.Error == "" {
-		t.Fatalf("failed = %+v, want feat-b with an error", got.Failed)
-	}
-}
-
-// TestWorktreeRemoveAllJSON strict-decodes the bulk-teardown aggregate: every
-// TestWorktreeRemoveAllHardFailure pins the bulk-teardown failure contract:
-// a mid-loop WorktreeRemove failure stops the walk with the partial result on
-// stdout (valid JSON: removed so far + the failed branch and cause) and a
-// non-zero return whose message carries the "(N of M removed)" progress.
-func TestWorktreeRemoveAllHardFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based failure injection is not portable to windows")
-	}
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
-	resetProcCaches()
-	if err := runWorktree([]string{"--all"}); err != nil {
-		t.Fatalf("worktree --all: %v", err)
-	}
-
-	// Make feat-b's worktree DIRECTORY read-only so the second (sorted)
-	// removal fails hard (git cannot unlink its contents) without the
-	// worktree being dirty — and without touching the parent dir the
-	// sibling worktrees share.
-	wts, err := worktrees()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wtB, ok := stack.LinkedOwnerOf(wts, "feat-b")
-	if !ok {
-		t.Fatal("feat-b has no worktree")
-	}
-	if err := os.Chmod(wtB.Path, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(wtB.Path, 0o755) })
-
-	var runErr error
-	out := captureStdout(t, func() {
-		runErr = runWorktree([]string{"rm", "--all", "--json"})
-	})
-	if runErr == nil || !strings.Contains(runErr.Error(), "(1 of 3 removed)") {
-		t.Fatalf("rm --all error = %v, want the (1 of 3 removed) progress", runErr)
-	}
-	var got struct {
-		Removed []struct {
-			Branch string `json:"branch"`
-			Path   string `json:"path"`
-		} `json:"removed"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	decodeStrictJSON(t, "worktree rm --all (partial)", out, &got)
-	if len(got.Removed) != 1 || got.Removed[0].Branch != "feat-a" {
-		t.Fatalf("removed = %+v, want only feat-a before the failure", got.Removed)
-	}
-	if got.Failed == nil || got.Failed.Branch != "feat-b" || got.Failed.Error == "" {
-		t.Fatalf("failed = %+v, want feat-b with a cause", got.Failed)
-	}
-	if _, err := os.Stat(got.Removed[0].Path); !os.IsNotExist(err) {
-		t.Fatalf("feat-a's worktree should be gone: %v", err)
-	}
-	if _, err := os.Stat(wtB.Path); err != nil {
-		t.Fatalf("feat-b's worktree should survive the failed removal: %v", err)
-	}
-}
-
-// linked worktree removed in sorted order, the main-worktree branch skipped
-// with a reason, no failure.
-func TestWorktreeRemoveAllJSON(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCreate(t, "feat-c", "c.txt", "c\n", "c") // HEAD stays here (main worktree)
-	resetProcCaches()
-	if err := runWorktree([]string{"--all"}); err != nil {
-		t.Fatalf("worktree --all: %v", err)
-	}
-
-	type rmAllResult struct {
-		Removed []struct {
-			Branch string `json:"branch"`
-			Path   string `json:"path"`
-		} `json:"removed"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
-			t.Fatalf("worktree rm --all: %v", err)
-		}
-	})
-	var got rmAllResult
-	decodeStrictJSON(t, "worktree rm --all", out, &got)
-	if len(got.Removed) != 2 || got.Removed[0].Branch != "feat-a" || got.Removed[1].Branch != "feat-b" {
-		t.Fatalf("removed = %+v, want [feat-a feat-b] sorted", got.Removed)
-	}
-	for _, e := range got.Removed {
-		if _, err := os.Stat(e.Path); !os.IsNotExist(err) {
-			t.Fatalf("worktree %q still exists after rm --all: %v", e.Path, err)
-		}
-	}
-	if len(got.Skipped) != 1 || got.Skipped[0].Branch != "feat-c" || got.Skipped[0].Reason != "checked out in the main worktree" {
-		t.Fatalf("skipped = %+v, want feat-c with main-worktree reason", got.Skipped)
-	}
-	if got.Failed != nil {
-		t.Fatalf("failed = %+v, want nil", got.Failed)
-	}
-}
-
-// TestWorktreeRemoveAllSkipsDirty pins the key contract: a dirty worktree is
-// a SKIP (never a failure, never removed) and the command still succeeds.
-func TestWorktreeRemoveAllSkipsDirty(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "main")
-	resetProcCaches()
-	if err := runWorktree([]string{"--all"}); err != nil {
-		t.Fatalf("worktree --all: %v", err)
-	}
-	// Find feat-a's worktree path and dirty it.
-	wts, err := worktrees()
-	if err != nil {
-		t.Fatal(err)
-	}
-	aPath := ""
-	for _, wt := range wts {
-		if wt.Branch == "feat-a" {
-			aPath = wt.Path
-		}
-	}
-	if aPath == "" {
-		t.Fatalf("feat-a worktree not found in %+v", wts)
-	}
-	if err := os.WriteFile(filepath.Join(aPath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	type rmAllResult struct {
-		Removed []struct {
-			Branch string `json:"branch"`
-			Path   string `json:"path"`
-		} `json:"removed"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
-			t.Fatalf("worktree rm --all with a dirty worktree should not error: %v", err)
-		}
-	})
-	var got rmAllResult
-	decodeStrictJSON(t, "worktree rm --all dirty", out, &got)
-	if len(got.Removed) != 1 || got.Removed[0].Branch != "feat-b" {
-		t.Fatalf("removed = %+v, want only feat-b", got.Removed)
-	}
-	foundDirtySkip := false
-	for _, sk := range got.Skipped {
-		if sk.Branch == "feat-a" && sk.Reason == "worktree has uncommitted changes" {
-			foundDirtySkip = true
-		}
-	}
-	if !foundDirtySkip {
-		t.Fatalf("skipped = %+v, want feat-a with dirty reason", got.Skipped)
-	}
-	if got.Failed != nil {
-		t.Fatalf("failed = %+v, want nil (dirty is a skip, not a failure)", got.Failed)
-	}
-	if _, err := os.Stat(filepath.Join(aPath, "dirty.txt")); err != nil {
-		t.Fatalf("dirty worktree was removed: %v", err)
-	}
-}
-
-// TestWorktreeRemoveDirtyRefusesPolitely pins the single-rm parity fix: a
-// dirty linked worktree refuses with the same friendly reason rm --all
-// skips on — it no longer leaks git's own "contains modified or untracked
-// files" fatal.
-func TestWorktreeRemoveDirtyRefusesPolitely(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	resetProcCaches()
-	if err := runWorktree([]string{"--all"}); err != nil {
-		t.Fatalf("worktree --all: %v", err)
-	}
-	wts, err := worktrees()
-	if err != nil {
-		t.Fatal(err)
-	}
-	aPath := ""
-	for _, wt := range wts {
-		if wt.Branch == "feat-a" {
-			aPath = wt.Path
-		}
-	}
-	if aPath == "" {
-		t.Fatalf("feat-a worktree not found in %+v", wts)
-	}
-	if err := os.WriteFile(filepath.Join(aPath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	err = runWorktree([]string{"rm", "feat-a"})
-	if err == nil {
-		t.Fatal("worktree rm on a dirty worktree succeeded; want the friendly refusal")
-	}
-	if !strings.Contains(err.Error(), "uncommitted changes") || !strings.Contains(err.Error(), "st worktree rm feat-a") {
-		t.Fatalf("rm error = %v, want the friendly dirty refusal", err)
-	}
-	if strings.Contains(err.Error(), "fatal") {
-		t.Fatalf("rm error leaks git's fatal: %v", err)
-	}
-	if _, statErr := os.Stat(aPath); statErr != nil {
-		t.Fatalf("dirty worktree was removed: %v", statErr)
-	}
-}
-
-// TestWorktreeRemoveAllIdempotent: a rerun with nothing left removes nothing
-// and exits cleanly.
-func TestWorktreeRemoveAllIdempotent(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	resetProcCaches()
-	if err := runWorktree([]string{"--all"}); err != nil {
-		t.Fatalf("worktree --all: %v", err)
-	}
-	if err := runWorktree([]string{"rm", "--all"}); err != nil {
-		t.Fatalf("first rm --all: %v", err)
-	}
-
-	type rmAllResult struct {
-		Removed []struct {
-			Branch string `json:"branch"`
-			Path   string `json:"path"`
-		} `json:"removed"`
-		Skipped []struct {
-			Branch string `json:"branch"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
-		Failed *struct {
-			Branch string `json:"branch"`
-			Error  string `json:"error"`
-		} `json:"failed"`
-	}
-	out := captureStdout(t, func() {
-		if err := runWorktree([]string{"rm", "--all", "--json"}); err != nil {
-			t.Fatalf("second rm --all: %v", err)
-		}
-	})
-	var got rmAllResult
-	decodeStrictJSON(t, "worktree rm --all rerun", out, &got)
-	if len(got.Removed) != 0 {
-		t.Fatalf("rerun removed = %+v, want empty", got.Removed)
-	}
-	if got.Failed != nil {
-		t.Fatalf("rerun failed = %+v, want nil", got.Failed)
-	}
-}
-
-// TestSubmitPRHintsSelfHostedGitLabJSON pins the forge-label matching: a
-// self-managed GitLab host gets the same /-/compare/ shape as gitlab.com.
-func TestSubmitPRHintsSelfHostedGitLabJSON(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustRun(t, "git", "remote", "add", "origin", "git@gitlab.internal.example.com:owner/repo.git")
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("submit --dry-run --json: %v", err)
-		}
-	})
-	var got submitResult
-	decodeStrictJSON(t, "submit self-hosted gitlab pr hints", out, &got)
-	want := []stack.PRHint{{
-		Head:       "feat-a",
-		Base:       "main",
-		CompareURL: "https://gitlab.internal.example.com/owner/repo/-/compare/main...feat-a",
-	}}
-	if !reflect.DeepEqual(got.PRHints, want) {
-		t.Fatalf("prHints = %+v, want %+v", got.PRHints, want)
 	}
 }
 
@@ -2827,7 +1919,7 @@ func TestSubmitPRHintsGitHubEnterpriseJSON(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -2852,7 +1944,7 @@ func TestSubmitPRHintsLookalikeHostStaysUnknown(t *testing.T) {
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 
 	out := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -2907,6 +1999,8 @@ func TestModifyDryRunCommitIsHonest(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	before := mustRun(t, "git", "rev-list", "--count", "feat-a")
+	write(t, "a2.txt", "a2\n")
+	mustRun(t, "git", "add", "a2.txt")
 
 	out := captureStdout(t, func() {
 		if err := runModify([]string{"--commit", "-m", "wip", "--dry-run", "--json"}); err != nil {
@@ -3017,61 +2111,6 @@ func TestCreateDryRunJSON(t *testing.T) {
 	}
 }
 
-// TestCreateWorktreeDryRunJSON pins the predicted worktree path + copied set
-// against the PARENT's tree (the new branch is created at its tip) and the
-// fact that nothing is created on disk.
-func TestCreateWorktreeDryRunJSON(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	write(t, ".gitignore", "secret.env\n")
-	write(t, "secret.env", "TOKEN=1\n")
-	write(t, ".worktreeinclude", "secret.env\n")
-	mustRun(t, "git", "add", ".gitignore", ".worktreeinclude")
-	mustRun(t, "git", "commit", "-q", "-m", "add worktree config")
-
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-x", "--worktree", "--dry-run", "--json"}); err != nil {
-			t.Fatalf("create feat-x --worktree --dry-run --json: %v", err)
-		}
-	})
-	var got struct {
-		Branch   string   `json:"branch"`
-		Parent   string   `json:"parent"`
-		Worktree string   `json:"worktree"`
-		Copied   []string `json:"copied"`
-		Switched bool     `json:"switched"`
-		Summary  string   `json:"summary"`
-		DryRun   bool     `json:"dryRun"`
-	}
-	decodeStrictJSON(t, "create --worktree --dry-run --json", out, &got)
-	if !got.DryRun || got.Branch != "feat-x" || got.Parent != "main" {
-		t.Fatalf("create --worktree --dry-run payload = %+v", got)
-	}
-	if got.Switched {
-		t.Fatal("dry-run reports switched = true")
-	}
-	if got.Summary != "would create feat-x on top of main" {
-		t.Fatalf("create --worktree --dry-run summary = %q", got.Summary)
-	}
-	if want := []string{"secret.env"}; !reflect.DeepEqual(got.Copied, want) {
-		t.Fatalf("create --worktree --dry-run copied = %v, want %v", got.Copied, want)
-	}
-	if got.Worktree == "" {
-		t.Fatal("create --worktree --dry-run predicted no worktree path")
-	}
-	if _, err := os.Stat(got.Worktree); !os.IsNotExist(err) {
-		t.Fatalf("worktree path %q exists after a dry run", got.Worktree)
-	}
-	if err := exec.Command("git", "rev-parse", "--verify", "-q", "feat-x").Run(); err == nil {
-		t.Fatal("create --worktree --dry-run created feat-x")
-	}
-	if stateT(t).IsTracked("feat-x") {
-		t.Fatal("create --worktree --dry-run tracked feat-x")
-	}
-}
-
 func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -3102,7 +2141,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 		PRHints []stack.PRHint `json:"prHints"`
 	}
 	dryAll := captureStdout(t, func() {
-		if err := runSubmit([]string{"--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --dry-run --json: %v", err)
 		}
 	})
@@ -3116,7 +2155,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 
 	// --upto stops at the current branch [feat-a].
 	dryUpto := captureStdout(t, func() {
-		if err := runSubmit([]string{"--upto", "--dry-run", "--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--upto", "--dry-run", "--json"}); err != nil {
 			t.Fatalf("submit --upto --dry-run --json: %v", err)
 		}
 	})
@@ -3130,7 +2169,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 
 	// Real first push of feat-a creates the remote branch -> text prints compare URL.
 	firstText := captureStdout(t, func() {
-		if err := runSubmit([]string{"--upto"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--upto"}); err != nil {
 			t.Fatalf("first submit --upto: %v", err)
 		}
 	})
@@ -3141,7 +2180,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 	// Second push of full stack: feat-a is updated/up-to-date, feat-b is newly created.
 	// Text mode prints compare URL ONLY for feat-b (not feat-a).
 	secondText := captureStdout(t, func() {
-		if err := runSubmit(nil); err != nil {
+		if err := runSubmit([]string{"--no-pr"}); err != nil {
 			t.Fatalf("second submit: %v", err)
 		}
 	})
@@ -3159,7 +2198,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 		t.Fatalf("modify feat-a: %v", err)
 	}
 	repushText := captureStdout(t, func() {
-		if err := runSubmit(nil); err != nil {
+		if err := runSubmit([]string{"--no-pr"}); err != nil {
 			t.Fatalf("re-submit text: %v", err)
 		}
 	})
@@ -3167,7 +2206,7 @@ func TestSubmitScopeFlagsAndCompareURLTextFiltering(t *testing.T) {
 		t.Fatalf("re-submit text should omit compare URLs when no branch was newly created:\n%s", repushText)
 	}
 	repushJSON := captureStdout(t, func() {
-		if err := runSubmit([]string{"--json"}); err != nil {
+		if err := runSubmit([]string{"--no-pr", "--json"}); err != nil {
 			t.Fatalf("re-submit --json: %v", err)
 		}
 	})

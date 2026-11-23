@@ -168,81 +168,6 @@ func TestSyncPlanPreviewsPrune(t *testing.T) {
 	}
 }
 
-func TestFoldPlanMatchesActualAndDoesNotMutate(t *testing.T) {
-	setup := func(t *testing.T) (*fakeGit, *State, Env) {
-		t.Helper()
-		f, s, env := newEnvState()
-		mkBranch(t, env, s, f, "main", "a")
-		mkBranch(t, env, s, f, "a", "b")
-		mkBranch(t, env, s, f, "b", "c")
-		mkBranch(t, env, s, f, "a", "d")
-		if err := f.Checkout("b"); err != nil {
-			t.Fatal(err)
-		}
-		return f, s, env
-	}
-
-	f, s, env := setup(t)
-	before := capturePreviewState(t, f, s)
-	preview, err := FoldPlan(env, s)
-	if err != nil {
-		t.Fatalf("FoldPlan: %v", err)
-	}
-	assertPreviewDidNotMutate(t, f, s, before)
-	if !preview.DryRun {
-		t.Fatal("FoldPlan should be marked DryRun")
-	}
-	if got := preview.Deleted; !reflect.DeepEqual(got, []string{"b"}) {
-		t.Fatalf("FoldPlan Deleted = %v, want [b]", got)
-	}
-
-	f2, s2, env2 := setup(t)
-	actual, err := Fold(env2, s2)
-	if err != nil {
-		t.Fatalf("Fold: %v", err)
-	}
-	if preview.Branch != actual.Branch {
-		t.Fatalf("Branch preview=%q actual=%q", preview.Branch, actual.Branch)
-	}
-	if !reflect.DeepEqual(preview.Restacked, actual.Restacked) {
-		t.Fatalf("Restacked preview=%v actual=%v", preview.Restacked, actual.Restacked)
-	}
-	if s2.IsTracked("b") || f2.BranchExists("b") {
-		t.Fatal("actual fold should delete b")
-	}
-}
-
-// TestFoldPlanInsideOwningWorktree — the preview must succeed where the real
-// op succeeds: folding the current branch from inside its own linked worktree
-// (parity with TestFoldInsideOwningWorktree).
-func TestFoldPlanInsideOwningWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-
-	f.addWorktree("/wt/b", "b")
-	f.repoRoot = "/wt/b"  // the caller stands inside b's own worktree
-	f.head = "b"          // …on b
-	f.mainBranch = "main" // …while the main worktree sits on the trunk
-
-	before := capturePreviewState(t, f, s)
-	preview, err := FoldPlan(env, s)
-	if err != nil {
-		t.Fatalf("FoldPlan inside the folded branch's worktree: %v", err)
-	}
-	assertPreviewDidNotMutate(t, f, s, before)
-	if !preview.DryRun {
-		t.Fatal("FoldPlan should be marked DryRun")
-	}
-	if got := preview.Deleted; !reflect.DeepEqual(got, []string{"b"}) {
-		t.Fatalf("FoldPlan Deleted = %v, want [b]", got)
-	}
-	if preview.Branch != "a" {
-		t.Fatalf("FoldPlan Branch = %q, want a", preview.Branch)
-	}
-}
-
 func TestSquashPlanMatchesActualAndDoesNotMutate(t *testing.T) {
 	setup := func(t *testing.T) (*fakeGit, *State, Env) {
 		t.Helper()
@@ -405,20 +330,6 @@ func TestDeletePlanNonForceUnmergedPrecedesDirtyWorktreeCheck(t *testing.T) {
 	}
 }
 
-func TestFoldPlanRejectsParentCheckedOutInLinkedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	f.addWorktree("/wt/a", "a")
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := FoldPlan(env, s); err == nil {
-		t.Fatal("FoldPlan with parent checked out in another worktree returned nil error")
-	}
-}
-
 func TestDeletePlanForceErrorsWhenBranchTipIsMissing(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -457,8 +368,8 @@ func TestDeletePlanRejectsMainWorktreeOwnerFromLinkedWorktree(t *testing.T) {
 	if err == nil {
 		t.Fatal("DeletePlan for a branch checked out in the main worktree returned nil error")
 	}
-	if !strings.Contains(err.Error(), "main worktree") {
-		t.Fatalf("DeletePlan error = %v, want main worktree context", err)
+	if !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("DeletePlan error = %v, want foreign worktree context", err)
 	}
 	assertPreviewDidNotMutate(t, f, s, before)
 }
@@ -571,21 +482,6 @@ func TestDeletePlanSkipsDirtyLinkedWorktreeFormerChild(t *testing.T) {
 }
 
 func TestTopologyPlansMatchValidationErrors(t *testing.T) {
-	t.Run("fold into trunk", func(t *testing.T) {
-		f, s, env := newEnvState()
-		mkBranch(t, env, s, f, "main", "a")
-		if err := f.Checkout("a"); err != nil {
-			t.Fatal(err)
-		}
-		assertSameError(t, "cannot fold", func() error {
-			_, err := FoldPlan(env, s)
-			return err
-		}, func() error {
-			_, err := Fold(env, s)
-			return err
-		})
-	})
-
 	t.Run("squash needing restack", func(t *testing.T) {
 		setup := func(t *testing.T) (*State, Env) {
 			t.Helper()

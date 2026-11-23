@@ -45,7 +45,7 @@ func TestCrashShapeRecovery(t *testing.T) {
 			},
 			wantValidateExit:     1,
 			wantValidateContains: []string{"problems:", "feat-c is tracked but its git branch is missing"},
-			recover:              [][]string{{"repair"}, {"restack"}},
+			recover:              [][]string{{"doctor", "--fix"}, {"restack"}},
 		},
 		{
 			name: "delete_after_state_save_before_child_restack",

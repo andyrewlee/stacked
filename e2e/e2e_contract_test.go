@@ -69,11 +69,11 @@ func TestHelpListsAllCommands(t *testing.T) {
 	// sides of the assertion (the golden pins the full help text elsewhere;
 	// this pins the machine-readable set).
 	wantCommands := []string{
-		"abort", "absorb", "bottom", "checkout", "commits", "completion",
-		"continue", "create", "delete", "down", "fold", "guide", "help",
-		"init", "log", "modify", "onto", "open", "prune", "rename", "repair",
-		"restack", "shell", "squash", "status", "submit", "sync", "top",
-		"track", "undo", "untrack", "up", "validate", "version", "worktree",
+		"abort", "bottom", "checkout", "completion",
+		"continue", "create", "delete", "doctor", "down", "guide", "help",
+		"init", "log", "modify", "onto", "rename",
+		"restack", "squash", "status", "submit", "sync", "top",
+		"track", "undo", "untrack", "up", "version",
 	}
 	var help struct {
 		Commands []struct {
@@ -118,34 +118,33 @@ func TestHelpListsAllCommands(t *testing.T) {
 	}
 }
 
-// TestCommitsE2E pins the read surface end to end: `st commits` lists the
+// TestStatusCommitsE2E pins `st status --json`'s commits array: it lists the
 // commits in the recorded-base..tip range, matching `git log` on the same
-// range — and `main` refuses the trunk question.
-func TestCommitsE2E(t *testing.T) {
+// range, and is omitted on trunk.
+func TestStatusCommitsE2E(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "add a")
 	r.create("feat-b", "b.txt", "b\n", "add b")
 
-	res := r.stOK("commits", "feat-b", "--json")
+	res := r.stOK("status", "--json")
 	var payload struct {
-		Branch    string `json:"branch"`
-		ParentSHA string `json:"parentSHA"`
-		Commits   []struct {
+		Branch  string `json:"branch"`
+		Commits []struct {
 			SHA     string `json:"sha"`
 			Subject string `json:"subject"`
 		} `json:"commits"`
 	}
 	if err := json.Unmarshal([]byte(res.stdout), &payload); err != nil {
-		t.Fatalf("commits --json not parseable: %v\n%s", err, res.stdout)
+		t.Fatalf("status --json not parseable: %v\n%s", err, res.stdout)
 	}
-	if payload.Branch != "feat-b" || payload.ParentSHA == "" {
-		t.Fatalf("commits payload = %+v, want feat-b with a recorded base", payload)
+	if payload.Branch != "feat-b" {
+		t.Fatalf("status payload = %+v, want feat-b", payload)
 	}
-	wantSHAs := strings.Fields(r.git("log", "--format=%H", payload.ParentSHA+"..feat-b"))
+	wantSHAs := strings.Fields(r.git("log", "--format=%H", "feat-a..feat-b"))
 	if len(payload.Commits) != len(wantSHAs) {
-		t.Fatalf("commits len = %d, git log %s..feat-b gives %d", len(payload.Commits), payload.ParentSHA, len(wantSHAs))
+		t.Fatalf("commits len = %d, git log feat-a..feat-b gives %d", len(payload.Commits), len(wantSHAs))
 	}
 	for i, c := range payload.Commits {
 		if c.SHA != wantSHAs[i] {
@@ -156,9 +155,17 @@ func TestCommitsE2E(t *testing.T) {
 		t.Fatalf("newest subject = %q, want add b", payload.Commits[0].Subject)
 	}
 
-	res = r.st("commits", "main")
-	wantExit(t, res, 1)
-	wantStderrContains(t, res, "trunk")
+	r.stOK("checkout", "main")
+	trunkRes := r.stOK("status", "--json")
+	var trunkPayload struct {
+		Commits []any `json:"commits"`
+	}
+	if err := json.Unmarshal([]byte(trunkRes.stdout), &trunkPayload); err != nil {
+		t.Fatalf("trunk status --json not parseable: %v\n%s", err, trunkRes.stdout)
+	}
+	if len(trunkPayload.Commits) != 0 {
+		t.Fatalf("trunk status commits = %v, want empty", trunkPayload.Commits)
+	}
 }
 
 // TestUnknownCommand asserts an unrecognized command exits 1, writes the
@@ -257,14 +264,14 @@ func TestNavigationEdges(t *testing.T) {
 	wantStderrContains(t, res, "at least 1")
 }
 
-// TestManualNavigationQuotedPath pins the manual-navigation contract: without
-// the shell shim, a teleport hint must be a paste-safe shell command even when
-// the worktree path contains spaces and shell metacharacters — the path is
-// single-quoted behind `cd --` — while JSON output keeps the exact path bytes.
-func TestManualNavigationQuotedPath(t *testing.T) {
+// TestCheckoutRefusesForeignWorktree pins the foreign-worktree contract: when a
+// branch is already checked out in another worktree, `st checkout <branch>`
+// refuses with exit 1 naming the owning worktree path (never silently failing
+// mid-git or pretending to switch).
+func TestCheckoutRefusesForeignWorktree(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
-		t.Skip("single-quote cd spelling targets POSIX shells")
+		t.Skip("single-quote path characters target POSIX filesystems")
 	}
 	r := newRepo(t)
 	r.initStack()
@@ -279,28 +286,23 @@ func TestManualNavigationQuotedPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve %q: %v", wt, err)
 	}
-	quoted := "run: cd -- '" + strings.ReplaceAll(want, "'", `'\''`) + "'"
 
-	// Text mode: the offered command is the quoted, copyable spelling.
-	res := r.stOK("checkout", "feat-a")
-	wantStdoutContains(t, res, quoted)
+	res := r.st("checkout", "feat-a")
+	wantExit(t, res, 1)
+	wantStderrContains(t, res, "checked out in another worktree")
+	wantStderrContains(t, res, want)
 
-	// JSON mode: no false "switched" claim, and the worktree field keeps the
-	// exact raw path bytes.
-	out := r.stOK("checkout", "feat-a", "--json").stdout
-	var payload struct {
-		Branch   string `json:"branch"`
-		Switched bool   `json:"switched"`
-		Worktree string `json:"worktree"`
+	res = r.st("checkout", "feat-a", "--json")
+	wantExit(t, res, 1)
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(out), &payload); err != nil {
-		t.Fatalf("decode checkout json: %v\n%s", err, out)
-	}
-	if payload.Worktree != want {
-		t.Fatalf("checkout json worktree = %q, want exact path %q", payload.Worktree, want)
-	}
-	if payload.Switched {
-		t.Fatalf("checkout without the shim must not claim a switch: %+v", payload)
+	decodeStderrEnvelope(t, "checkout foreign worktree --json", res.stderr, &env)
+	if !strings.Contains(env.Error.Message, want) {
+		t.Fatalf("checkout json error message = %q, want worktree path %q", env.Error.Message, want)
 	}
 }
 
@@ -347,10 +349,14 @@ func TestErrorOutputEscapesControlBytes(t *testing.T) {
 	r.git("commit", "-q", "-m", "init")
 	r.initStack()
 	r.stOK("create", "feat-a")
+	r.stOK("checkout", "main")
 
-	// feat-a is checked out in the main worktree, so materializing a worktree
-	// for it fails with an error embedding the main worktree path via %s.
-	res := r.st("worktree", "feat-a")
+	// Check out feat-a in a linked worktree whose path carries a raw ESC byte;
+	// trying to check out feat-a from the main worktree fails with an error
+	// embedding that path, which must be escaped on stderr.
+	wt := filepath.Join(base, "wt\x1besc")
+	r.git("worktree", "add", "-q", wt, "feat-a")
+	res := r.st("checkout", "feat-a")
 	wantExit(t, res, 1)
 	if strings.Contains(res.stderr, "\x1b") {
 		t.Fatalf("stderr contains a raw ESC byte:\n%q", res.stderr)

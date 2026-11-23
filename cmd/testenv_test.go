@@ -34,6 +34,9 @@ func normalizeGitTestEnv() error {
 		{"GIT_TERMINAL_PROMPT", "0"},
 		{"GIT_PAGER", "cat"},
 		{"GIT_EDITOR", "true"},
+		// Keep cmd tests hermetic: never invoke the host's real gh CLI unless a
+		// test explicitly installs a mock ST_GH_BIN.
+		{"ST_GH_BIN", filepath.Join(os.TempDir(), "__st_test_no_gh__")},
 	} {
 		if err := os.Setenv(kv[0], kv[1]); err != nil {
 			return fmt.Errorf("set %s: %w", kv[0], err)

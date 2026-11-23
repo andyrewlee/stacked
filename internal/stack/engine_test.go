@@ -78,65 +78,6 @@ func TestEngineCreateTracksParent(t *testing.T) {
 	}
 }
 
-func TestCreateInWorktreePrepTracksWithoutSwitching(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-	parentTip, err := f.RevParse("a")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res, err := CreateInWorktreePrep(env, s, "b")
-	if err != nil {
-		t.Fatalf("CreateInWorktreePrep: %v", err)
-	}
-	if f.head != "a" {
-		t.Fatalf("HEAD = %q, want a", f.head)
-	}
-	if got, _ := f.RevParse("b"); got != parentTip {
-		t.Fatalf("b tip = %s, want parent tip %s", got, parentTip)
-	}
-	b, ok := s.Get("b")
-	if !ok {
-		t.Fatal("b was not tracked")
-	}
-	if b.Parent != "a" || b.ParentSHA != parentTip {
-		t.Fatalf("tracked b = %+v, want parent a at %s", b, parentTip)
-	}
-	if res.Summary != "Created b on top of a" || res.Branch != "b" {
-		t.Fatalf("result = %+v", res)
-	}
-}
-
-func TestCreateInWorktreePrepRefusesExistingBranch(t *testing.T) {
-	f, s, env := newEnvState()
-	if err := f.CreateBranchAt("a", "main"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := CreateInWorktreePrep(env, s, "a")
-	want := `branch "a" already exists`
-	if err == nil || err.Error() != want {
-		t.Fatalf("CreateInWorktreePrep error = %v, want %q", err, want)
-	}
-}
-
-func TestCreateInWorktreePrepRefusesUntrackedCurrentBranch(t *testing.T) {
-	f, s, env := newEnvState()
-	if err := f.CreateBranch("loose"); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := CreateInWorktreePrep(env, s, "a")
-	want := `current branch "loose" is not the trunk or a tracked branch`
-	if err == nil || err.Error() != want {
-		t.Fatalf("CreateInWorktreePrep error = %v, want %q", err, want)
-	}
-}
-
 func TestEngineSquashCollapses(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -182,256 +123,6 @@ func TestSquashRestoresBranchTipWhenCommitFails(t *testing.T) {
 	after, _ := f.RevParse("a")
 	if after != before {
 		t.Fatalf("a tip changed to %s, want %s", after, before)
-	}
-}
-
-func TestEngineFoldAbsorbs(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Fold(env, s); err != nil {
-		t.Fatalf("fold: %v", err)
-	}
-	if s.IsTracked("b") {
-		t.Fatal("b still tracked after fold")
-	}
-	if cb, _ := s.Get("c"); cb.Parent != "a" {
-		t.Fatalf("c parent=%q, want a", cb.Parent)
-	}
-	if subs, _ := f.CommitSubjects("main", "a"); len(subs) != 2 {
-		t.Fatalf("a should have 2 commits after fold, got %d", len(subs))
-	}
-}
-
-func TestFoldRefusesParentInOtherWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	f.addWorktree("/wt/a", "a")
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	aTip, _ := f.RevParse("a")
-	bTip, _ := f.RevParse("b")
-
-	_, err := Fold(env, s)
-	want := `cannot fold into "a" because it is checked out in another worktree "/wt/a"`
-	if err == nil || err.Error() != want {
-		t.Fatalf("Fold error = %v, want %q", err, want)
-	}
-	if after, _ := f.RevParse("a"); after != aTip {
-		t.Fatalf("a tip = %s after refused fold, want %s", after, aTip)
-	}
-	if after, _ := f.RevParse("b"); after != bTip {
-		t.Fatalf("b tip = %s after refused fold, want %s", after, bTip)
-	}
-	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("refused fold removed branch b or its metadata")
-	}
-	if f.head != "b" {
-		t.Fatalf("HEAD = %q after refused fold, want b", f.head)
-	}
-}
-
-// If the branch delete fails mid-fold, the git side must roll back: the parent
-// ref must not have absorbed cur's commits, cur must survive, HEAD must be
-// restored, and the metadata must be untouched (ENG-4). Otherwise git and
-// state.json would silently disagree.
-func TestFoldRollsBackWhenDeleteFails(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	aTip, _ := f.RevParse("a")
-	errBoom := errors.New("branch checked out elsewhere")
-	f.deleteErr["b"] = errBoom
-
-	if _, err := Fold(env, s); !errors.Is(err, errBoom) {
-		t.Fatalf("Fold error = %v, want %v", err, errBoom)
-	}
-	// Parent must not have advanced.
-	if after, _ := f.RevParse("a"); after != aTip {
-		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
-	}
-	// cur must survive, stay tracked, and keep its child.
-	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("failed fold destroyed branch b or its metadata")
-	}
-	if cb, _ := s.Get("c"); cb.Parent != "b" {
-		t.Fatalf("c parent = %q after failed fold, want b (unchanged)", cb.Parent)
-	}
-	// HEAD must be restored to cur.
-	if f.head != "b" {
-		t.Fatalf("HEAD = %q after failed fold, want b restored", f.head)
-	}
-}
-
-func TestFoldRollsBackParentWhenDeleteAndRestoreCheckoutFail(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	aTip, _ := f.RevParse("a")
-	deleteErr := errors.New("branch checked out elsewhere")
-	checkoutErr := errors.New("cannot restore checked-out branch")
-	f.deleteErr["b"] = deleteErr
-	f.checkoutErr["b"] = checkoutErr
-
-	err := func() error {
-		_, err := Fold(env, s)
-		return err
-	}()
-	if !errors.Is(err, deleteErr) {
-		t.Fatalf("Fold error = %v, want wrapped %v", err, deleteErr)
-	}
-	// The secondary restore failure must stay matchable with errors.Is (wrapped
-	// with %w via AlsoFailed), not merely rendered into the message with %v.
-	if !errors.Is(err, checkoutErr) {
-		t.Fatalf("Fold error = %v, want restore checkout error matchable with errors.Is", err)
-	}
-	if !strings.Contains(err.Error(), checkoutErr.Error()) {
-		t.Fatalf("Fold error = %v, want restore checkout failure", err)
-	}
-	if after, _ := f.RevParse("a"); after != aTip {
-		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
-	}
-	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("failed fold destroyed branch b or its metadata")
-	}
-	if cb, _ := s.Get("c"); cb.Parent != "b" {
-		t.Fatalf("c parent = %q after failed fold, want b (unchanged)", cb.Parent)
-	}
-	if f.head != "a" {
-		t.Fatalf("HEAD = %q after failed fold, want rolled-back parent", f.head)
-	}
-}
-
-// TestFoldCheckoutParentFailsRollsBack covers the forward-checkout arm of
-// Fold's UpdateRef rollback: the parent was already advanced to cur's tip when
-// Checkout(parent) fails, so the rollback must restore the parent ref and the
-// error names the checkout.
-func TestFoldCheckoutParentFailsRollsBack(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	aTip, _ := f.RevParse("a")
-	checkoutErr := errors.New("checkout exploded")
-	f.checkoutErr["a"] = checkoutErr
-
-	_, err := Fold(env, s)
-	if !errors.Is(err, checkoutErr) {
-		t.Fatalf("Fold error = %v, want wrapped %v", err, checkoutErr)
-	}
-	if !strings.Contains(err.Error(), `checking out "a"`) {
-		t.Fatalf("Fold error = %v, want it to name the parent checkout", err)
-	}
-	// The UpdateRef rollback ran: the parent is back at its original tip, cur
-	// is untouched, and HEAD never moved (the failed checkout was a no-op).
-	if after, _ := f.RevParse("a"); after != aTip {
-		t.Fatalf("a tip = %s after failed fold, want %s (rolled back)", after, aTip)
-	}
-	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("failed fold destroyed branch b or its metadata")
-	}
-	if f.head != "b" {
-		t.Fatalf("HEAD = %q after failed fold, want b (checkout never landed)", f.head)
-	}
-}
-
-// TestFoldCheckoutParentFailsRollbackAlsoFails pins the worst arm: checkout
-// fails AND the UpdateRef rollback fails, so AlsoFailed composes both and the
-// parent is left holding cur's commits — a repo/state divergence the error
-// must name rather than hide.
-func TestFoldCheckoutParentFailsRollbackAlsoFails(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	bTip, _ := f.RevParse("b")
-	checkoutErr := errors.New("checkout exploded")
-	updateErr := errors.New("ref update exploded")
-	f.checkoutErr["a"] = checkoutErr
-	f.failErr["UpdateRef"] = updateErr
-
-	_, err := Fold(env, s)
-	if !errors.Is(err, checkoutErr) {
-		t.Fatalf("Fold error = %v, want checkout sentinel matchable", err)
-	}
-	if !errors.Is(err, updateErr) {
-		t.Fatalf("Fold error = %v, want rollback sentinel matchable", err)
-	}
-	if !strings.Contains(err.Error(), `roll back "a"`) {
-		t.Fatalf("Fold error = %v, want the rollback step named", err)
-	}
-	// Diverged end state, characterized not aspired: a still points at b's
-	// commits while state.json still lists b as a's child.
-	if after, _ := f.RevParse("a"); after != bTip {
-		t.Fatalf("a tip = %s, want %s — rollback failed so a keeps b's commits", after, bTip)
-	}
-	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("failed fold destroyed branch b or its metadata")
-	}
-	if f.head != "b" {
-		t.Fatalf("HEAD = %q, want b (checkout never landed)", f.head)
-	}
-}
-
-// TestFoldDeleteFailsRollbackAlsoFails covers the sibling arm: the parent
-// checkout already succeeded when DeleteBranch fails, then the UpdateRef
-// rollback fails too — AlsoFailed composes delete + rollback, and the engine
-// never attempts the re-checkout restore (which would only have cleaned up
-// HEAD, not the ref).
-func TestFoldDeleteFailsRollbackAlsoFails(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	bTip, _ := f.RevParse("b")
-	deleteErr := errors.New("delete exploded")
-	updateErr := errors.New("ref update exploded")
-	f.deleteErr["b"] = deleteErr
-	f.failErr["UpdateRef"] = updateErr
-
-	_, err := Fold(env, s)
-	if !errors.Is(err, deleteErr) {
-		t.Fatalf("Fold error = %v, want delete sentinel matchable", err)
-	}
-	if !errors.Is(err, updateErr) {
-		t.Fatalf("Fold error = %v, want rollback sentinel matchable", err)
-	}
-	if !strings.Contains(err.Error(), `deleting "b"`) || !strings.Contains(err.Error(), `roll back "a"`) {
-		t.Fatalf("Fold error = %v, want both the delete and the rollback named", err)
-	}
-	// Diverged: a still holds b's commits; HEAD sits on a (the checkout had
-	// already landed — no restore was attempted past the failed rollback).
-	if after, _ := f.RevParse("a"); after != bTip {
-		t.Fatalf("a tip = %s, want %s — rollback failed so a keeps b's commits", after, bTip)
-	}
-	if f.head != "a" {
-		t.Fatalf("HEAD = %q, want a (checkout landed before the delete failed)", f.head)
 	}
 }
 
@@ -630,13 +321,9 @@ func TestDeleteCurrentRefusesParentInOtherWorktree(t *testing.T) {
 	}
 }
 
-// TestDeleteRefusesWhenCwdInsideOwnerWorktree pins the releaseOwnedWorktree
-// cwd guard: deleting the branch whose linked worktree contains the caller's
-// cwd refuses up front. It replaced a `branch == cur` probe that silently
-// skipped the removal — in the fake's model, f.head is the MAIN worktree's
-// branch, so cur ("a") differed from the doomed branch ("b") and the old probe
-// could not see that the caller stood inside /wt/b.
-func TestDeleteRefusesWhenCwdInsideOwnerWorktree(t *testing.T) {
+// TestDeleteRefusesWhenParentOwnedByOtherWorktree pins the foreign-worktree
+// guard when deleting the current branch whose parent lives in another worktree.
+func TestDeleteRefusesWhenParentOwnedByOtherWorktree(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
@@ -646,21 +333,20 @@ func TestDeleteRefusesWhenCwdInsideOwnerWorktree(t *testing.T) {
 	f.mainBranch = "a"   // …while the main worktree is checked out on a
 
 	_, err := Delete(env, s, "b", true)
-	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
-		t.Fatalf("delete = %v, want the cwd-inside refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("delete = %v, want foreign-worktree refusal", err)
 	}
 	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("delete removed the worktree the caller was inside")
+		t.Fatal("delete removed the worktree")
 	}
 	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("delete deleted the branch despite refusing its worktree")
+		t.Fatal("delete deleted the branch despite refusing")
 	}
 }
 
-// TestDeleteRefusesWhenCwdInsideOwnerWorktreeDetached — same refusal under a
-// detached HEAD: RepoRoot, not CurrentBranch, is what locates the caller's
-// worktree, so the guard still fires where the old branch==cur probe could not.
-func TestDeleteRefusesWhenCwdInsideOwnerWorktreeDetached(t *testing.T) {
+// TestDeleteRefusesBranchOwnedByOtherWorktreeDetached pins the foreign-worktree
+// refusal under a detached HEAD when the target branch is owned by a worktree.
+func TestDeleteRefusesBranchOwnedByOtherWorktreeDetached(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
@@ -669,14 +355,14 @@ func TestDeleteRefusesWhenCwdInsideOwnerWorktreeDetached(t *testing.T) {
 	f.head, f.detachedAt = "", f.branches["b"]
 
 	_, err := Delete(env, s, "b", true)
-	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
-		t.Fatalf("delete = %v, want the cwd-inside refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("delete = %v, want foreign-worktree refusal", err)
 	}
 	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("delete removed the worktree the caller was inside")
+		t.Fatal("delete removed the worktree")
 	}
 	if !f.BranchExists("b") {
-		t.Fatal("delete deleted the branch despite refusing its worktree")
+		t.Fatal("delete deleted the branch despite refusing")
 	}
 }
 
@@ -1914,34 +1600,6 @@ func TestContinueRefusesWhenRebaseTargetUnreadable(t *testing.T) {
 	}
 }
 
-func TestFoldConflictContinueRecovers(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	mkBranch(t, env, s, f, "b", "c")
-
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-	f.commit("b2")
-	f.conflictOn("c")
-
-	if _, err := Fold(env, s); !errors.Is(err, ErrConflict) {
-		t.Fatalf("Fold error = %v, want %v", err, ErrConflict)
-	}
-	if s.IsTracked("b") {
-		t.Fatal("b still tracked after conflicted fold")
-	}
-	if cb, _ := s.Get("c"); cb.Parent != "a" {
-		t.Fatalf("c parent=%q after conflicted fold, want a", cb.Parent)
-	}
-
-	if _, err := Continue(env, s); err != nil {
-		t.Fatalf("continue: %v", err)
-	}
-	checkInvariants(t, f, s, 0)
-}
-
 func TestSquashConflictContinueRecovers(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
@@ -2030,9 +1688,6 @@ func TestEngineGuards(t *testing.T) {
 	if err := f.Checkout("a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Fold(env, s); err == nil {
-		t.Fatal("fold of a bottom branch into the trunk should error")
-	}
 	if _, err := Onto(env, s, "a"); err == nil {
 		t.Fatal("onto self should error")
 	}
@@ -2114,7 +1769,6 @@ func TestRequireCleanGuards(t *testing.T) {
 		op   func(Env, *State) (*OpResult, error)
 	}{
 		{"Restack", func(env Env, s *State) (*OpResult, error) { return Restack(env, s) }},
-		{"Fold", func(env Env, s *State) (*OpResult, error) { return Fold(env, s) }},
 		{"Squash", func(env Env, s *State) (*OpResult, error) { return Squash(env, s, "m") }},
 		{"Onto", func(env Env, s *State) (*OpResult, error) { return Onto(env, s, "main") }},
 		{"Sync", func(env Env, s *State) (*OpResult, error) {
@@ -2370,7 +2024,7 @@ func TestRestackAllOpWarnsUnreachable(t *testing.T) {
 	for _, note := range res.Notes {
 		if strings.Contains(note, "unreachable") && strings.Contains(note, "lost") &&
 			strings.Contains(note, "cy-a") && strings.Contains(note, "cy-b") &&
-			strings.Contains(note, "st repair") {
+			strings.Contains(note, "st doctor --fix") {
 			found = true
 		}
 	}
@@ -2703,10 +2357,10 @@ func TestErrNotTrackedCanonicalText(t *testing.T) {
 	}
 }
 
-// TestDeleteRefusesLockedOwnerWorktree pins the hold on the release path:
-// deleting a branch whose linked worktree is locked refuses before teardown —
-// the standing hold outranks the delete, matching `st worktree rm`'s refusal.
-func TestDeleteRefusesLockedOwnerWorktree(t *testing.T) {
+// TestDeleteRefusesForeignOwnerWorktree pins the foreign-worktree refusal:
+// deleting a branch checked out in another worktree refuses without removing
+// the worktree or the branch.
+func TestDeleteRefusesForeignOwnerWorktree(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	mkBranch(t, env, s, f, "a", "b")
@@ -2717,14 +2371,13 @@ func TestDeleteRefusesLockedOwnerWorktree(t *testing.T) {
 	}
 
 	_, err := Delete(env, s, "b", true)
-	if err == nil || !strings.Contains(err.Error(), "is locked") ||
-		!strings.Contains(err.Error(), "st worktree unlock b") {
-		t.Fatalf("delete = %v, want the locked-worktree refusal naming the unlock", err)
+	if err == nil || !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("delete = %v, want foreign-worktree refusal", err)
 	}
 	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("delete removed a locked worktree")
+		t.Fatal("delete removed a foreign worktree")
 	}
 	if !f.BranchExists("b") || !s.IsTracked("b") {
-		t.Fatal("delete deleted the branch despite refusing its locked worktree")
+		t.Fatal("delete deleted the branch despite refusing its foreign worktree")
 	}
 }

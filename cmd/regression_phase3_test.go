@@ -1,17 +1,13 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
-
-// This file pins the Phase-3 UX/logistical fixes (F1-F3, F6) found by driving
-// every user story against the real binary. Each test reproduces the prior bad
-// behaviour's trigger and asserts the friendly outcome, so a regression is caught
-// by `make ci` rather than only by the out-of-tree story harness.
 
 func errContains(t *testing.T, err error, want string) {
 	t.Helper()
@@ -20,35 +16,6 @@ func errContains(t *testing.T, err error, want string) {
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
-	}
-}
-
-// F1: `st worktree rm <branch>` where the branch lives only in the MAIN worktree
-// must explain that plainly instead of leaking git's "fatal: ... is a main
-// working tree" error.
-func TestWorktreeRemoveMainWorktreeFriendly(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat", "f.txt", "x\n", "feat") // leaves HEAD on feat in the main worktree
-	resetProcCaches()
-	err := runWorktree([]string{"rm", "feat"})
-	errContains(t, err, "checked out in the main worktree, not a separate one")
-	if strings.Contains(err.Error(), "is a main working tree") {
-		t.Errorf("raw git error leaked through: %v", err)
-	}
-}
-
-// F2: `st worktree <current-branch>` must say the branch is in the main worktree
-// rather than reporting "worktree already exists" pointing at the main repo path.
-func TestWorktreeAddCurrentBranchFriendly(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat", "f.txt", "x\n", "feat")
-	resetProcCaches()
-	err := runWorktree([]string{"feat"})
-	errContains(t, err, "checked out in the main worktree")
-	if strings.Contains(err.Error(), "already exists") {
-		t.Errorf("misleading 'already exists' message: %v", err)
 	}
 }
 
@@ -113,10 +80,9 @@ func TestRenameInvalidatesWorktreeCache(t *testing.T) {
 	mustInit(t)
 	mustCreate(t, "feat", "f.txt", "x\n", "feat")
 	mustRun(t, "git", "checkout", "-q", "main")
+	wtPath := filepath.Join(t.TempDir(), "wt-feat")
+	mustRun(t, "git", "worktree", "add", "-q", wtPath, "feat")
 	resetProcCaches()
-	if err := runWorktree([]string{"feat"}); err != nil {
-		t.Fatalf("worktree feat: %v", err)
-	}
 	// Warm the cache, then rename through the cached port (as engine ops do).
 	if _, err := worktrees(); err != nil {
 		t.Fatal(err)

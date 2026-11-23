@@ -22,6 +22,9 @@ import (
 // git deterministic and non-interactive regardless of the host: the cmd suite
 // must not depend on real user config.
 func TestMain(m *testing.M) {
+	if os.Getenv("ST_MOCK_GH_HELPER") == "1" {
+		os.Exit(runMockGHProcess())
+	}
 	replay := silenceStdout()
 	if err := normalizeGitTestEnv(); err != nil {
 		fmt.Fprintln(os.Stderr, "normalize git test env:", err)
@@ -108,11 +111,12 @@ func mustInit(t *testing.T) {
 	}
 }
 
-// mustCreate writes file=content, then creates a tracked branch committing it.
+// mustCreate writes file=content, stages it, and creates a tracked branch committing it.
 func mustCreate(t *testing.T, name, file, content, msg string) {
 	t.Helper()
 	write(t, file, content)
-	if err := runCreate([]string{name, "-a", "-m", msg}); err != nil {
+	mustRun(t, "git", "add", file)
+	if err := runCreate([]string{name, "-m", msg}); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
 }

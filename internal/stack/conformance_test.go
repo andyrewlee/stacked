@@ -535,27 +535,17 @@ func TestConformanceOwnedBranchRefusals(t *testing.T) {
 		if err := d.g.Checkout("main"); err != nil {
 			d.t.Fatalf("checkout main: %v", err)
 		}
-		wtA := d.addWorktree("a")
+		_ = d.addWorktree("a")
 		wtB := d.addWorktree("b")
 
 		if err := d.g.Checkout("a"); err == nil {
 			d.t.Fatal("Checkout of a worktree-owned branch succeeded")
-		}
-		if err := d.g.ForceBranch("a", "main"); err == nil {
-			d.t.Fatal("ForceBranch of a worktree-owned branch succeeded")
 		}
 		if err := d.g.RebaseOnto("main", "main", "a"); err == nil {
 			d.t.Fatal("RebaseOnto of a worktree-owned branch succeeded")
 		}
 		if err := d.g.RebaseOntoIn(wtB, "main", "main", "a"); err == nil {
 			d.t.Fatal("RebaseOntoIn rebased a from a worktree that does not own it")
-		}
-
-		if err := d.g.WorktreeRemove(wtA, false); err != nil {
-			d.t.Fatalf("WorktreeRemove: %v", err)
-		}
-		if err := d.g.Checkout("a"); err != nil {
-			d.t.Fatalf("Checkout after the owner worktree was removed: %v", err)
 		}
 	})
 }
@@ -643,9 +633,7 @@ func TestConformanceWorktreeProbesOnUnknownDir(t *testing.T) {
 			{"RebaseInProgressIn", func() error { _, err := d.g.RebaseInProgressIn(bogus); return err }},
 			{"RebaseHeadNameIn", func() error { _, err := d.g.RebaseHeadNameIn(bogus); return err }},
 			{"RebaseAbortIn", func() error { return d.g.RebaseAbortIn(bogus) }},
-			{"ResetHardIn", func() error { return d.g.ResetHardIn(bogus, "HEAD") }},
 			{"RebaseOntoIn", func() error { return d.g.RebaseOntoIn(bogus, "main", "main", "main") }},
-			{"WorktreeRemove", func() error { return d.g.WorktreeRemove(bogus, false) }},
 			{"IsCleanIn", func() error { _, err := d.g.IsCleanIn(bogus); return err }},
 		}
 		for _, c := range calls {
@@ -684,53 +672,16 @@ func TestConformanceDirExists(t *testing.T) {
 	})
 }
 
-// WorktreeRemove refuses a dirty worktree without force and deregisters a
-// clean one; ResetHardIn restores a dirty worktree to clean.
-func TestConformanceWorktreeRemoveAndResetHardIn(t *testing.T) {
-	runConformance(t, func(d *confDriver) {
-		if err := d.g.CreateBranch("a"); err != nil {
-			d.t.Fatalf("CreateBranch: %v", err)
-		}
-		if err := d.g.Checkout("main"); err != nil {
-			d.t.Fatalf("checkout main: %v", err)
-		}
-		wtPath := d.addWorktree("a")
-		d.dirtyWorktree("a", wtPath)
-		if clean, err := d.g.IsCleanIn(wtPath); err != nil || clean {
-			d.t.Fatalf("IsCleanIn(dirty wt) = (%v, %v), want false", clean, err)
-		}
-		if err := d.g.WorktreeRemove(wtPath, false); err == nil {
-			d.t.Fatal("WorktreeRemove removed a dirty worktree without force")
-		}
-		if err := d.g.ResetHardIn(wtPath, "HEAD"); err != nil {
-			d.t.Fatalf("ResetHardIn: %v", err)
-		}
-		if clean, err := d.g.IsCleanIn(wtPath); err != nil || !clean {
-			d.t.Fatalf("IsCleanIn after reset --hard = (%v, %v), want true", clean, err)
-		}
-		if err := d.g.WorktreeRemove(wtPath, false); err != nil {
-			d.t.Fatalf("WorktreeRemove on a clean worktree: %v", err)
-		}
-		wts, err := d.g.Worktrees()
-		if err != nil {
-			d.t.Fatalf("Worktrees: %v", err)
-		}
-		if len(wts) != 1 {
-			d.t.Fatalf("Worktrees len = %d after removal, want the main worktree only", len(wts))
-		}
-	})
-}
-
-// The branch-mutation plumbing surface: CreateBranchAt, UpdateRef,
-// RenameBranch, MergeBase, CommitRange, TipsFor.
+// The branch-mutation plumbing surface: UpdateRef, RenameBranch, MergeBase,
+// TipsFor, IsCleanIn.
 func TestConformanceRefOps(t *testing.T) {
 	runConformance(t, func(d *confDriver) {
 		initTip := d.tip("main")
-		if err := d.g.CreateBranchAt("x", initTip); err != nil {
-			d.t.Fatalf("CreateBranchAt: %v", err)
+		if err := d.g.CreateBranch("x"); err != nil {
+			d.t.Fatalf("CreateBranch x: %v", err)
 		}
-		if got := d.tip("x"); got != initTip {
-			d.t.Fatalf("CreateBranchAt put x at %s, want the pinned ref %s", got, initTip)
+		if err := d.g.Checkout("main"); err != nil {
+			d.t.Fatalf("checkout main: %v", err)
 		}
 		if err := d.g.CreateBranch("a"); err != nil {
 			d.t.Fatalf("CreateBranch: %v", err)
@@ -761,13 +712,6 @@ func TestConformanceRefOps(t *testing.T) {
 		if err != nil || mb != initTip {
 			d.t.Fatalf("MergeBase(main, a) = (%s, %v), want the fork point %s", mb, err, initTip)
 		}
-		set, err := d.g.CommitRange(initTip, "a")
-		if err != nil {
-			d.t.Fatalf("CommitRange: %v", err)
-		}
-		if len(set) != 1 || !set[aTip] {
-			d.t.Fatalf("CommitRange(init..a) = %v, want just a's tip", set)
-		}
 		tips, err := d.g.TipsFor([]string{"main", "a"})
 		if err != nil || len(tips) != 2 || tips["a"] != aTip {
 			d.t.Fatalf("TipsFor = (%v, %v), want both branch tips", tips, err)
@@ -777,6 +721,14 @@ func TestConformanceRefOps(t *testing.T) {
 		}
 		if d.g.BranchExists("ghost") {
 			d.t.Fatal("BranchExists(ghost) = true, want false")
+		}
+		wtPath := d.addWorktree("a")
+		if clean, err := d.g.IsCleanIn(wtPath); err != nil || !clean {
+			d.t.Fatalf("IsCleanIn(clean wt) = (%v, %v), want true", clean, err)
+		}
+		d.dirtyWorktree("a", wtPath)
+		if clean, err := d.g.IsCleanIn(wtPath); err != nil || clean {
+			d.t.Fatalf("IsCleanIn(dirty wt) = (%v, %v), want false", clean, err)
 		}
 		if root, err := d.g.RepoRoot(); err != nil {
 			d.t.Fatalf("RepoRoot: %v", err)
@@ -815,6 +767,9 @@ func TestConformanceCommitAmendResetSoft(t *testing.T) {
 		}
 		if subs, err := d.g.CommitSubjects(initTip, "main"); err != nil || len(subs) != 1 || subs[0] != "c1" {
 			d.t.Fatalf("CommitSubjects = (%v, %v), want [c1]", subs, err)
+		}
+		if body, err := d.g.CommitBody("main"); err != nil || body != "" {
+			d.t.Fatalf("CommitBody(subject-only) = (%q, %v), want empty", body, err)
 		}
 		if err := d.g.AmendMessage("c1-amended", false); err != nil {
 			d.t.Fatalf("AmendMessage: %v", err)
@@ -959,124 +914,6 @@ func TestConformanceCheckoutDetach(t *testing.T) {
 	})
 }
 
-// Absorb's read side and temp-index write path: staged hunks classify,
-// blame attributes, per-target patches assemble, and the amend moves only
-// the target tip.
-func TestConformanceAbsorbSurface(t *testing.T) {
-	runConformance(t, func(d *confDriver) {
-		if err := d.g.CreateBranch("a"); err != nil {
-			d.t.Fatalf("CreateBranch: %v", err)
-		}
-		if err := d.g.Checkout("a"); err != nil {
-			d.t.Fatalf("checkout a: %v", err)
-		}
-		d.commit("a1")
-		aTip := d.tip("a")
-
-		var hunks []git.Hunk
-		var unsupported []git.UnsupportedRecord
-		if d.fake != nil {
-			d.fake.stagedHunks = []git.Hunk{{File: "base.txt", OldStart: 1, OldN: 1, NewStart: 1, NewN: 1}}
-			d.fake.stagedPatch = []byte("fake patch")
-			d.fake.blame = map[string]map[int]git.BlameLine{
-				"base.txt": {1: blameID(aTip, 1, "base.txt")},
-			}
-		} else {
-			confWrite(d.t, "base.txt", "dirtied\n")
-			confGit(d.t, "add", "base.txt")
-		}
-		var err error
-		hunks, unsupported, err = d.g.DiffCachedHunks()
-		if err != nil {
-			d.t.Fatalf("DiffCachedHunks: %v", err)
-		}
-		if len(hunks) == 0 || hunks[0].File != "base.txt" {
-			d.t.Fatalf("DiffCachedHunks = (%v, %v), want a base.txt hunk", hunks, unsupported)
-		}
-		if len(unsupported) != 0 {
-			d.t.Fatalf("DiffCachedHunks unsupported = %v, want none for a plain text change", unsupported)
-		}
-		blame, err := d.g.BlamePorcelain("base.txt", "HEAD")
-		if err != nil || len(blame) == 0 {
-			d.t.Fatalf("BlamePorcelain = (%v, %v), want per-line provenance", blame, err)
-		}
-		for ln, bl := range blame {
-			if bl.Commit == "" || bl.OriginalLine == 0 || bl.Path == "" {
-				d.t.Fatalf("blame line %d = %+v, want complete provenance", ln, bl)
-			}
-		}
-		patches, err := d.g.DiffCachedPatchesFor(map[string][]git.Hunk{"target": hunks})
-		if err != nil || len(patches["target"]) == 0 {
-			d.t.Fatalf("DiffCachedPatchesFor = (%v, %v), want a non-empty per-target patch", patches, err)
-		}
-	})
-}
-
-// BuildAmendedTip + LandAmendedTip split the amend across the mutation
-// boundary: the build computes a new tip and reports the tip it read, moving
-// nothing; the land is a compare-and-swap on that read — a branch that moved
-// in between must refuse rather than be clobbered.
-func TestConformanceAmendTipBuildLand(t *testing.T) {
-	runConformance(t, func(d *confDriver) {
-		if err := d.g.CreateBranch("a"); err != nil {
-			d.t.Fatalf("CreateBranch: %v", err)
-		}
-		if err := d.g.Checkout("a"); err != nil {
-			d.t.Fatalf("checkout a: %v", err)
-		}
-		d.commit("a1")
-		aTip := d.tip("a")
-
-		var patch []byte
-		if d.fake != nil {
-			patch = []byte("content not modeled")
-		} else {
-			confWrite(d.t, "base.txt", "base\nextra line\n")
-			patch = []byte(confGit(d.t, "diff"))
-			confGit(d.t, "checkout", "--", "base.txt")
-		}
-
-		newTip, oldTip, err := d.g.BuildAmendedTip("a", patch)
-		if err != nil {
-			d.t.Fatalf("BuildAmendedTip: %v", err)
-		}
-		if oldTip != aTip {
-			d.t.Fatalf("oldTip = %q, want the tip the build read %q", oldTip, aTip)
-		}
-		if newTip == "" || newTip == aTip {
-			d.t.Fatalf("newTip = %q, want a fresh SHA", newTip)
-		}
-		if got := d.tip("a"); got != aTip {
-			d.t.Fatalf("a's tip = %s after build — the build must not move a ref", got)
-		}
-
-		// Moving the branch between build and land fails the CAS; the live
-		// ref keeps the interloper's tip.
-		d.commit("a2")
-		moved := d.tip("a")
-		if err := d.g.LandAmendedTip("a", oldTip, newTip); err == nil {
-			d.t.Fatal("land with a stale oldTip succeeded — the CAS is gone")
-		}
-		if got := d.tip("a"); got != moved {
-			d.t.Fatalf("a's tip = %s after a refused land, want untouched %s", got, moved)
-		}
-
-		newTip2, oldTip2, err := d.g.BuildAmendedTip("a", patch)
-		if err != nil {
-			d.t.Fatalf("BuildAmendedTip (retry): %v", err)
-		}
-		if oldTip2 != moved {
-			d.t.Fatalf("rebuilt oldTip = %q, want the moved tip %q", oldTip2, moved)
-		}
-		if err := d.g.LandAmendedTip("a", oldTip2, newTip2); err != nil {
-			d.t.Fatalf("LandAmendedTip: %v", err)
-		}
-		if got := d.tip("a"); got != newTip2 {
-			d.t.Fatalf("a's tip = %s, want the landed %s", got, newTip2)
-		}
-	})
-}
-
 // LooseBranchTip reads the tip straight from the loose ref file: present
 // after any ref write (a branch is always loose post-write), missing in a
 // packed-only layout — where the RevParse fallback still resolves.
@@ -1211,21 +1048,19 @@ func TestConformanceRemote(t *testing.T) {
 func TestConformancePortCoverageGuard(t *testing.T) {
 	covered := map[string]bool{
 		"Add": true, "AmendMessage": true, "AmendNoEdit": true,
-		"BuildAmendedTip": true, "LandAmendedTip": true,
-		"BlamePorcelain": true, "BranchExists": true, "ChangesContainedIn": true,
-		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitRange": true,
-		"CommitList": true, "CommitSubjects": true, "CreateBranch": true, "CreateBranchAt": true,
-		"CurrentBranch": true, "DeleteBranches": true, "DiffCachedHunks": true,
-		"DiffCachedPatchesFor": true, "DirExists": true, "ForceBranch": true, "HasStagedChanges": true,
-		"HasUnstagedChanges": true, "IsAncestor": true, "IsClean": true,
-		"IsCleanIn": true, "LooseBranchTip": true, "MergeBase": true, "MergedInto": true,
-		"RebaseAbort": true, "RebaseAbortIn": true, "RebaseContinue": true,
-		"RebaseHeadName": true, "RebaseHeadNameIn": true, "RebaseInProgress": true,
-		"RebaseInProgressIn": true, "RebaseOnto": true, "RebaseOntoIn": true,
-		"RenameBranch": true, "RepoRoot": true, "RebaseOntoSHA": true,
-		"ResetHardIn": true, "ResetSoft": true, "RevParse": true, "Tips": true,
-		"TipsFor": true, "UpdateRef": true, "UpdateRefsCas": true,
-		"WorktreeRemove": true, "Worktrees": true,
+		"BranchExists": true, "ChangesContainedIn": true,
+		"Checkout": true, "CheckoutDetach": true, "Commit": true, "CommitBody": true,
+		"CommitList": true, "CommitSubjects": true, "CreateBranch": true,
+		"CurrentBranch": true, "DeleteBranches": true, "DirExists": true,
+		"HasStagedChanges": true, "HasUnstagedChanges": true, "IsAncestor": true,
+		"IsClean": true, "IsCleanIn": true, "LooseBranchTip": true,
+		"MergeBase": true, "MergedInto": true, "RebaseAbort": true,
+		"RebaseAbortIn": true, "RebaseContinue": true, "RebaseHeadName": true,
+		"RebaseHeadNameIn": true, "RebaseInProgress": true, "RebaseInProgressIn": true,
+		"RebaseOnto": true, "RebaseOntoIn": true, "RebaseOntoSHA": true,
+		"RenameBranch": true, "RepoRoot": true, "ResetSoft": true,
+		"RevParse": true, "Tips": true, "TipsFor": true,
+		"UpdateRef": true, "UpdateRefsCas": true, "Worktrees": true,
 		// Remote
 		"Exists": true, "FastForward": true, "Fetch": true,
 	}

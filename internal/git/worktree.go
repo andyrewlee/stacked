@@ -1,6 +1,6 @@
-// worktree.go — worktree inventory, creation, and removal, plus the
-// dir-scoped probes (cleanliness, current branch, reset/ff) that operate
-// inside a linked worktree rather than the caller's cwd.
+// worktree.go — read-only worktree inventory and dir-scoped probes
+// (cleanliness, current branch, fast-forward) that inspect or advance linked
+// worktrees without provisioning or removing them.
 package git
 
 import (
@@ -24,24 +24,6 @@ func CurrentBranch() (string, error) {
 		return "", ErrDetachedHEAD
 	}
 	return out, nil
-}
-
-// ResetHardIn runs `git reset --hard <ref>` inside the worktree at dir (""
-// means the current worktree). Callers must ensure nothing unsaved can be
-// lost: absorb only calls it after the staged content is committed in the
-// target branch (to drop the now-redundant staged copy), or on a
-// verified-clean worktree to sync it to its amended HEAD.
-func ResetHardIn(dir, ref string) error {
-	if err := validRefArg("ref", ref); err != nil {
-		return err
-	}
-	var args []string
-	if dir != "" {
-		args = append(args, "-C", dir)
-	}
-	args = append(args, "reset", "--hard", ref)
-	_, err := run(args...)
-	return err
 }
 
 type Worktree struct {
@@ -333,48 +315,6 @@ func parseWorktreesLegacy(out string) ([]Worktree, error) {
 	return list, nil
 }
 
-// WorktreeAdd creates a new linked worktree at path checked out on the existing
-// branch. The "--" separates options from the path/branch operands so a path
-// beginning with a dash can never be read as an option.
-func WorktreeAdd(path, branch string) error {
-	if err := validRefArg("branch", branch); err != nil {
-		return err
-	}
-	if path == "" {
-		return fmt.Errorf("worktree path is empty")
-	}
-	_, err := Run("worktree", "add", "--", path, branch)
-	return err
-}
-
-// WorktreeLock marks the worktree at path locked (`git worktree lock`),
-// optionally recording reason as the lock's explanation. A locked worktree
-// cannot be removed or pruned; st's own gates additionally treat it as a
-// hold — never rebased into or torn down while locked. `--reason` exists at
-// the documented Git 2.17 floor.
-func WorktreeLock(path, reason string) error {
-	if path == "" {
-		return fmt.Errorf("worktree path is empty")
-	}
-	args := []string{"worktree", "lock"}
-	if reason != "" {
-		args = append(args, "--reason", reason)
-	}
-	args = append(args, "--", path)
-	_, err := Run(args...)
-	return err
-}
-
-// WorktreeUnlock clears the lock on the worktree at path (`git worktree
-// unlock`).
-func WorktreeUnlock(path string) error {
-	if path == "" {
-		return fmt.Errorf("worktree path is empty")
-	}
-	_, err := Run("worktree", "unlock", "--", path)
-	return err
-}
-
 // DirExists reports whether path names an existing directory — the stat-backed
 // probe that decides whether a `git worktree list` row is a live worktree or a
 // stale registration whose directory is gone, without spawning git. A stat
@@ -387,21 +327,6 @@ func DirExists(path string) bool {
 		return !os.IsNotExist(err)
 	}
 	return st.IsDir()
-}
-
-// WorktreeRemove removes the linked worktree at path. When force is true the
-// worktree is removed even if it has uncommitted changes.
-func WorktreeRemove(path string, force bool) error {
-	if path == "" {
-		return fmt.Errorf("worktree path is empty")
-	}
-	args := []string{"worktree", "remove"}
-	if force {
-		args = append(args, "--force")
-	}
-	args = append(args, "--", path)
-	_, err := Run(args...)
-	return err
 }
 
 // MergeFFOnlyIn runs "git -C <dir> merge --ff-only upstream", advancing the
@@ -419,16 +344,17 @@ func MergeFFOnlyIn(dir, upstream string) error {
 }
 
 // IsCleanIn reports whether the worktree at dir has no staged or unstaged
-// changes, via `git -C <dir> status --porcelain`. It is the port-level twin of
-// IsCleanAt.
+// changes to tracked files, via `git -C <dir> status --porcelain --untracked-files=no`.
+// Untracked files are ignored so scratch/plan files do not block rebases or syncs.
 func IsCleanIn(dir string) (bool, error) {
 	return IsCleanAt(dir)
 }
 
-// IsClean reports whether the working tree has no staged or unstaged changes,
-// i.e. "git status --porcelain" produces no output.
+// IsClean reports whether the working tree has no staged or unstaged changes to
+// tracked files, i.e. "git status --porcelain --untracked-files=no" produces no
+// output. Untracked files are deliberately ignored.
 func IsClean() (bool, error) {
-	out, err := Run("status", "--porcelain")
+	out, err := Run("status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, err
 	}
@@ -436,11 +362,9 @@ func IsClean() (bool, error) {
 }
 
 // IsCleanAt reports whether the working tree at dir has no staged or unstaged
-// changes, by running `git -C <dir> status --porcelain`. It exists so callers
-// can report the dirty state of a LINKED worktree (a different directory than
-// the process cwd) — the only place git -C is needed for the worktree feature.
+// changes to tracked files, by running `git -C <dir> status --porcelain --untracked-files=no`.
 func IsCleanAt(dir string) (bool, error) {
-	out, err := Run("-C", dir, "status", "--porcelain")
+	out, err := Run("-C", dir, "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, err
 	}

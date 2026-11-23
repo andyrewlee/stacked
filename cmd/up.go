@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -14,9 +16,6 @@ func init() {
 	})
 }
 
-// runUp climbs n levels up the stack from the current branch, following child
-// links, and checks out the resulting branch. It stops at a branch point with
-// multiple children.
 func runUp(args []string) error {
 	var asJSON bool
 	fs := newFlagSet("up", &asJSON)
@@ -25,9 +24,6 @@ func runUp(args []string) error {
 		return err
 	}
 
-	// Navigation moves HEAD, so it takes the same repository lock mutations
-	// take: a concurrent cascade or a second navigator must not interleave
-	// with this move.
 	state, cur, release, err := lockAndLoadCurrent()
 	if err != nil {
 		return err
@@ -38,17 +34,11 @@ func runUp(args []string) error {
 	}
 
 	start := cur
-	var dest string // worktree path when the last checkout teleported
 	checkout := func(name string) error {
 		if name == start {
 			return nil
 		}
-		d, err := teleportCheckout(name)
-		if err != nil {
-			return err
-		}
-		dest = d
-		return nil
+		return checkoutBranch(name)
 	}
 
 	for i := 0; i < n; i++ {
@@ -61,7 +51,9 @@ func runUp(args []string) error {
 			if cur == start {
 				return navEmit(asJSON, cur, "already at the top of the stack")
 			}
-			return navEmitText(asJSON, cur, topSummary(cur, dest), topSummaryForTerminal(cur, dest))
+			return navEmitText(asJSON, cur,
+				fmt.Sprintf("switched to %s (top of stack)", cur),
+				fmt.Sprintf("switched to %s (top of stack)", sanitizeForTerminal(cur)))
 		case 1:
 			cur = children[0].Name
 		default:
@@ -88,5 +80,7 @@ func runUp(args []string) error {
 	if err := checkout(cur); err != nil {
 		return err
 	}
-	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), navSummaryForTerminal("switched to", cur, dest))
+	return navEmitText(asJSON, cur,
+		fmt.Sprintf("switched to %s", cur),
+		fmt.Sprintf("switched to %s", sanitizeForTerminal(cur)))
 }

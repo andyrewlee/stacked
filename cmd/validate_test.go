@@ -83,29 +83,29 @@ func TestValidateProblemCategories(t *testing.T) {
 
 			// Text mode: prints the problem and returns an error.
 			var err error
-			out := captureStdout(t, func() { err = runValidate(nil) })
+			out := captureStdout(t, func() { err = runDoctor(nil) })
 			if err == nil {
-				t.Fatalf("validate returned nil error, want a problem; output:\n%s", out)
+				t.Fatalf("doctor returned nil error, want a problem; output:\n%s", out)
 			}
 			if !strings.Contains(out, c.wantSub) {
-				t.Fatalf("validate output missing %q:\n%s", c.wantSub, out)
+				t.Fatalf("doctor output missing %q:\n%s", c.wantSub, out)
 			}
 
 			// JSON mode: still returns an error, with ok=false and the problem in problems[].
 			var errJSON error
-			outJSON := captureStdout(t, func() { errJSON = runValidate([]string{"--json"}) })
+			outJSON := captureStdout(t, func() { errJSON = runDoctor([]string{"--json"}) })
 			if errJSON == nil {
-				t.Fatalf("validate --json returned nil error, want a problem; output:\n%s", outJSON)
+				t.Fatalf("doctor --json returned nil error, want a problem; output:\n%s", outJSON)
 			}
 			var payload struct {
 				OK       bool     `json:"ok"`
 				Problems []string `json:"problems"`
 			}
 			if e := json.Unmarshal([]byte(outJSON), &payload); e != nil {
-				t.Fatalf("validate --json not parseable: %v\n%s", e, outJSON)
+				t.Fatalf("doctor --json not parseable: %v\n%s", e, outJSON)
 			}
 			if payload.OK {
-				t.Fatalf("validate --json ok=true, want false")
+				t.Fatalf("doctor --json ok=true, want false")
 			}
 			found := false
 			for _, p := range payload.Problems {
@@ -114,7 +114,7 @@ func TestValidateProblemCategories(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Fatalf("validate --json problems missing %q: %v", c.wantSub, payload.Problems)
+				t.Fatalf("doctor --json problems missing %q: %v", c.wantSub, payload.Problems)
 			}
 		})
 	}
@@ -127,12 +127,12 @@ func TestValidateIgnoresUnrelatedLocalBranch(t *testing.T) {
 	mustRun(t, "git", "branch", "unrelated-validate", "main")
 
 	var err error
-	out := captureStdout(t, func() { err = runValidate(nil) })
+	out := captureStdout(t, func() { err = runDoctor(nil) })
 	if err != nil {
-		t.Fatalf("validate with unrelated local branch: %v\n%s", err, out)
+		t.Fatalf("doctor with unrelated local branch: %v\n%s", err, out)
 	}
 	if want := "ok: 1 tracked branch(es), no problems found\n"; out != want {
-		t.Fatalf("validate output = %q, want %q", out, want)
+		t.Fatalf("doctor output = %q, want %q", out, want)
 	}
 }
 
@@ -147,12 +147,12 @@ func TestValidateReportsMissingBranchDespitePrefixBranch(t *testing.T) {
 	}
 
 	var err error
-	out := captureStdout(t, func() { err = runValidate(nil) })
+	out := captureStdout(t, func() { err = runDoctor(nil) })
 	if err == nil {
-		t.Fatalf("validate returned nil error, want missing branch problem; output:\n%s", out)
+		t.Fatalf("doctor returned nil error, want missing branch problem; output:\n%s", out)
 	}
-	want := "foo is tracked but its git branch is missing (run: st untrack foo)"
+	want := "foo is tracked but its git branch is missing (run: st doctor --fix)"
 	if !strings.Contains(out, want) {
-		t.Fatalf("validate output missing %q:\n%s", want, out)
+		t.Fatalf("doctor output missing %q:\n%s", want, out)
 	}
 }

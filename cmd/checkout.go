@@ -3,8 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 
+	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -15,8 +17,6 @@ func init() {
 		Summary: "Check out a tracked branch (lists branches if no name)",
 		Usage:   "st checkout [name] [--json]",
 		Run:     runCheckout,
-		// checkout's one positional is a branch name: trunk plus every
-		// tracked branch.
 		Completion: func(cc *completionCtx) []string {
 			if cc.flagName != "" || len(cc.positionals) != 0 {
 				return nil
@@ -24,6 +24,33 @@ func init() {
 			return trackedAndTrunk(cc.s)
 		},
 	})
+}
+
+// checkoutBranch checks out name in the current worktree, refusing clearly when
+// another worktree already owns name.
+func checkoutBranch(name string) error {
+	wts, err := worktrees()
+	if err == nil && stack.IsMultiWorktree(wts) {
+		if owner, ok := stack.OwnerOf(wts, name); ok {
+			if root, rerr := git.RepoRoot(); rerr == nil && !samePath(owner.Path, root) {
+				return fmt.Errorf("branch %q is checked out in another worktree %q", name, owner.Path)
+			}
+		}
+	}
+	return checkoutAndReset(name)
+}
+
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if ra, err := filepath.EvalSymlinks(a); err == nil {
+		a = ra
+	}
+	if rb, err := filepath.EvalSymlinks(b); err == nil {
+		b = rb
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // runCheckout checks out a tracked branch (or the trunk) by name, or, when no
@@ -40,8 +67,6 @@ func runCheckout(args []string) error {
 		return errors.New("checkout takes at most one branch name")
 	}
 
-	// Bare `st checkout` only lists: it never moves HEAD, so it stays a
-	// read-only command that runs while another st holds the lock.
 	if len(rest) == 0 {
 		s, err := loadState()
 		if err != nil {
@@ -50,9 +75,6 @@ func runCheckout(args []string) error {
 		return listBranches(s, asJSON)
 	}
 
-	// A targeted checkout moves HEAD: hold the repository lock from the state
-	// read through the checkout so a concurrent mutation cannot redirect the
-	// move (and this move cannot land mid-mutation).
 	s, release, err := lockAndLoad()
 	if err != nil {
 		return err
@@ -63,30 +85,15 @@ func runCheckout(args []string) error {
 	if name != s.Trunk && !s.IsTracked(name) {
 		return stack.ErrNotTracked(name)
 	}
-	dest, err := teleportCheckout(name)
-	if err != nil {
+	if err := checkoutBranch(name); err != nil {
 		return err
 	}
-	// A teleport without the shim does NOT move the parent shell, so report it
-	// as not-switched and tell the user how to get there; with the shim (or an
-	// in-place checkout) the move really happened.
-	teleportedNoShim := dest != "" && !shimActive()
 	payload := struct {
 		Branch   string `json:"branch"`
 		Switched bool   `json:"switched"`
-		Worktree string `json:"worktree,omitempty"`
-	}{name, !teleportedNoShim, dest}
+	}{name, true}
 	return emit(asJSON, payload, func() {
-		safeName := sanitizeForTerminal(name)
-		safeDest := sanitizeForTerminal(dest)
-		switch {
-		case teleportedNoShim:
-			out("%s\n", teleportHintForTerminal(name, dest))
-		case dest != "":
-			out("switched to %s (worktree: %s)\n", safeName, safeDest)
-		default:
-			out("switched to %s\n", safeName)
-		}
+		out("switched to %s\n", sanitizeForTerminal(name))
 	})
 }
 

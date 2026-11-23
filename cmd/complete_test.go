@@ -81,24 +81,6 @@ func TestCompleteOntoExcludesSubtree(t *testing.T) {
 	}
 }
 
-// TestCompleteCommits: commits' positional offers every tracked branch — the
-// engine refuses the trunk, so trunk is out.
-func TestCompleteCommits(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustRun(t, "git", "branch", "scratch")
-
-	out, err := runComplete(t, "commits", "0", "--")
-	if err != nil {
-		t.Fatalf("__complete commits: %v", err)
-	}
-	if want := "feat-a\nfeat-b\n"; out != want {
-		t.Fatalf("commits candidates = %q, want %q", out, want)
-	}
-}
-
 // TestCompleteTrackUntracked: track's positional offers local branches that are
 // neither tracked nor trunk.
 func TestCompleteTrackUntracked(t *testing.T) {
@@ -214,50 +196,6 @@ func TestCompleteDoubleDashPositional(t *testing.T) {
 	}
 	if out != "" {
 		t.Fatalf("post-terminator candidates = %q, want empty", out)
-	}
-}
-
-// TestCompleteWorktree: the create form offers tracked branches without a
-// linked worktree; after rm|remove it offers owners only.
-func TestCompleteWorktree(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCheckout(t, "main")
-	resetProcCaches()
-	if err := runWorktree([]string{"feat-b"}); err != nil {
-		t.Fatalf("worktree feat-b: %v", err)
-	}
-	t.Cleanup(func() {
-		resetProcCaches()
-		_ = runWorktree([]string{"rm", "feat-b"})
-	})
-
-	out, err := runComplete(t, "worktree", "0", "--")
-	if err != nil {
-		t.Fatalf("__complete worktree: %v", err)
-	}
-	if want := "feat-a\n"; out != want {
-		t.Fatalf("worktree create candidates = %q, want %q", out, want)
-	}
-
-	out, err = runComplete(t, "worktree", "1", "--", "rm")
-	if err != nil {
-		t.Fatalf("__complete worktree rm: %v", err)
-	}
-	if want := "feat-b\n"; out != want {
-		t.Fatalf("worktree rm candidates = %q, want %q", out, want)
-	}
-
-	// wt resolves to the same policy; ls offers nothing further.
-	out, err = runComplete(t, "wt", "1", "--", "ls")
-	if err != nil {
-		t.Fatalf("__complete wt ls: %v", err)
-	}
-	if out != "" {
-		t.Fatalf("worktree ls candidates = %q, want empty", out)
 	}
 }
 
@@ -524,17 +462,6 @@ func TestCompleteCandidatesPure(t *testing.T) {
 		[]string{"feat-a", "feat-b", "feat-c", "main"}) {
 		t.Fatalf("track --parent candidates = %v", got)
 	}
-	if got := completeCandidates("worktree", "", nil, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
-		[]string{"feat-a", "feat-c"}) {
-		t.Fatalf("worktree create candidates = %v", got)
-	}
-	if got := completeCandidates("worktree", "", []string{"rm"}, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
-		[]string{"feat-b"}) {
-		t.Fatalf("worktree rm candidates = %v", got)
-	}
-	if got := completeCandidates("worktree", "", nil, map[string]bool{"all": true}, s, locals, wts, "feat-a"); got != nil {
-		t.Fatalf("worktree --all candidates = %v, want nil", got)
-	}
 	if got := completeCandidates("delete", "", nil, nil, s, locals, wts, "feat-a"); !reflect.DeepEqual(got,
 		[]string{"feat-a", "feat-b", "feat-c"}) {
 		t.Fatalf("delete candidates = %v", got)
@@ -569,7 +496,7 @@ func TestCompletionRegistryIsSingleSource(t *testing.T) {
 		}
 	}
 	sort.Strings(got)
-	want := []string{"checkout", "commits", "delete", "onto", "rename", "track", "untrack", "worktree"}
+	want := []string{"checkout", "delete", "onto", "rename", "track", "untrack"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands with Completion = %v, want %v", got, want)
 	}

@@ -27,6 +27,9 @@ var stBin string
 // build runs from the repository root (two directories up from this test file's
 // package, i.e. the module root) so it picks up the real cmd/st main package.
 func TestMain(m *testing.M) {
+	if os.Getenv("ST_MOCK_GH_HELPER") == "1" {
+		os.Exit(runMockGHProcess())
+	}
 	tmp, err := os.MkdirTemp("", "st-e2e-bin")
 	if err != nil {
 		panic("mkdir temp bin dir: " + err.Error())
@@ -127,6 +130,9 @@ func cleanEnv(home string) []string {
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_PAGER=cat",
 		"GIT_EDITOR=true",
+		// Keep e2e hermetic: never invoke the host's real gh CLI unless a test
+		// explicitly injects a mock ST_GH_BIN via stInEnv.
+		"ST_GH_BIN=" + filepath.Join(home, "__st_test_no_gh__"),
 	}
 	if runtime.GOOS == "windows" {
 		env = append(env, "USERPROFILE="+home)
@@ -291,12 +297,13 @@ func (r *repo) initStack() {
 	r.stOK("init", "--trunk", "main")
 }
 
-// create writes file=content and creates a tracked branch committing it via
-// `st create <name> -a -m <msg>`.
+// create writes file=content, stages it, and creates a tracked branch committing it via
+// `st create <name> -m <msg>`.
 func (r *repo) create(name, file, content, msg string) {
 	r.t.Helper()
 	r.writeFile(file, content)
-	r.stOK("create", name, "-a", "-m", msg)
+	r.git("add", file)
+	r.stOK("create", name, "-m", msg)
 }
 
 func (r *repo) currentBranch() string {

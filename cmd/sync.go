@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+
+	"github.com/andyrewlee/stacked/internal/gh"
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
@@ -9,11 +12,22 @@ func init() {
 	register(&Command{
 		Name:       "sync",
 		Aliases:    []string{"s"},
-		Summary:    "Fetch trunk, fast-forward it, prune merged branches, and restack the current stack (--all for all)",
-		Usage:      "st sync [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run] [--json]",
+		Summary:    "Fetch trunk, fast-forward it, prune merged branches, and restack (--submit to push & update PRs)",
+		Usage:      "st sync [-s|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run] [--json]",
 		Run:        runSync,
 		NewFlagSet: syncFlagSet,
 	})
+}
+
+type syncSubmitResult struct {
+	Summary    string            `json:"summary"`
+	Branch     string            `json:"branch,omitempty"`
+	Restacked  []string          `json:"restacked,omitempty"`
+	Deleted    []string          `json:"deleted,omitempty"`
+	Reparented []stack.Reparent  `json:"reparented,omitempty"`
+	Notes      []string          `json:"notes,omitempty"`
+	Pushed     []string          `json:"pushed,omitempty"`
+	PRs        []stack.PROutcome `json:"prs,omitempty"`
 }
 
 func runSync(args []string) error {
@@ -27,32 +41,126 @@ func runSync(args []string) error {
 	}
 	asJSON, all, noDelete, noFetch, remote, dryRun := o.asJSON, o.all, o.noDelete, o.noFetch, o.remote, o.dryRun
 
-	// If the user explicitly named a remote that does not exist, fail loudly like
-	// `st submit` does instead of silently treating it as "no remote" and
-	// reporting success. A missing DEFAULT origin is still allowed: a repo with no
-	// remotes syncs locally (the fast-forward is skipped, prune+restack still run).
 	p := newGitPort()
-	if explicitRemote(fs) {
+	if explicitRemote(fs) || o.submit {
 		if err := requireRemote(p, remote); err != nil {
 			return err
 		}
 	}
 
+	// Best-effort GitHub merged-PR lookup so squash/rebase-merged PRs whose
+	// patches diverged from trunk are still pruned accurately.
+	fetchGitHubMerged := func(s *stack.State) (map[string]bool, string) {
+		if noFetch || noDelete {
+			return nil, ""
+		}
+		rawURL, err := p.remoteURL(remote)
+		if err != nil || !githubSyncEnabled(rawURL, false) {
+			return nil, ""
+		}
+		merged, err := stack.MergedGitHubBranches(gh.Shell{}, s.BranchNames())
+		if err != nil {
+			return nil, fmt.Sprintf("github merged-PR check skipped: %v", err)
+		}
+		return merged, ""
+	}
+
 	if dryRun {
 		return preview(asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
-			// --no-fetch previews against the local trunk — the same basis the
-			// apply path uses — so the preview cannot predict a remote-only
-			// prune the real run will not do. An ordinary dry run still uses
-			// the already-fetched remote tip when one exists.
 			basis := git.LocalBranchNameRef(s.Trunk)
 			if !noFetch {
 				basis, _ = resolveTrunkRef(p, remote, s.Trunk)
 			}
-			return stack.SyncPlanAgainst(env, s, noDelete, all, basis)
+			extraMerged, note := fetchGitHubMerged(s)
+			res, err := stack.SyncPlanAgainstWithMerged(env, s, noDelete, all, basis, extraMerged)
+			if err != nil {
+				return nil, err
+			}
+			if note != "" {
+				res.Notes = append(res.Notes, note)
+			}
+			return res, nil
 		})
 	}
 
-	return mutate("sync", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
-		return stack.Sync(env, git.RemoteShell{}, s, remote, noDelete, noFetch, all)
+	if !o.submit {
+		return mutate("sync", asJSON, func(env stack.Env, s *stack.State) (*stack.OpResult, error) {
+			extraMerged, note := fetchGitHubMerged(s)
+			res, err := stack.SyncWithOptions(env, git.RemoteShell{}, s, stack.SyncOptions{
+				Remote:      remote,
+				NoDelete:    noDelete,
+				NoFetch:     noFetch,
+				All:         all,
+				ExtraMerged: extraMerged,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if note != "" {
+				res.Notes = append(res.Notes, note)
+			}
+			return res, nil
+		})
+	}
+
+	var syncRes *stack.OpResult
+	if err := mutateState("sync", asJSON, func(env stack.Env, s *stack.State) error {
+		extraMerged, note := fetchGitHubMerged(s)
+		r, err := stack.SyncWithOptions(env, git.RemoteShell{}, s, stack.SyncOptions{
+			Remote:      remote,
+			NoDelete:    noDelete,
+			NoFetch:     noFetch,
+			All:         all,
+			ExtraMerged: extraMerged,
+		})
+		if err != nil {
+			return err
+		}
+		if note != "" {
+			r.Notes = append(r.Notes, note)
+		}
+		syncRes = r
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Reload state under lock and submit the surviving stack (retarget PR bases,
+	// force-push restacked branches, refresh stack blocks).
+	s, release, err := lockAndLoad()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	scope := stack.SubmitStack
+	if all {
+		scope = stack.SubmitAll
+	}
+	submitRes, err := executeSubmit(s, newGitPort(), submitExecOpts{
+		remote: remote,
+		scope:  scope,
+		asJSON: asJSON,
+	})
+	if err != nil {
+		return err
+	}
+
+	combined := syncSubmitResult{
+		Summary:    syncRes.Summary,
+		Branch:     syncRes.Branch,
+		Restacked:  syncRes.Restacked,
+		Deleted:    syncRes.Deleted,
+		Reparented: syncRes.Reparented,
+		Notes:      append(append([]string(nil), syncRes.Notes...), submitRes.Notes...),
+		Pushed:     submitRes.Pushed,
+		PRs:        submitRes.PRs,
+	}
+	return emit(asJSON, combined, func() {
+		_ = renderResult(syncRes, false)
+		if len(submitRes.Pushed) > 0 {
+			out("\n")
+			renderSubmitText(submitRes)
+		}
 	})
 }

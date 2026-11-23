@@ -11,23 +11,17 @@ func init() {
 
 var guideSteps = []string{
 	"st init                      # one-time: start tracking stacks in this repo",
-	"st create feat-a -a -m '...' # make a change as a new branch on top of the current one",
-	"st create feat-b -a -m '...' # stack another change on top",
-	"st log                       # see the stack (trunk at the bottom)",
-	"st down / st up              # move down/up the stack to edit a branch",
-	"st modify                    # amend the current branch; descendants auto-restack",
-	"st restack --dry-run         # preview what a restack would rebase (nothing changes)",
-	"st restack                   # rebase after drift; on conflict -> st continue / st abort",
-	"st sync                      # fast-forward trunk, prune merged branches, restack",
-	"st submit                    # push the stack (login-free; prints the repo URL)",
-	"st open                      # open the current branch's PR compare page in a browser",
+	"st create feat-a -a -m '...' # create a new branch stacked on the current one",
+	"st create feat-b -a -m '...' # stack another branch on top",
+	"st log [--pr] [--all]        # inspect the current stack (with optional GitHub PR status)",
+	"st status [--pr]             # inspect current branch, commits, and PR status",
+	"st down / st up / st bottom  # navigate the stack",
+	"st modify [-a] [-m '...']    # amend (or --commit) and auto-restack descendants",
+	"st restack [--dry-run]       # rebase after drift; on conflict -> st continue / st abort",
+	"st submit [--draft]          # retarget PRs, force-push stack, create/update GitHub PRs",
+	"st sync [--submit]           # fetch+ff trunk, prune merged PRs/branches, restack (and submit)",
+	"st doctor [--fix]            # check stack consistency and drift (--fix to repair)",
 	"st undo                      # revert the last stack-mutating command",
-	"# parallel work (one worktree per branch):",
-	"st shell install             # once per shell: eval its output so st can cd between worktrees",
-	"st create feat-c --worktree  # new stacked branch straight into its own worktree",
-	"st worktree feat-a           # give an existing branch its own worktree",
-	"st worktree ls               # see which branch lives in which worktree",
-	"st log --json                # orchestrators: worktree/dirty/needsRestack per branch",
 }
 
 // runGuide prints the recommended workflow for driving st (handy for agents).
@@ -47,7 +41,7 @@ func runGuide(args []string) error {
 		for _, step := range guideSteps {
 			out("  %s\n", step)
 		}
-		out("\nEvery command except __complete and completion and shell accepts --json; failures use exit codes %s.\n", errorCodeSummary())
+		out("\nEvery command except __complete and completion accepts --json; failures use exit codes %s.\n", errorCodeSummary())
 		out("Use `st help <command>` for command usage.\n")
 	})
 }

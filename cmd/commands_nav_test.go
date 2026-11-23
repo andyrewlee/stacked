@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,22 +58,16 @@ func TestUpAlreadyAtTop(t *testing.T) {
 	}
 }
 
-// `st up` landing on a leaf that lives in a linked worktree teleports instead
-// of checking out: without the shell shim the summary says where the branch
-// lives and how to get there; with the shim (ST_CD_FILE set) the binary writes
-// the cd target and reports the worktree inline. Both render through
-// topSummary's worktree arms, and `up` overshooting the leaf in a single-tree
-// repo covers the in-place arm.
-func TestUpToLeafInWorktreeTeleports(t *testing.T) {
+// `st up` landing on a branch owned by another worktree refuses clearly,
+// naming the owning worktree, instead of teleporting or leaking raw git errors.
+func TestUpToLeafInOtherWorktreeRefusesClearly(t *testing.T) {
 	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv(cdDirectiveEnv, "") // shim inactive unless this test enables it
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
 
 	// In-place arm: `up 2` overshoots the leaf, checks feat-b out locally, and
-	// reports the top-of-stack switch with no worktree path.
+	// reports the top-of-stack switch.
 	mustCheckout(t, "feat-a")
 	out := captureStdout(t, func() {
 		if err := runUp([]string{"2"}); err != nil {
@@ -88,65 +81,17 @@ func TestUpToLeafInWorktreeTeleports(t *testing.T) {
 		t.Fatalf("up 2 in place left HEAD = %q, want feat-b", got)
 	}
 
-	// Give feat-b its own linked worktree. The in-place checkouts above bypass
-	// the cached port, so drop the memoized worktree list first.
 	mustCheckout(t, "feat-a")
+	wtPath := filepath.Join(t.TempDir(), "wt-feat-b")
+	mustRun(t, "git", "worktree", "add", "-q", wtPath, "feat-b")
 	resetProcCaches()
-	var wt struct {
-		Branch  string   `json:"branch"`
-		Path    string   `json:"path"`
-		Copied  []string `json:"copied,omitempty"`
-		Summary string   `json:"summary"`
-	}
-	wtOut := captureStdout(t, func() {
-		if err := runWorktree([]string{"feat-b", "--json"}); err != nil {
-			t.Fatalf("worktree feat-b --json: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "worktree feat-b --json", wtOut, &wt)
-	if wt.Path == "" || wt.Branch != "feat-b" {
-		t.Fatalf("worktree feat-b --json = %s, want a path for feat-b", wtOut)
-	}
-	// teleportCheckout reports the canonical path from `git worktree list`,
-	// which resolves symlinks the $HOME-derived create path keeps (e.g. /var ->
-	// /private/var on macOS).
-	wtPath, err := filepath.EvalSymlinks(wt.Path)
-	if err != nil {
-		t.Fatalf("resolve worktree path %q: %v", wt.Path, err)
-	}
-	// The rendered hints echo the path bytes exactly as `git worktree list`
-	// reported them — forward slashes on Windows. After resolving symlinks
-	// (macOS /var -> /private/var), spell the expectation the same way.
-	wtPath = filepath.ToSlash(wtPath)
 
-	// No shim: report where feat-b lives plus the cd hint; HEAD stays put.
-	out = captureStdout(t, func() {
-		if err := runUp([]string{"2"}); err != nil {
-			t.Fatalf("up 2 (teleport, no shim): %v", err)
-		}
-	})
-	for _, want := range []string{"feat-b is in worktree " + wtPath, "run: cd -- '" + wtPath + "'"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("up 2 teleport = %q, want it to contain %q", out, want)
-		}
+	err := runUp([]string{"2"})
+	if err == nil || !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("up 2 into foreign worktree = %v, want foreign-worktree refusal", err)
 	}
 	if got := curBranch(t); got != "feat-a" {
-		t.Fatalf("teleport must not move HEAD in this process; HEAD = %q, want feat-a", got)
-	}
-
-	// Shim active: the cd directive is written and the summary claims the move.
-	cdFile := filepath.Join(t.TempDir(), "cd")
-	t.Setenv(cdDirectiveEnv, cdFile)
-	out = captureStdout(t, func() {
-		if err := runUp([]string{"2"}); err != nil {
-			t.Fatalf("up 2 (teleport, shim): %v", err)
-		}
-	})
-	if want := "switched to feat-b (top of stack, worktree: " + wtPath + ")"; !strings.Contains(out, want) {
-		t.Fatalf("up 2 teleport with shim = %q, want it to contain %q", out, want)
-	}
-	if data, err := os.ReadFile(cdFile); err != nil || string(data) != wtPath {
-		t.Fatalf("cd directive file = %q err %v, want %q", data, err, wtPath)
+		t.Fatalf("refused up moved HEAD to %q, want feat-a", got)
 	}
 }
 
@@ -280,27 +225,6 @@ func TestCheckoutUntrackedError(t *testing.T) {
 	mustInit(t)
 	if err := runCheckout([]string{"ghost"}); err == nil {
 		t.Fatalf("expected error checking out an untracked branch")
-	}
-}
-
-// TestNavSummaryForTerminalEscapesPathControls pins the terminal twins: a
-// worktree path carrying \n/\t (legal in unix paths) escapes to \x0a/\x09,
-// while the teleport template's single structural newline survives.
-func TestNavSummaryForTerminalEscapesPathControls(t *testing.T) {
-	t.Setenv("ST_CD_FILE", "") // shim inactive: the teleport-hint arm renders
-	got := navSummaryForTerminal("switched to", "feat", "/tmp/evil\npath\twt")
-	if !strings.Contains(got, `\x0a`) || !strings.Contains(got, `\x09`) {
-		t.Fatalf("summary = %q, want \\x0a and \\x09 escapes for the path's control bytes", got)
-	}
-	if strings.Count(got, "\n") != 1 {
-		t.Fatalf("summary = %q, want exactly ONE structural newline (the template's)", got)
-	}
-	if strings.Contains(got, "\t") {
-		t.Fatalf("summary = %q, must not carry a raw tab", got)
-	}
-	top := topSummaryForTerminal("feat", "/tmp/evil\npath\twt")
-	if !strings.Contains(top, `\x0a`) || strings.Count(top, "\n") != 1 {
-		t.Fatalf("topSummary = %q, want escaped path with one structural newline", top)
 	}
 }
 

@@ -4,38 +4,30 @@ usage: st <command> [args]
 
 commands:
   abort              Abort an in-progress restack/rebase, restoring the prior state
-  absorb             Absorb staged hunks into the stack commits that own their lines
   bottom (b)         Jump to the bottom branch of the current stack (just above trunk)
   checkout (co)      Check out a tracked branch (lists branches if no name)
-  commits            List the commits in a branch's recorded stack range (base..tip)
   completion         Print a shell completion script (bash|zsh|fish)
   continue           Resume a restack that was interrupted by a merge conflict
   create (c)         Create a new branch stacked on the current branch
   delete (rm)        Delete a branch and re-parent its children
+  doctor (validate)  Check stack state for inconsistencies and drift (--fix to repair)
   down (d)           Move down the stack toward trunk
-  fold               Fold the current branch into its parent (parent absorbs its commits)
   guide              Print the recommended stacked-diff workflow
   init               Initialize stacked stack tracking in this repo
-  log (ls)           Show the stack as a tree
+  log (ls)           Show the current stack as a tree (--all for all stacks, --pr for GitHub PR status)
   modify (amend, m)  Amend (or add) a commit on the current branch and restack everything above
   onto (move)        Move the current branch (and its upstack) onto a new parent
-  open               Open the branch's PR compare URL in a browser (no push, no host API)
-  prune              Delete tracked branches already merged into the trunk (no fetch, no restack)
   rename (mv)        Rename a branch and update the stack metadata
-  repair             Reconcile the stack metadata with the repository (fix drift)
   restack (r)        Rebase the current branch and everything above it onto their parents
-  shell              Print the shell integration that teleports into a branch's worktree
   squash             Squash all of the current branch's commits into one
-  status (stat)      Show current branch, its parent/children, and restack state
-  submit (ss)        Push the current stack's branches to the remote (no PRs — login-free); --all pushes the whole forest
-  sync (s)           Fetch trunk, fast-forward it, prune merged branches, and restack the current stack (--all for all)
+  status (stat)      Show current branch, its parent/children, commits, and restack state (--pr for GitHub PR)
+  submit (ss)        Push the current stack and create/retarget/update GitHub PRs (--no-pr for push-only)
+  sync (s)           Fetch trunk, fast-forward it, prune merged branches, and restack (--submit to push & update PRs)
   top (t)            Jump to the top of the current stack
   track              Start tracking a git branch in the stack
   undo               Undo the last stack-mutating command
   untrack            Stop tracking a branch (re-parents its children)
   up (u)             Move up the stack to a child branch
-  validate (doctor)  Check the stack state for drift or inconsistencies
-  worktree (wt)      Materialize, list, or remove a branch's own worktree
   help               show this help
   version            print the version
 

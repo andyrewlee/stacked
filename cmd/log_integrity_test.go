@@ -223,10 +223,9 @@ func TestTrunkStateRefusesBeforeMutation(t *testing.T) {
 	}{
 		{"log text", func() error { return runLog(nil) }},
 		{"log json", func() error { return runLog([]string{"--json"}) }},
-		{"prune", func() error { return runPrune(nil) }},
 		{"sync --no-fetch", func() error { return runSync([]string{"--no-fetch"}) }},
-		{"validate", func() error { return runValidate(nil) }},
-		{"repair", func() error { return runRepair(nil) }},
+		{"doctor", func() error { return runDoctor(nil) }},
+		{"doctor --fix", func() error { return runDoctor([]string{"--fix"}) }},
 	}
 	for _, tc := range commands {
 		t.Run(tc.name, func(t *testing.T) {
@@ -293,13 +292,9 @@ func TestUndoTrunkSnapshotAdapterBarrier(t *testing.T) {
 	}
 	snap.check(t)
 
-	// The entry stayed in the journal: ListUndo still sees the same count.
-	listed, err := stack.ListUndo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(listed) != len(entries) {
-		t.Fatalf("journal has %d entries after refused undo, want %d", len(listed), len(entries))
+	// The entry stayed in the journal: PeekUndo still sees it.
+	if _, ok, err := stack.PeekUndo(); err != nil || !ok {
+		t.Fatalf("journal after refused undo: ok=%v err=%v, want retained entry", ok, err)
 	}
 }
 
@@ -318,9 +313,8 @@ func TestUndoTrunkCorruptCurrentStateRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateFile := filepath.Join(gitDir, "stacked", "state.json")
-	entriesBefore, err := stack.ListUndo()
-	if err != nil {
-		t.Fatal(err)
+	if _, ok, err := stack.PeekUndo(); err != nil || !ok {
+		t.Fatalf("PeekUndo before: ok=%v err=%v", ok, err)
 	}
 	corruptStateWithTrunkRecord(t, stateFile)
 
@@ -329,7 +323,7 @@ func TestUndoTrunkCorruptCurrentStateRecovery(t *testing.T) {
 	}
 
 	// The valid snapshot was restored: feat-a (created after it) is untracked
-	// and its branch deleted, and the journal dropped exactly one entry.
+	// and its branch deleted, and the journal dropped the entry.
 	s := stateT(t)
 	if s.IsTracked("feat-a") {
 		t.Fatal("undo did not restore the snapshot state")
@@ -337,11 +331,7 @@ func TestUndoTrunkCorruptCurrentStateRecovery(t *testing.T) {
 	if mustRun(t, "git", "branch", "--list", "feat-a") != "" {
 		t.Fatal("undo left the created branch behind")
 	}
-	entriesAfter, err := stack.ListUndo()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entriesAfter) != len(entriesBefore)-1 {
-		t.Fatalf("journal has %d entries after undo, want %d", len(entriesAfter), len(entriesBefore)-1)
+	if _, ok, err := stack.PeekUndo(); err != nil || ok {
+		t.Fatalf("journal after undo: ok=%v err=%v, want empty", ok, err)
 	}
 }

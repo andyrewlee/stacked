@@ -75,10 +75,10 @@ func TestUndoForceOutsideDrift(t *testing.T) {
 	}
 }
 
-// TestValidateRepairJSON pins the wire payloads of the integrity pair on a
+// TestDoctorJSON pins the wire payloads of `st doctor [--fix] --json` on a
 // real corruption: a tracked branch deleted behind st's back must surface in
-// validate's problems array and be gone after repair --json.
-func TestValidateRepairJSON(t *testing.T) {
+// doctor's problems array and be gone after `doctor --fix --json`.
+func TestDoctorJSON(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
@@ -88,7 +88,7 @@ func TestValidateRepairJSON(t *testing.T) {
 	r.stOK("checkout", "main")
 	r.git("branch", "-D", "feat-b")
 
-	res := r.st("validate", "--json")
+	res := r.st("doctor", "--json")
 	wantExit(t, res, 1)
 	var before struct {
 		OK       bool     `json:"ok"`
@@ -96,34 +96,34 @@ func TestValidateRepairJSON(t *testing.T) {
 		Problems []string `json:"problems"`
 	}
 	if err := json.Unmarshal([]byte(res.stdout), &before); err != nil {
-		t.Fatalf("validate --json not parseable: %v\nstdout:\n%s", err, res.stdout)
+		t.Fatalf("doctor --json not parseable: %v\nstdout:\n%s", err, res.stdout)
 	}
 	if before.OK || len(before.Problems) == 0 ||
 		!strings.Contains(strings.Join(before.Problems, " "), "feat-b") {
-		t.Fatalf("validate --json = %+v, want ok:false naming feat-b", before)
+		t.Fatalf("doctor --json = %+v, want ok:false naming feat-b", before)
 	}
 
-	res = r.stOK("repair", "--json")
+	res = r.stOK("doctor", "--fix", "--json")
 	var repaired struct {
 		Repaired bool     `json:"repaired"`
 		Fixes    []string `json:"fixes"`
 	}
 	if err := json.Unmarshal([]byte(res.stdout), &repaired); err != nil {
-		t.Fatalf("repair --json not parseable: %v\nstdout:\n%s", err, res.stdout)
+		t.Fatalf("doctor --fix --json not parseable: %v\nstdout:\n%s", err, res.stdout)
 	}
 	if !repaired.Repaired || len(repaired.Fixes) == 0 {
-		t.Fatalf("repair --json = %+v, want repaired:true with fixes", repaired)
+		t.Fatalf("doctor --fix --json = %+v, want repaired:true with fixes", repaired)
 	}
 
-	res = r.stOK("validate", "--json")
+	res = r.stOK("doctor", "--json")
 	var after struct {
 		OK       bool     `json:"ok"`
 		Problems []string `json:"problems"`
 	}
 	if err := json.Unmarshal([]byte(res.stdout), &after); err != nil {
-		t.Fatalf("post-repair validate --json not parseable: %v\n%s", err, res.stdout)
+		t.Fatalf("post-fix doctor --json not parseable: %v\n%s", err, res.stdout)
 	}
 	if !after.OK || len(after.Problems) != 0 {
-		t.Fatalf("post-repair validate --json = %+v, want ok:true, no problems", after)
+		t.Fatalf("post-fix doctor --json = %+v, want ok:true, no problems", after)
 	}
 }

@@ -1,9 +1,7 @@
 package stack
 
 // submit.go — the decision half of `st submit`: which branches push, in what
-// order, and how to render the repository's web URL for hand-opened PRs. The
-// push itself (remote argv, ref-status confirmation) stays in cmd — this file
-// holds only the State+probe decisions, so they test against fakeGit.
+// order, and GitHub remote/URL classification.
 
 import (
 	"fmt"
@@ -14,12 +12,8 @@ import (
 
 // SubmitPlanResult is the ordered result of planning a submit.
 type SubmitPlanResult struct {
-	// Branches is the push list, bottom-first (the order a stack must land).
-	// Empty when Reason explains why nothing would be pushed.
 	Branches []string
-	// Reason is the human-readable "nothing to do" line ("at trunk", "nothing
-	// tracked") when Branches is empty.
-	Reason string
+	Reason   string
 }
 
 // SubmitScope selects which branches `st submit` pushes.
@@ -36,8 +30,7 @@ const (
 	SubmitAll
 )
 
-// SubmitPlan computes a submit's push order according to scope. The push
-// itself stays in cmd.
+// SubmitPlan computes a submit's push order according to scope.
 func SubmitPlan(env Env, s *State, scope SubmitScope) (*SubmitPlanResult, error) {
 	switch scope {
 	case SubmitAll:
@@ -49,10 +42,6 @@ func SubmitPlan(env Env, s *State, scope SubmitScope) (*SubmitPlanResult, error)
 	}
 }
 
-// submitStack computes the whole current-stack push order (default): every
-// branch in the stack containing the currently checked-out branch, from its
-// bottom branch (just above trunk) through all descendants in parents-first
-// topological order.
 func submitStack(env Env, s *State) (*SubmitPlanResult, error) {
 	cur, err := env.Git.CurrentBranch()
 	if err != nil {
@@ -67,11 +56,7 @@ func submitStack(env Env, s *State) (*SubmitPlanResult, error) {
 	return &SubmitPlanResult{Branches: s.StackBranches(cur)}, nil
 }
 
-// submitAll computes the whole-forest push order (--all): the trunk's
-// descendants in the same sorted parents-first order restack --all uses. A
-// tracked branch missing from that walk means corrupt state (a cycle or a
-// dangling parent) — it is named rather than silently skipped.
-func submitAll(env Env, s *State) (*SubmitPlanResult, error) {
+func submitAll(_ Env, s *State) (*SubmitPlanResult, error) {
 	branches := s.Descendants(s.Trunk)
 	if len(branches) != len(s.Branches) {
 		reached := make(map[string]bool, len(branches))
@@ -85,7 +70,7 @@ func submitAll(env Env, s *State) (*SubmitPlanResult, error) {
 			}
 		}
 		sort.Strings(missing)
-		return nil, fmt.Errorf("tracked branches %v do not descend from trunk %q (run st repair)", missing, s.Trunk)
+		return nil, fmt.Errorf("tracked branches %v do not descend from trunk %q (run st doctor --fix)", missing, s.Trunk)
 	}
 	if len(branches) == 0 {
 		return &SubmitPlanResult{Branches: branches, Reason: "nothing tracked"}, nil
@@ -93,9 +78,6 @@ func submitAll(env Env, s *State) (*SubmitPlanResult, error) {
 	return &SubmitPlanResult{Branches: branches}, nil
 }
 
-// submitUpto computes the downstack push order (--upto): every branch on the
-// path from the bottom branch (just above trunk) up to and including the
-// currently checked-out branch.
 func submitUpto(env Env, s *State) (*SubmitPlanResult, error) {
 	cur, err := env.Git.CurrentBranch()
 	if err != nil {
@@ -108,9 +90,6 @@ func submitUpto(env Env, s *State) (*SubmitPlanResult, error) {
 		return nil, ErrNotTracked(cur)
 	}
 
-	// Ancestors gives the parents nearest-first up to and including the trunk;
-	// the tracked branches among them, reversed, form the bottom-up prefix, and
-	// the current branch is the top of the path.
 	var branches []string
 	ancestors := s.Ancestors(cur)
 	for i := len(ancestors) - 1; i >= 0; i-- {
@@ -124,9 +103,7 @@ func submitUpto(env Env, s *State) (*SubmitPlanResult, error) {
 	return &SubmitPlanResult{Branches: branches}, nil
 }
 
-// PRHint describes how to open one stacked PR: head's PR targets base. The
-// compare URL is string formatting only; submit remains login-free and
-// offline.
+// PRHint describes how to open one stacked PR: head's PR targets base.
 type PRHint struct {
 	Head       string `json:"head"`
 	Base       string `json:"base"`
@@ -134,7 +111,7 @@ type PRHint struct {
 }
 
 // PRHintsFor derives one hint per pushed branch from the recorded parents, in
-// push order. compareURL is present for known forge URL shapes.
+// push order. CompareURL is populated for GitHub hosts.
 func PRHintsFor(s *State, branches []string, repoURL, host string) []PRHint {
 	hints := make([]PRHint, 0, len(branches))
 	for _, head := range branches {
@@ -147,51 +124,40 @@ func PRHintsFor(s *State, branches []string, repoURL, host string) []PRHint {
 			Base: branch.Parent,
 		}
 		if repoURL != "" {
-			hint.CompareURL = prCompareURL(repoURL, host, hint.Base, hint.Head)
+			switch {
+			case IsGitHubHost(host):
+				hint.CompareURL = repoURL + "/compare/" + url.PathEscape(hint.Base) + "..." + url.PathEscape(hint.Head)
+			case hostHasLabel(host, "gitlab"):
+				hint.CompareURL = repoURL + "/-/compare/" + url.PathEscape(hint.Base) + "..." + url.PathEscape(hint.Head)
+			}
 		}
 		hints = append(hints, hint)
 	}
 	return hints
 }
 
-func prCompareURL(repoURL, host, base, head string) string {
-	base = url.PathEscape(base)
-	head = url.PathEscape(head)
-	switch forgeKind(host) {
-	case forgeGitHub:
-		return repoURL + "/compare/" + base + "..." + head
-	case forgeGitLab:
-		return repoURL + "/-/compare/" + base + "..." + head
-	default:
-		return ""
-	}
+// IsGitHubHost reports whether host names github.com or a GitHub Enterprise
+// host (any dot-separated label equals "github").
+func IsGitHubHost(host string) bool {
+	return hostHasLabel(host, "github")
 }
 
-type forge int
-
-const (
-	forgeUnknown forge = iota
-	forgeGitHub
-	forgeGitLab
-)
-
-// forgeKind classifies a host by its dot-separated labels so both the public
-// hosts (github.com, gitlab.com) and self-hosted variants (github.example.com,
-// gitlab.internal.example.com — GitHub Enterprise and self-managed GitLab use
-// the identical /compare/ and /-/compare/ URL shapes) are recognized. Label
-// matching avoids substring false positives: mygitlab.example.com has no
-// "gitlab" label and stays unknown, keeping the honest "" fallback for forges
-// whose URL shape is not certain.
-func forgeKind(host string) forge {
+func hostHasLabel(host, want string) bool {
+	if h, _, ok := strings.Cut(host, ":"); ok {
+		host = h
+	}
 	for _, label := range strings.Split(strings.ToLower(host), ".") {
-		switch label {
-		case "github":
-			return forgeGitHub
-		case "gitlab":
-			return forgeGitLab
+		if label == want {
+			return true
 		}
 	}
-	return forgeUnknown
+	return false
+}
+
+// IsGitHubRemote reports whether raw is a git remote URL pointing at GitHub.
+func IsGitHubRemote(raw string) bool {
+	_, host := RemoteToHTTPS(raw)
+	return IsGitHubHost(host)
 }
 
 // RemoteToHTTPS converts a git remote URL (https, ssh, or scp-like) into its
@@ -202,7 +168,7 @@ func RemoteToHTTPS(raw string) (webURL, host string) {
 	raw = strings.TrimSuffix(raw, ".git")
 	switch {
 	case strings.HasPrefix(raw, "git@"):
-		rest := strings.TrimPrefix(raw, "git@") // host:owner/repo
+		rest := strings.TrimPrefix(raw, "git@")
 		if i := strings.Index(rest, ":"); i >= 0 {
 			host = rest[:i]
 			path := sanitizeRemotePath(rest[i+1:])

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
@@ -14,10 +16,6 @@ func init() {
 	})
 }
 
-// runDown moves the current branch selection down the stack toward the trunk.
-// It accepts an optional positional integer n (default 1) and walks parent links
-// up to n times, stopping early if it reaches the trunk, then checks out the
-// resulting branch.
 func runDown(args []string) error {
 	var asJSON bool
 	fs := newFlagSet("down", &asJSON)
@@ -26,9 +24,6 @@ func runDown(args []string) error {
 		return err
 	}
 
-	// Navigation moves HEAD, so it takes the same repository lock mutations
-	// take: a concurrent cascade or a second navigator must not interleave
-	// with this move.
 	s, cur, release, err := lockAndLoadCurrent()
 	if err != nil {
 		return err
@@ -36,7 +31,7 @@ func runDown(args []string) error {
 	defer release()
 
 	if cur == s.Trunk {
-		return navEmit(asJSON, s.Trunk, alreadyAtSummary("already at trunk", s.Trunk))
+		return navEmit(asJSON, s.Trunk, fmt.Sprintf("already at trunk (%s)", s.Trunk))
 	}
 
 	for i := 0; i < n; i++ {
@@ -50,9 +45,10 @@ func runDown(args []string) error {
 		}
 	}
 
-	dest, err := teleportCheckout(cur)
-	if err != nil {
+	if err := checkoutBranch(cur); err != nil {
 		return err
 	}
-	return navEmitText(asJSON, cur, navSummary("switched to", cur, dest), navSummaryForTerminal("switched to", cur, dest))
+	return navEmitText(asJSON, cur,
+		fmt.Sprintf("switched to %s", cur),
+		fmt.Sprintf("switched to %s", sanitizeForTerminal(cur)))
 }

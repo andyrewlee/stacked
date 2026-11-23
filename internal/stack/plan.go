@@ -5,63 +5,6 @@ import (
 	"fmt"
 )
 
-// FoldPlan previews folding the current branch into its parent.
-func FoldPlan(env Env, s *State) (*OpResult, error) {
-	g := env.Git
-	if err := requireClean(g); err != nil {
-		return nil, err
-	}
-	cur, b, err := currentTracked(g, s)
-	if err != nil {
-		return nil, err
-	}
-	parent := b.Parent
-	if parent == s.Trunk {
-		return nil, fmt.Errorf("cannot fold %q into the trunk %q", cur, parent)
-	}
-	needs, err := s.NeedsRestack(g, cur)
-	if err != nil {
-		return nil, err
-	}
-	if needs {
-		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
-	}
-	// cur is checked out where the caller stands — the real op's
-	// Checkout(parent) frees it in place, so no worktree release applies.
-	if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
-		return nil, err
-	} else if elsewhere {
-		return nil, fmt.Errorf("cannot fold into %q because it is checked out in another worktree %q", parent, owner.Path)
-	}
-
-	curTip, err := g.RevParse(branchTipRef(cur))
-	if err != nil {
-		return nil, err
-	}
-	tips, err := g.TipsFor(s.TipNames())
-	if err != nil {
-		return nil, fmt.Errorf("read branch tips: %w", err)
-	}
-	planState := cloneState(s)
-	beforeParents := parentSnapshot(planState)
-	planState.RemoveBranch(cur)
-	reparented := diffReparents(beforeParents, planState)
-	tips[parent] = curTip
-	preview, err := finishUpstackPlan(env, planState, parent, tips)
-	if err != nil {
-		return nil, err
-	}
-	return &OpResult{
-		Summary:    fmt.Sprintf("would fold %s into %s", cur, parent),
-		Branch:     parent,
-		Restacked:  preview.restacked,
-		Deleted:    []string{cur},
-		Reparented: reparented,
-		Notes:      preview.notes(),
-		DryRun:     true,
-	}, nil
-}
-
 // SquashPlan previews squashing all commits on the current branch into one.
 func SquashPlan(env Env, s *State, message string) (*OpResult, error) {
 	_ = message
@@ -185,8 +128,10 @@ func DeletePlan(env Env, s *State, name string, force bool) (*OpResult, error) {
 			return nil, fmt.Errorf("branch %q is not merged into its stack parent %q (use --force to delete anyway)", name, parent)
 		}
 	}
-	if _, err := s.ownedWorktreeReleaseTarget(env, name); err != nil {
+	if owner, elsewhere, err := s.ownerElsewhere(g, name); err != nil {
 		return nil, err
+	} else if elsewhere {
+		return nil, fmt.Errorf("branch %q is checked out in another worktree %q; switch away from it there before deleting it", name, owner.Path)
 	}
 	start, err := g.CurrentBranch()
 	if err != nil {
@@ -239,13 +184,10 @@ type restackPreviewAccumulator struct {
 	moved       map[string]bool
 	seen        map[string]bool
 	seenSkipped map[string]bool
-	// cw lazily holds the worktree snapshot + batched gate verdicts the
-	// preview consults per candidate; cur is the (static-during-preview)
-	// current branch, both fetched at most once per preview run.
-	cw       *cascadeWorktrees
-	cur      string
-	cwErr    error
-	cwLoaded bool
+	cw          *cascadeWorktrees
+	cur         string
+	cwErr       error
+	cwLoaded    bool
 }
 
 func newRestackPreviewAccumulator() *restackPreviewAccumulator {
@@ -295,10 +237,6 @@ func (a *restackPreviewAccumulator) consider(env Env, s *State, tips map[string]
 	return nil
 }
 
-// worktreeCtx builds (once) the worktree snapshot plus the parallel gate
-// verdicts for every linked worktree — the preview walks many candidates, and
-// a per-name `worktree list` plus serial `git -C` probes would dominate it.
-// CurrentBranch is fetched once alongside: a preview never moves HEAD.
 func (a *restackPreviewAccumulator) worktreeCtx(env Env) (*cascadeWorktrees, error) {
 	if a.cwLoaded {
 		return a.cw, a.cwErr
@@ -325,14 +263,6 @@ func (a *restackPreviewAccumulator) worktreeCtx(env Env) (*cascadeWorktrees, err
 	return cw, nil
 }
 
-// wouldSkipWorktreeRestack answers restackInWorktree's skip question for the
-// dry-run preview: a branch owned by another worktree is skipped when that
-// worktree is locked, has a rebase in progress, or has a dirty tree — the
-// returned kind names which. The gate itself is shared with the apply path
-// (worktreeRestackDisposition), so the preview predicts the real run by
-// construction. The worktree snapshot, gate verdicts, and current branch come
-// from the accumulator's lazily built context — identical answers to
-// per-name probing, at a fraction of the spawns.
 func (a *restackPreviewAccumulator) wouldSkipWorktreeRestack(env Env, s *State, branch string) (wtSkipReason, error) {
 	cw, err := a.worktreeCtx(env)
 	if err != nil {
@@ -372,9 +302,6 @@ func finishUpstackPlan(env Env, s *State, anchor string, tips map[string]string)
 	return acc.preview(), nil
 }
 
-// planAfterTipChange previews the upstack impact of an operation that rewrites
-// changed's tip. The rewritten branch is treated as moved even though previews
-// do not know its future SHA, so descendants whose parent moves are included.
 func planAfterTipChange(env Env, s *State, changed string, tips map[string]string, includeChanged bool) (restackPreview, error) {
 	if _, err := s.tracked(changed); err != nil {
 		return restackPreview{}, err
@@ -395,8 +322,6 @@ func planAfterTipChange(env Env, s *State, changed string, tips map[string]strin
 
 // ModifyPlan previews Modify — the amend/commit gates and the upstack cascade
 // the real operation would run — without staging, committing, or moving refs.
-// With commit the future SHA is unknowable, so descendants are still reported
-// through planAfterTipChange, which treats the tip as moved regardless.
 func ModifyPlan(env Env, s *State, message string, all, commit bool) (*OpResult, error) {
 	g := env.Git
 	cur, err := g.CurrentBranch()
@@ -409,21 +334,39 @@ func ModifyPlan(env Env, s *State, message string, all, commit bool) (*OpResult,
 	if !s.IsTracked(cur) {
 		return nil, ErrNotTracked(cur)
 	}
-	if len(s.Descendants(cur)) > 0 {
-		unstaged, err := g.HasUnstagedChanges()
+	if commit && message == "" {
+		return nil, errors.New("--commit requires a commit message (-m <msg>)")
+	}
+	if !all {
+		staged, err := g.HasStagedChanges()
 		if err != nil {
-			return nil, fmt.Errorf("checking unstaged changes: %w", err)
+			return nil, fmt.Errorf("checking staged changes: %w", err)
 		}
-		if unstaged {
-			return nil, ErrDirty
+		if commit && !staged {
+			return nil, errors.New("no staged changes to commit; stage changes or pass -a")
+		}
+		if !commit && !staged && message == "" {
+			unstaged, err := g.HasUnstagedChanges()
+			if err != nil {
+				return nil, fmt.Errorf("checking unstaged changes: %w", err)
+			}
+			if unstaged {
+				return nil, errors.New("no staged changes to amend; stage changes with git add or pass -a")
+			}
+		}
+		if len(s.Descendants(cur)) > 0 {
+			unstaged, err := g.HasUnstagedChanges()
+			if err != nil {
+				return nil, fmt.Errorf("checking unstaged changes: %w", err)
+			}
+			if unstaged {
+				return nil, ErrDirty
+			}
 		}
 	}
 	var action string
 	switch {
 	case commit:
-		if message == "" {
-			return nil, errors.New("--commit requires a commit message (-m <msg>)")
-		}
 		action = "would commit on " + cur
 	case message != "":
 		action = "would amend " + cur + " with new message"
@@ -441,8 +384,7 @@ func ModifyPlan(env Env, s *State, message string, all, commit bool) (*OpResult,
 	return &OpResult{Summary: action, Branch: cur, Restacked: preview.restacked, Notes: preview.notes(), DryRun: true}, nil
 }
 
-// UntrackPlan previews UntrackBranch — the refusals and each child's new
-// parent — without touching state or refs.
+// UntrackPlan previews UntrackBranch without touching state or refs.
 func UntrackPlan(env Env, s *State, name string) (*OpResult, error) {
 	g := env.Git
 	if name == "" {
@@ -472,8 +414,7 @@ func UntrackPlan(env Env, s *State, name string) (*OpResult, error) {
 	}, nil
 }
 
-// RenamePlan previews Rename — the refusals, the rename itself, and every
-// child whose parent pointer would move — without renaming anything.
+// RenamePlan previews Rename without renaming anything.
 func RenamePlan(env Env, s *State, oldName, newName string) (*OpResult, error) {
 	g := env.Git
 	if oldName == "" {
@@ -508,11 +449,7 @@ func RenamePlan(env Env, s *State, oldName, newName string) (*OpResult, error) {
 	}, nil
 }
 
-// CreatePlan previews Create's refusals and outcome — the name collision, the
-// parent choice, and the staged/message pairing — without creating the branch,
-// staging, committing, or tracking. (-a alone cannot run preview-stage checks
-// because staging is itself the mutation being previewed; the message/staged
-// pairing is only honest when the caller did not ask to stage first.)
+// CreatePlan previews Create without creating the branch, staging, or committing.
 func CreatePlan(env Env, s *State, name, message string, all bool) (*OpResult, error) {
 	g := env.Git
 	if g.BranchExists(name) {
@@ -543,8 +480,6 @@ func CreatePlan(env Env, s *State, name, message string, all bool) (*OpResult, e
 	return &OpResult{Summary: fmt.Sprintf("would create %s on top of %s", name, cur), Branch: name, DryRun: true}, nil
 }
 
-// appendRestackPlans previews the same child-by-child restack order Delete uses,
-// de-duplicating descendants reached through multiple former children.
 func appendRestackPlans(env Env, s *State, tips map[string]string, starts ...string) (restackPreview, error) {
 	acc := newRestackPreviewAccumulator()
 	for _, start := range starts {

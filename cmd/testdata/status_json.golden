@@ -5,6 +5,12 @@
   "parent": "main",
   "tip": "<sha>",
   "children": [],
+  "commits": [
+    {
+      "sha": "<sha>",
+      "subject": "add a"
+    }
+  ],
   "needsRestack": false,
   "worktreeClean": true
 }

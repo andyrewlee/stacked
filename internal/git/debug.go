@@ -35,15 +35,6 @@ func spawnRun(cmd *exec.Cmd) error {
 	return err
 }
 
-// spawnOutput is spawnRun for cmd.Output() callers (spawn sites that need the
-// child's stdout bytes, e.g. check-ignore).
-func spawnOutput(cmd *exec.Cmd) ([]byte, error) {
-	start := time.Now()
-	out, err := cmd.Output()
-	traceSpawn(cmd.Args, time.Since(start))
-	return out, err
-}
-
 // spawnCombined is spawnRun for cmd.CombinedOutput() callers.
 func spawnCombined(cmd *exec.Cmd) ([]byte, error) {
 	start := time.Now()

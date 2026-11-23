@@ -137,7 +137,7 @@ func TestNavigationLockHeldAllowsReaders(t *testing.T) {
 		"log":             func() error { return runLog(nil) },
 		"restack-dry-run": func() error { return runRestack([]string{"--dry-run"}) },
 		"sync-dry-run":    func() error { return runSync([]string{"--dry-run"}) },
-		"validate":        func() error { return runValidate(nil) },
+		"doctor":          func() error { return runDoctor(nil) },
 	} {
 		if err := fn(); err != nil {
 			t.Fatalf("%s under held lock: err = %v, want success", name, err)

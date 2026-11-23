@@ -14,8 +14,9 @@ var updateGolden = flag.Bool("update", false, "update golden files")
 var (
 	ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
 	// SHA-valued fields whose contents are commit-dependent (non-deterministic
-	// across runs): parentSHA (the recorded base) and tip (the live tip).
-	shaRE = regexp.MustCompile(`"(parentSHA|tip)": "[0-9a-f]{40}"`)
+	// across runs): parentSHA (the recorded base), tip (the live tip), and sha
+	// (commit entries in status --json).
+	shaRE = regexp.MustCompile(`"(parentSHA|tip|sha)": "[0-9a-f]{40}"`)
 )
 
 // golden compares got against testdata/<name>.golden, or rewrites it under

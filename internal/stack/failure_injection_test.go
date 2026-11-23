@@ -10,8 +10,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // TestRestackSurfacesRebaseProbeError pins rebaseFailure's probe-error arm:
@@ -400,37 +398,6 @@ func TestRestackCascadeSaveCheckpointFailure(t *testing.T) {
 	}
 }
 
-// TestFoldSaveCheckpointFailure pins the epilogue save arm: fold persists the
-// deletion (save 1), then finishUpstack's final checkpoint (save 2) fails —
-// the fold already happened; the error must surface, not be swallowed.
-func TestFoldSaveCheckpointFailure(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	mkBranch(t, env, s, f, "a", "b")
-	if err := f.Checkout("b"); err != nil {
-		t.Fatal(err)
-	}
-
-	saveErr := errors.New("save exploded")
-	env2, saves := envWithSaveErr(f, saveErr, 1) // fold's save ok, epilogue fails
-
-	_, err := Fold(env2, s)
-	if !errors.Is(err, saveErr) {
-		t.Fatalf("Fold = %v, want the save sentinel surfaced", err)
-	}
-	if *saves != 2 {
-		t.Fatalf("saves = %d, want 2 (post-delete + epilogue)", *saves)
-	}
-	// The fold committed: b is gone from the in-memory state and HEAD sits on
-	// the parent (the epilogue's restoreHEAD never ran — the save failed first).
-	if s.IsTracked("b") {
-		t.Fatal("b should be untracked in memory — the fold applied before the save failure")
-	}
-	if f.head != "a" {
-		t.Fatalf("HEAD = %q, want a (fold's parent checkout)", f.head)
-	}
-}
-
 // TestCreateStageFailurePropagates drives the Add knob: `st create -a` whose
 // staging step fails must surface the error wrapped, and leave no branch.
 func TestCreateStageFailurePropagates(t *testing.T) {
@@ -579,8 +546,8 @@ func TestProbeFailuresSurface(t *testing.T) {
 			method: "TipsFor",
 			after:  -1,
 			setup:  stack2,
-			run: func(env Env, f *fakeGit, s *State) error {
-				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := PruneMerged(env, s)
 				return err
 			},
 			wantSub: "read tracked branch tips",
@@ -590,8 +557,8 @@ func TestProbeFailuresSurface(t *testing.T) {
 			method: "MergedInto",
 			after:  -1,
 			setup:  stack2,
-			run: func(env Env, f *fakeGit, s *State) error {
-				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+			run: func(env Env, _ *fakeGit, s *State) error {
+				_, err := PruneMerged(env, s)
 				return err
 			},
 			wantSub: boom.Error(),
@@ -702,7 +669,7 @@ func TestProbeFailuresSurface(t *testing.T) {
 			after:  -1,
 			setup:  stack2, // both branches unmerged → the per-branch containment check runs
 			run: func(env Env, _ *fakeGit, s *State) error {
-				_, err := PruneMergedAgainst(env, s, branchTipRef(s.Trunk))
+				_, err := PruneMerged(env, s)
 				return err
 			},
 			wantSub: "changes are contained in",
@@ -727,7 +694,7 @@ func TestProbeFailuresSurface(t *testing.T) {
 				mkBranch(t, env, s, f, "main", "a")
 				return f, s, env
 			},
-			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Modify(env, s, "", false, false); return err },
+			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Modify(env, s, "", true, false); return err },
 			wantSub: `amending "a"`,
 		},
 		{
@@ -740,36 +707,10 @@ func TestProbeFailuresSurface(t *testing.T) {
 				return f, s, env
 			},
 			run: func(env Env, _ *fakeGit, s *State) error {
-				_, err := Modify(env, s, "new subject", false, false)
+				_, err := Modify(env, s, "new subject", true, false)
 				return err
 			},
 			wantSub: `amending "a"`,
-		},
-		{
-			name:   "worktree branch create probe",
-			method: "CreateBranchAt",
-			after:  -1,
-			setup: func(t *testing.T) (*fakeGit, *State, Env) {
-				f, s, env := newEnvState()
-				mkBranch(t, env, s, f, "main", "a")
-				return f, s, env
-			},
-			run:     func(env Env, _ *fakeGit, s *State) error { _, err := CreateInWorktreePrep(env, s, "x"); return err },
-			wantSub: `creating branch "x"`,
-		},
-		{
-			name:   "fold advance probe",
-			method: "ForceBranch",
-			after:  -1,
-			setup: func(t *testing.T) (*fakeGit, *State, Env) {
-				f, s, env := stack2(t)
-				if err := f.Checkout("b"); err != nil {
-					t.Fatal(err)
-				}
-				return f, s, env
-			},
-			run:     func(env Env, _ *fakeGit, s *State) error { _, err := Fold(env, s); return err },
-			wantSub: `advancing "a" to "b"`,
 		},
 	}
 
@@ -1355,12 +1296,12 @@ func TestApplyPruneSaveCheckpointFailure(t *testing.T) {
 	saveErr := errors.New("save exploded")
 	env2, saves := envWithSaveErr(f, saveErr, 0)
 
-	deleted, err := PruneMergedAgainst(env2, s, branchTipRef(s.Trunk))
+	deleted, err := PruneMerged(env2, s)
 	if !errors.Is(err, saveErr) {
-		t.Fatalf("PruneMergedAgainst = %v, want wrapped %v", err, saveErr)
+		t.Fatalf("PruneMerged = %v, want wrapped %v", err, saveErr)
 	}
 	if !strings.Contains(err.Error(), `save state after pruning "a"`) {
-		t.Fatalf("PruneMergedAgainst = %v, want the prune checkpoint named", err)
+		t.Fatalf("PruneMerged = %v, want the prune checkpoint named", err)
 	}
 	if *saves != 1 {
 		t.Fatalf("saves = %d, want 1", *saves)
@@ -1373,37 +1314,6 @@ func TestApplyPruneSaveCheckpointFailure(t *testing.T) {
 	}
 	if s.IsTracked("a") {
 		t.Fatal("a should be untracked in memory — RemoveBranch ran before the save failed")
-	}
-}
-
-// TestRefusePruneCurrentProbeDegrade pins refusePruneCurrent's deliberate
-// degrade: a CurrentBranch failure is swallowed (cur=""), so the friendly
-// current-branch refusal is SKIPPED and the prune proceeds to the git-side
-// refusal instead — mirroring TestSnapshotUndoCurrentBranchDegrade.
-func TestRefusePruneCurrentProbeDegrade(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	aTip, _ := f.RevParse("a")
-	if err := f.ForceBranch("main", aTip); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-	f.failErr["CurrentBranch"] = errors.New("probe exploded")
-
-	_, err := Prune(env, s, s.Trunk)
-	if err == nil {
-		t.Fatal("pruning the current branch must fail somewhere")
-	}
-	if strings.Contains(err.Error(), "check out another branch") {
-		t.Fatalf("Prune = %v, want the degrade: the friendly refusal must be skipped", err)
-	}
-	if !strings.Contains(err.Error(), "cannot delete the current branch") {
-		t.Fatalf("Prune = %v, want the git-side refusal that ran instead", err)
-	}
-	if !f.BranchExists("a") || !s.IsTracked("a") {
-		t.Fatal("the degraded prune must not lose a")
 	}
 }
 
@@ -1543,46 +1453,6 @@ func TestRebaseTargetIsParentBaseAncestorProbeDegrades(t *testing.T) {
 
 	if rebaseTargetIsParentBase(f, b, root) {
 		t.Fatal("ancestor probe failure must degrade to false (foreign target), not true")
-	}
-}
-
-// TestAbsorbStackSetProbeFailure pins the CommitRange stack-set walk in
-// absorbPlan: the probe must surface wrapped, naming the range.
-func TestAbsorbStackSetProbeFailure(t *testing.T) {
-	f, s, env, _ := absorbEnv(t)
-	f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-	boom := errors.New("commit-range probe exploded")
-	f.failErr["CommitRange"] = boom
-
-	_, err := AbsorbPlan(env, s)
-	if !errors.Is(err, boom) {
-		t.Fatalf("AbsorbPlan = %v, want wrapped %v", err, boom)
-	}
-	if !strings.Contains(err.Error(), "walk main..c") {
-		t.Fatalf("AbsorbPlan = %v, want the range named", err)
-	}
-}
-
-// TestUndoPreviewCommitsLostProbeDegrade pins the commitsLostFromRef degrade:
-// a CommitRange failure is swallowed per-ref into "unknown" — never a
-// blocker, never an error (undo restores the ref by name).
-func TestUndoPreviewCommitsLostProbeDegrade(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	entry := mustSnapshot(t, s, f, "modify")
-	f.failErr["CommitRange"] = errors.New("commit-range probe exploded")
-
-	res, err := UndoPreview(env, s, entry, false, 0, nil)
-	if err != nil {
-		t.Fatalf("UndoPreview = %v, want the degrade swallowed", err)
-	}
-	if len(res.WouldRestore) == 0 {
-		t.Fatal("WouldRestore = [], want the recorded refs")
-	}
-	for _, r := range res.WouldRestore {
-		if r.CommitsLostFromRef != "unknown" {
-			t.Fatalf("%s CommitsLostFromRef = %v, want the unknown degrade", r.Branch, r.CommitsLostFromRef)
-		}
 	}
 }
 

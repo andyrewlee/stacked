@@ -7,25 +7,104 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/andyrewlee/stacked/internal/gh"
 	"github.com/andyrewlee/stacked/internal/git"
 	"github.com/andyrewlee/stacked/internal/stack"
 )
 
 func init() {
 	register(&Command{
-		Name:    "log",
-		Aliases: []string{"ls"},
-		Summary: "Show the stack as a tree",
-		Usage:   "st log [--json]",
-		Run:     runLog,
+		Name:       "log",
+		Aliases:    []string{"ls"},
+		Summary:    "Show the current stack as a tree (--all for all stacks, --pr for GitHub PR status)",
+		Usage:      "st log [--all] [--pr] [--json]",
+		Run:        runLog,
+		NewFlagSet: logFlagSet,
 	})
 }
 
-// runLog renders the tracked stacks as a tree (trunk at the bottom, branches
-// drawn above their parents) or, with --json, as a structured tree for scripting.
-func runLog(args []string) error {
-	asJSON, err := parsePlain("log", args)
+// prStatus is the concise GitHub PR view attached to log/status output under --pr.
+type prStatus struct {
+	Number       int    `json:"number"`
+	URL          string `json:"url"`
+	State        string `json:"state"`
+	Draft        bool   `json:"draft,omitempty"`
+	Base         string `json:"base"`
+	BaseMismatch bool   `json:"baseMismatch,omitempty"`
+	Checks       string `json:"checks,omitempty"`
+}
+
+func makePRStatus(pr *gh.PR, expectedBase string) *prStatus {
+	return &prStatus{
+		Number:       pr.Number,
+		URL:          pr.URL,
+		State:        pr.State,
+		Draft:        pr.IsDraft,
+		Base:         pr.BaseRefName,
+		BaseMismatch: expectedBase != "" && pr.BaseRefName != expectedBase,
+		Checks:       pr.Checks,
+	}
+}
+
+func formatPRTag(pr *prStatus) string {
+	if pr == nil {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("#%d", pr.Number)}
+	if pr.Draft {
+		parts = append(parts, "draft")
+	}
+	switch pr.Checks {
+	case "passing":
+		parts = append(parts, "✓")
+	case "failing":
+		parts = append(parts, "✗")
+	case "pending":
+		parts = append(parts, "⋯")
+	}
+	if pr.BaseMismatch {
+		parts = append(parts, fmt.Sprintf("base:%s", sanitizeForTerminal(pr.Base)))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+func loadOpenPRsForDisplay() (map[string]gh.PR, error) {
+	if !gh.Available() {
+		return nil, fmt.Errorf("--pr requires the GitHub CLI (gh) on PATH")
+	}
+	prs, err := gh.ListOpenPRs()
 	if err != nil {
+		return nil, err
+	}
+	return stack.OpenPRsByHead(prs), nil
+}
+
+func trunkBehindCount(p *cachedPort, trunk string) int {
+	if !p.remoteExists("origin") {
+		return 0
+	}
+	remoteRef := git.RemoteTrackingRef("origin", trunk)
+	if _, err := p.RevParse(remoteRef); err != nil {
+		return 0
+	}
+	n, err := git.BehindCount(git.LocalBranchNameRef(trunk), remoteRef)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// runLog renders the tracked stack(s) as a tree (trunk at the bottom, branches
+// drawn above their parents) or, with --json, as a structured tree for scripting.
+// By default when on a tracked branch it shows only the current stack; on trunk,
+// detached HEAD, or with --all it shows the whole forest.
+func runLog(args []string) error {
+	var o logOpts
+	fs := newLogFlags(&o)
+	if err := parseFlagSet(fs, args); err != nil {
+		return err
+	}
+	if err := rejectArgs("log", fs.Args()); err != nil {
 		return err
 	}
 
@@ -34,15 +113,18 @@ func runLog(args []string) error {
 		return err
 	}
 
-	// The current branch may be unavailable (detached HEAD); that is not fatal
-	// for rendering, so treat it as "no marker".
 	cur, _ := currentBranch()
-	index := s.ChildIndex()
-	renderedNames, rendered := renderedBranches(s)
+	var scope map[string]bool
+	if !o.all && s.IsTracked(cur) {
+		scope = map[string]bool{s.Trunk: true}
+		for _, name := range s.StackBranches(cur) {
+			scope[name] = true
+		}
+	}
 
-	// Two exact cat-file batch reads power the whole render for only the
-	// branches that can appear in the tree: one for tips (drift) and one for tip
-	// subjects, instead of a `git log` spawn per branch.
+	index := filteredChildIndex(s, scope)
+	renderedNames, rendered := renderedBranches(s, scope)
+
 	tips, err := git.TipsFor(renderedNames)
 	if err != nil {
 		return err
@@ -57,13 +139,20 @@ func runLog(args []string) error {
 	}
 	drift := s.DriftAgainst(tips)
 
-	// Worktree annotations are gated on a multi-worktree repo so the single-tree
-	// output stays byte-for-byte identical: in the common case wtInfo is empty
-	// and every annotation site is skipped.
 	wtInfo, err := branchWorktrees(rendered)
 	if err != nil {
 		return err
 	}
+
+	var openPRs map[string]gh.PR
+	if o.pr {
+		openPRs, err = loadOpenPRsForDisplay()
+		if err != nil {
+			return err
+		}
+	}
+
+	trunkBehind := trunkBehindCount(newGitPort(), s.Trunk)
 
 	d := logData{
 		index:       index,
@@ -73,23 +162,48 @@ func runLog(args []string) error {
 		subjects:    subjects,
 		ancestors:   ancestors,
 		wtInfo:      wtInfo,
+		openPRs:     openPRs,
+		trunkBehind: trunkBehind,
 		unreachable: s.UnreachableBranches(),
 	}
-	if asJSON {
+	if o.asJSON {
 		return printLogJSON(s, &d)
 	}
 	printLogTree(s, &d)
 	return nil
 }
 
-func renderedBranches(s *stack.State) (names []string, rendered map[string]bool) {
+func filteredChildIndex(s *stack.State, scope map[string]bool) map[string][]string {
+	full := s.ChildIndex()
+	if scope == nil {
+		return full
+	}
+	outIdx := make(map[string][]string, len(scope))
+	for parent, kids := range full {
+		if !scope[parent] {
+			continue
+		}
+		var kept []string
+		for _, kid := range kids {
+			if scope[kid] {
+				kept = append(kept, kid)
+			}
+		}
+		if len(kept) > 0 {
+			outIdx[parent] = kept
+		}
+	}
+	return outIdx
+}
+
+func renderedBranches(s *stack.State, scope map[string]bool) (names []string, rendered map[string]bool) {
 	rendered = make(map[string]bool, len(s.Branches)+1)
 	names = make([]string, 0, len(s.Branches)+1)
 	names = append(names, s.Trunk)
 	rendered[s.Trunk] = true
 	tracked := make([]string, 0, len(s.Branches))
 	for name := range s.Branches {
-		if name != s.Trunk {
+		if name != s.Trunk && (scope == nil || scope[name]) {
 			tracked = append(tracked, name)
 			rendered[name] = true
 		}
@@ -98,10 +212,6 @@ func renderedBranches(s *stack.State) (names []string, rendered map[string]bool)
 	return append(names, tracked...), rendered
 }
 
-// worktreeInfo annotates a branch that lives in a linked worktree — or whose
-// worktree is paused mid-rebase. path is empty only for the paused-in-main case
-// (the linked-only worktree annotation contract leaves the main worktree
-// unlabeled), while paused/conflicted still name the block.
 type worktreeInfo struct {
 	path       string
 	dirty      bool
@@ -111,19 +221,10 @@ type worktreeInfo struct {
 }
 
 // branchWorktrees returns, for a multi-worktree repo, a map from branch name to
-// where it lives and whether that worktree is dirty. For a single-tree repo it
-// returns an empty map so callers add no annotations and the output is
-// unchanged. Only rendered branches are probed for dirtiness; unrelated local
-// branches cannot appear in log output.
-//
-// A rebase paused in a worktree detaches its HEAD, so `git worktree list`
-// reports no branch — the owning branch would lose its worktree annotation
-// exactly when it is blocked, which is the one fleet state an orchestrator most
-// needs to see. PausedRebaseOwners resolves those rows through the rebase
-// head-name: a paused worktree annotates its branch with the path, dirty, the
-// paused flag, and the conflicted paths the pause is waiting on. A pause in
-// the MAIN worktree annotates paused+conflicted only (worktree/dirty are
-// linked-only by contract — the main worktree never carried them).
+// where it lives and whether that worktree is dirty. The caller's own current
+// worktree is omitted from path annotations so agents working inside a linked
+// worktree (e.g. amux) don't get noisy self-path tags on their own branch;
+// paused mid-rebase in the current worktree still surfaces paused+conflicted.
 func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) {
 	wts, err := worktrees()
 	if err != nil {
@@ -133,13 +234,14 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		return map[string]worktreeInfo{}, nil
 	}
 	main, _ := stack.MainWorktree(wts)
+	curRoot, _ := git.RepoRoot()
+	isSelfOrMain := func(path string) bool {
+		if samePath(path, main.Path) {
+			return true
+		}
+		return curRoot != "" && samePath(path, curRoot)
+	}
 
-	// Resolve detached paused worktrees to their owning branch (the ref a
-	// --continue would land on) before attributing anything — their Branch
-	// field is empty by construction. A registered-but-deleted worktree still
-	// lists (git marks it prunable, which the parser drops), and probing it
-	// would fail the whole render — detached rows whose dir is gone are
-	// excluded first.
 	var extant []git.Worktree
 	for _, wt := range wts {
 		if wt.Branch == "" {
@@ -154,19 +256,15 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		return nil, err
 	}
 
-	// One bounded fan-out answers every linked worktree's cleanliness — and,
-	// for a paused one, the unmerged paths — instead of serial `git -C`
-	// probes per rendered branch. Slots keep probe answers until the loop
-	// completes; the map below is assembled after.
 	type wtProbe struct {
 		path   string
-		branch string // paused rows carry the head-name-resolved owner here
+		branch string
 		paused bool
 	}
 	var probes []wtProbe
-	locked := map[string]bool{} // Locked rides on the worktree row — no probe
+	locked := map[string]bool{}
 	for _, wt := range wts {
-		if wt.Path == main.Path || wt.Branch == "" || !rendered[wt.Branch] {
+		if isSelfOrMain(wt.Path) || wt.Branch == "" || !rendered[wt.Branch] {
 			continue
 		}
 		probes = append(probes, wtProbe{path: wt.Path, branch: wt.Branch})
@@ -176,10 +274,10 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 	for name := range paused {
 		pausedNames = append(pausedNames, name)
 	}
-	sort.Strings(pausedNames) // deterministic probe/assembly order
+	sort.Strings(pausedNames)
 	for _, name := range pausedNames {
 		if !rendered[name] {
-			continue // a pause on an untracked head names no rendered branch
+			continue
 		}
 		wt := paused[name]
 		probes = append(probes, wtProbe{path: wt.Path, branch: name, paused: true})
@@ -195,14 +293,10 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 		var r wtResult
 		clean, err := git.IsCleanAt(probes[i].path)
 		if err != nil {
-			// A worktree we cannot stat (e.g. pruned on disk) is reported
-			// without a dirty flag rather than failing the whole render.
 			clean = true
 		}
 		r.clean = clean
 		if probes[i].paused {
-			// The conflicted inventory is the actionable payload of a pause;
-			// a probe failure reports the pause without it.
 			if files, uerr := git.UnmergedFilesIn(probes[i].path); uerr == nil {
 				r.conflicted = files
 			}
@@ -214,9 +308,7 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 	info := make(map[string]worktreeInfo, len(wts))
 	for i, p := range probes {
 		dirty := !slots[i].clean
-		if p.paused && p.path == main.Path {
-			// Main-worktree pause: no worktree/dirty fields (linked-only
-			// contract), just the block signal and its conflicted files.
+		if p.paused && isSelfOrMain(p.path) {
 			info[p.branch] = worktreeInfo{paused: true, conflicted: slots[i].conflicted}
 			continue
 		}
@@ -225,36 +317,25 @@ func branchWorktrees(rendered map[string]bool) (map[string]worktreeInfo, error) 
 	return info, nil
 }
 
-// logNode is the JSON shape of a branch in the stack tree.
 type logNode struct {
-	Name      string `json:"name"`
-	Parent    string `json:"parent,omitempty"`
-	ParentSHA string `json:"parentSHA,omitempty"`
-	// Tip is the branch's LIVE tip SHA from the same TipsFor batch the render
-	// already ran — absent when the ref is gone, which is itself the drift
-	// signal an orchestrator polls for.
-	Tip          string `json:"tip,omitempty"`
-	Current      bool   `json:"current"`
-	NeedsRestack bool   `json:"needsRestack"`
-	TopCommit    string `json:"topCommit,omitempty"`
-	Worktree     string `json:"worktree,omitempty"`
-	Dirty        bool   `json:"dirty,omitempty"`
-	// Paused marks a branch whose worktree sits mid-rebase (it lists detached,
-	// resolved back to the branch through the rebase head-name); ConflictedFiles
-	// names the unmerged paths the pause is waiting on; Locked reports a
-	// `git worktree lock` hold on the branch's worktree (`st worktree lock`).
+	Name            string     `json:"name"`
+	Parent          string     `json:"parent,omitempty"`
+	ParentSHA       string     `json:"parentSHA,omitempty"`
+	Tip             string     `json:"tip,omitempty"`
+	Current         bool       `json:"current"`
+	NeedsRestack    bool       `json:"needsRestack"`
+	TopCommit       string     `json:"topCommit,omitempty"`
+	Worktree        string     `json:"worktree,omitempty"`
+	Dirty           bool       `json:"dirty,omitempty"`
 	Paused          bool       `json:"paused,omitempty"`
 	ConflictedFiles []string   `json:"conflictedFiles,omitempty"`
 	Locked          bool       `json:"locked,omitempty"`
+	PR              *prStatus  `json:"pr,omitempty"`
+	TrunkBehind     int        `json:"trunkBehind,omitempty"`
 	Children        []*logNode `json:"children"`
-	// Unreachable names tracked branches no trunk-rooted walk visits (a
-	// parent cycle or a dangling parent) — populated on the ROOT node only.
-	Unreachable []string `json:"unreachable,omitempty"`
+	Unreachable     []string   `json:"unreachable,omitempty"`
 }
 
-// logData bundles the render context both log printers share: the child index,
-// the current branch ("" when detached), per-branch drift, the tip/subject/
-// ancestor maps from the batched cat-file reads, and worktree annotations.
 type logData struct {
 	index       map[string][]string
 	cur         string
@@ -263,13 +344,12 @@ type logData struct {
 	subjects    map[string]string
 	ancestors   map[ancestorPair]bool
 	wtInfo      map[string]worktreeInfo
+	openPRs     map[string]gh.PR
+	trunkBehind int
 	unreachable []string
 }
 
 func printLogJSON(s *stack.State, d *logData) error {
-	// Corrupt topology (a parent cycle) could otherwise recurse forever: each
-	// name renders at most once. Persisted corruption is refused at decode —
-	// this bound is defensive, not a repair.
 	visited := make(map[string]bool, len(d.index)+1)
 	var build func(name, parent string) *logNode
 	build = func(name, parent string) *logNode {
@@ -283,6 +363,9 @@ func printLogJSON(s *stack.State, d *logData) error {
 			node.NeedsRestack = d.drift[name]
 			if subject, ok := topSubject(b, d.tips, d.subjects, d.ancestors); ok {
 				node.TopCommit = subject
+			}
+			if pr, ok := d.openPRs[name]; ok {
+				node.PR = makePRStatus(&pr, b.Parent)
 			}
 		}
 		if wt, ok := d.wtInfo[name]; ok {
@@ -300,6 +383,7 @@ func printLogJSON(s *stack.State, d *logData) error {
 		return node
 	}
 	root := build(s.Trunk, "")
+	root.TrunkBehind = d.trunkBehind
 	root.Unreachable = d.unreachable
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -309,11 +393,7 @@ func printLogJSON(s *stack.State, d *logData) error {
 	return nil
 }
 
-// printLogTree prints the forest with the deepest branches first so the trunk
-// ends up at the bottom of the output.
 func printLogTree(s *stack.State, d *logData) {
-	// Same defensive bound as printLogJSON: a name prints at most once even if
-	// corrupt topology points the child index back at an ancestor.
 	visited := make(map[string]bool, len(d.index)+1)
 	var printBranch func(name string, depth int)
 	printBranch = func(name string, depth int) {
@@ -338,7 +418,13 @@ func printLogTree(s *stack.State, d *logData) {
 		}
 		line := fmt.Sprintf("%s%s %s", indent, marker, label)
 
+		if name == s.Trunk && d.trunkBehind > 0 {
+			line += " " + paint(fmt.Sprintf("(%d behind origin/%s)", d.trunkBehind, sanitizeForTerminal(s.Trunk)), ansiYellow)
+		}
 		if b, ok := s.Get(name); ok {
+			if pr, ok := d.openPRs[name]; ok {
+				line += " " + paint(formatPRTag(makePRStatus(&pr, b.Parent)), ansiCyan)
+			}
 			if d.drift[name] {
 				line += " " + paint("(needs restack)", ansiYellow)
 			}
@@ -369,40 +455,34 @@ func printLogTree(s *stack.State, d *logData) {
 	}
 	printBranch(s.Trunk, 0)
 	if len(d.unreachable) > 0 {
-		out("%s\n", paint(fmt.Sprintf("warning: tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st repair`",
+		out("%s\n", paint(fmt.Sprintf("warning: tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st doctor --fix`",
 			sanitizeForTerminal(s.Trunk), sanitizeForTerminal(strings.Join(d.unreachable, ", "))), ansiYellow))
 	}
 }
 
-// ancestorPair is one ancestry question: is the child's tip reachable from the
-// parent's tip (i.e. an ancestor-or-equal of it). Branches that share a tip and
-// parent share one answer, so the cache is keyed by SHAs, not branch names.
 type ancestorPair struct {
 	tip       string
 	parentTip string
 }
 
-// tipAncestors answers the topCommit visibility question for every rendered
-// branch with at most one bounded `merge-base --is-ancestor` probe per
-// distinct tip pair — instead of materializing the whole reachable history in
-// a `rev-list --parents` graph. Missing or equal tips need no probe at all, so
-// a trunk-only log asks git nothing.
 func tipAncestors(s *stack.State, tips map[string]string) (map[ancestorPair]bool, error) {
-	// Collect the distinct pairs first so the independent merge-base probes
-	// can fan out — each is a subprocess spawn, and on a wide stack they
-	// dominate `st log`'s wall time. Results fold back keyed by pair, and the
-	// probes run in a sorted order so the first error is deterministic.
 	type probe struct {
 		pair      ancestorPair
 		branchRef string
 		parentRef string
 	}
 	var probes []probe
-	seen := make(map[ancestorPair]bool)
-	for _, b := range s.Branches {
-		tip := tips[b.Name]
-		parentTip := tips[b.Parent]
-		if tip == "" || parentTip == "" || tip == parentTip {
+	seen := map[ancestorPair]bool{}
+	names := make([]string, 0, len(s.Branches))
+	for name := range s.Branches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b := s.Branches[name]
+		tip, ok := tips[name]
+		parentTip, pok := tips[b.Parent]
+		if !ok || !pok || tip == parentTip {
 			continue
 		}
 		pair := ancestorPair{tip: tip, parentTip: parentTip}
@@ -410,48 +490,38 @@ func tipAncestors(s *stack.State, tips map[string]string) (map[ancestorPair]bool
 			continue
 		}
 		seen[pair] = true
-		probes = append(probes, probe{pair: pair, branchRef: git.LocalBranchNameRef(b.Name), parentRef: git.LocalBranchNameRef(b.Parent)})
+		probes = append(probes, probe{pair: pair, branchRef: git.LocalBranchNameRef(name), parentRef: git.LocalBranchNameRef(b.Parent)})
 	}
-	sort.Slice(probes, func(i, j int) bool {
-		if probes[i].pair.tip != probes[j].pair.tip {
-			return probes[i].pair.tip < probes[j].pair.tip
-		}
-		return probes[i].pair.parentTip < probes[j].pair.parentTip
-	})
-	// Fully-qualified refs skip IsAncestor's branch-existence probes — one
-	// merge-base spawn per pair, not three — while the SHA-keyed cache keeps
-	// the answer pinned to the measured tips.
+	if len(probes) == 0 {
+		return map[ancestorPair]bool{}, nil
+	}
 	results := make([]bool, len(probes))
 	if err := git.ParallelProbes(len(probes), func(i int) error {
-		ok, err := git.IsAncestor(probes[i].branchRef, probes[i].parentRef)
-		results[i] = ok
-		return err
+		anc, err := git.IsAncestor(probes[i].branchRef, probes[i].parentRef)
+		if err != nil {
+			return err
+		}
+		results[i] = anc
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-	ancestors := make(map[ancestorPair]bool, len(probes))
+	outMap := make(map[ancestorPair]bool, len(probes))
 	for i, p := range probes {
-		ancestors[p.pair] = results[i]
+		outMap[p.pair] = results[i]
 	}
-	return ancestors, nil
+	return outMap, nil
 }
 
-// topSubject returns the subject of b's tip commit and whether one should be
-// shown, from prefetched maps and the resolved tip-pair ancestry answers. A
-// branch with no commits beyond its parent shows nothing — matching the old
-// per-branch `git log parent..branch`, which returned an empty range there.
 func topSubject(b *stack.Branch, tips, subjects map[string]string, ancestors map[ancestorPair]bool) (string, bool) {
 	tip, ok := tips[b.Name]
-	if !ok || tip == "" {
+	parentTip, pok := tips[b.Parent]
+	if !ok || !pok {
 		return "", false
 	}
-	parentTip, ok := tips[b.Parent]
-	if !ok || parentTip == "" || tip == parentTip || ancestors[ancestorPair{tip: tip, parentTip: parentTip}] {
+	if tip == parentTip || ancestors[ancestorPair{tip: tip, parentTip: parentTip}] {
 		return "", false
 	}
-	subject, ok := subjects[b.Name]
-	if !ok || subject == "" {
-		return "", false
-	}
-	return subject, true
+	subject := subjects[b.Name]
+	return subject, subject != ""
 }

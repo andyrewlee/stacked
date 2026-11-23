@@ -1,7 +1,6 @@
 package git
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -135,7 +134,7 @@ func TestFastForward(t *testing.T) {
 		mustGit(t, "checkout", "-q", "-b", "feature")
 		wt := filepath.Join(t.TempDir(), "trunk-wt")
 		mustGit(t, "worktree", "add", "-q", wt, "main")
-		writeFile(t, filepath.Join(wt, "dirty.txt"), "dirty\n")
+		writeFile(t, filepath.Join(wt, "base.txt"), "dirty\n")
 		_, err := (RemoteShell{}).FastForward("main", "origin", wt, false)
 		if err == nil || !strings.Contains(err.Error(), wt) {
 			t.Fatalf("FastForward with dirty owner = %v, want error naming %q", err, wt)
@@ -293,16 +292,16 @@ func TestBranchLifecycle(t *testing.T) {
 	if BranchExists("feat") || !BranchExists("feat2") {
 		t.Fatalf("rename did not take effect")
 	}
-	// Force a second branch at a different ref, then delete it.
+	// Create a second branch at a different ref, then delete it.
 	writeFile(t, "x.txt", "x\n")
 	mustGit(t, "add", "-A")
 	mustGit(t, "commit", "-q", "-m", "x")
 	sha := mustGit(t, "rev-parse", "HEAD")
-	if err := ForceBranch("marker", sha); err != nil {
-		t.Fatalf("ForceBranch: %v", err)
+	if err := UpdateRef("refs/heads/marker", sha); err != nil {
+		t.Fatalf("UpdateRef: %v", err)
 	}
 	if got, _ := RevParse("marker"); got != sha {
-		t.Fatalf("ForceBranch left marker at %q, want %s", got, sha)
+		t.Fatalf("UpdateRef left marker at %q, want %s", got, sha)
 	}
 	if err := DeleteBranch("marker", true); err != nil {
 		t.Fatalf("DeleteBranch: %v", err)
@@ -395,14 +394,6 @@ func TestFlagLikeRefNamesRejected(t *testing.T) {
 			run:  func() error { _, err := PushBranches("origin", []string{"--force"}, false); return err },
 		},
 		{
-			name: "force branch",
-			run:  func() error { return ForceBranch("-b", "HEAD") },
-		},
-		{
-			name: "force branch ref",
-			run:  func() error { return ForceBranch("topic", "--force") },
-		},
-		{
 			name: "reset soft ref",
 			run:  func() error { return ResetSoft("--hard") },
 		},
@@ -439,11 +430,14 @@ func TestCleanStagedAdd(t *testing.T) {
 		t.Fatalf("fresh repo should be clean: clean=%v err=%v", clean, err)
 	}
 	writeFile(t, "n.txt", "n\n")
-	if clean, _ := IsClean(); clean {
-		t.Fatalf("untracked file should make the tree not clean")
+	if clean, _ := IsClean(); !clean {
+		t.Fatalf("untracked file should not make the tree dirty")
 	}
 	if err := Add("n.txt"); err != nil {
 		t.Fatalf("Add: %v", err)
+	}
+	if clean, _ := IsClean(); clean {
+		t.Fatalf("staged file should make the tree not clean")
 	}
 	staged, err := HasStagedChanges()
 	if err != nil || !staged {
@@ -461,15 +455,28 @@ func TestAddAllAndAmend(t *testing.T) {
 	newRepo(t)
 	writeFile(t, "a.txt", "a\n")
 	writeFile(t, "b.txt", "b\n")
-	if err := Add(); err != nil { // add -A
-		t.Fatalf("Add all: %v", err)
+	if err := Add("a.txt", "b.txt"); err != nil {
+		t.Fatalf("Add explicit paths: %v", err)
 	}
 	if err := Commit("two files", false); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
+	// Modify tracked files and add an untracked file; Add() stages tracked only.
 	writeFile(t, "a.txt", "a2\n")
-	if err := AmendNoEdit(true); err != nil {
+	writeFile(t, "b.txt", "b2\n")
+	writeFile(t, "scratch.txt", "keep untracked\n")
+	if err := Add(); err != nil { // git add -u
+		t.Fatalf("Add tracked: %v", err)
+	}
+	if err := AmendNoEdit(false); err != nil {
 		t.Fatalf("AmendNoEdit: %v", err)
+	}
+	if _, err := Run("ls-files", "--error-unmatch", "scratch.txt"); err == nil {
+		t.Fatal("Add() staged untracked scratch.txt; want tracked changes only")
+	}
+	writeFile(t, "a.txt", "a3\n")
+	if err := AmendNoEdit(true); err != nil {
+		t.Fatalf("AmendNoEdit(all): %v", err)
 	}
 }
 
@@ -1487,60 +1494,13 @@ func TestWorktreesPreservesPathBytes(t *testing.T) {
 	}
 }
 
-// TestWorktreeAddAndRemove drives the add/remove plumbing against real git and
-// asserts the worktree shows up in the listing and is gone after removal.
-func TestWorktreeAddAndRemove(t *testing.T) {
-	newRepo(t)
-	mustGit(t, "branch", "feat")
-	path := filepath.Join(t.TempDir(), "feat-wt")
-
-	if err := WorktreeAdd(path, "feat"); err != nil {
-		t.Fatalf("WorktreeAdd: %v", err)
-	}
-	wts, err := Worktrees()
-	if err != nil {
-		t.Fatalf("Worktrees: %v", err)
-	}
-	found := false
-	for _, wt := range wts {
-		if wt.Branch == "feat" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("added worktree not listed: %v", wts)
-	}
-
-	if err := WorktreeRemove(path, false); err != nil {
-		t.Fatalf("WorktreeRemove: %v", err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("worktree dir still present after remove: %v", err)
-	}
-}
-
-func TestWorktreeAddRejectsBadArgs(t *testing.T) {
-	newRepo(t)
-	if err := WorktreeAdd("/tmp/x", "-evil"); err == nil {
-		t.Error("WorktreeAdd accepted a flag-like branch name")
-	}
-	if err := WorktreeAdd("", "feat"); err == nil {
-		t.Error("WorktreeAdd accepted an empty path")
-	}
-	if err := WorktreeRemove("", false); err == nil {
-		t.Error("WorktreeRemove accepted an empty path")
-	}
-}
-
 // TestIsCleanAt asserts the per-directory clean check reflects a linked
 // worktree's own working-tree state, independent of the main worktree.
 func TestIsCleanAt(t *testing.T) {
 	newRepo(t)
 	mustGit(t, "branch", "feat")
 	path := filepath.Join(t.TempDir(), "feat-wt")
-	if err := WorktreeAdd(path, "feat"); err != nil {
-		t.Fatalf("WorktreeAdd: %v", err)
-	}
+	mustGit(t, "worktree", "add", path, "feat")
 	clean, err := IsCleanAt(path)
 	if err != nil {
 		t.Fatalf("IsCleanAt: %v", err)
@@ -2286,402 +2246,6 @@ func TestCheckBranchName(t *testing.T) {
 	}
 }
 
-// TestDiffCachedHunks pins the -U0 section parser: the classify-or-refuse
-// contract means every staged change is either a text Hunk or an
-// UnsupportedRecord, across edits, deletions, binary, mode, rename,
-// non-ASCII names, and content lines that look like diff headers.
-func TestDiffCachedHunks(t *testing.T) {
-	// mustHunks stages nothing itself; it just runs the parser and fails on error.
-	mustHunks := func(t *testing.T) ([]Hunk, []UnsupportedRecord) {
-		t.Helper()
-		hunks, unsupported, err := DiffCachedHunks()
-		if err != nil {
-			t.Fatalf("DiffCachedHunks: %v", err)
-		}
-		return hunks, unsupported
-	}
-
-	t.Run("single edit, pure addition, two hunks", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "f.txt", "l1\nl2\nl3\nl4\nl5\n")
-		mustGit(t, "add", "f.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-
-		writeFile(t, "f.txt", "l1\nEDIT\nl3\nl4\nl5\n")
-		mustGit(t, "add", "f.txt")
-		hunks, unsupported := mustHunks(t)
-		want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
-		if len(hunks) != 1 || hunks[0] != want || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want exactly %+v", hunks, unsupported, want)
-		}
-
-		writeFile(t, "f.txt", "l1\nl2\nl3\nNEW\nl4\nl5\n")
-		mustGit(t, "add", "f.txt")
-		hunks, _ = mustHunks(t)
-		if len(hunks) != 1 || hunks[0].OldN != 0 || hunks[0].NewN != 1 {
-			t.Fatalf("addition hunk = %+v, want OldN==0 NewN==1", hunks)
-		}
-
-		writeFile(t, "f.txt", "E1\nl2\nl3\nl4\nE5\n")
-		mustGit(t, "add", "f.txt")
-		hunks, _ = mustHunks(t)
-		if len(hunks) != 2 || hunks[0].OldStart != 1 || hunks[1].OldStart != 5 {
-			t.Fatalf("hunks = %+v, want two in f.txt at 1 and 5", hunks)
-		}
-	})
-
-	t.Run("whole-file deletion keeps the pre-image name", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "gone.txt", "a\nb\n")
-		mustGit(t, "add", "gone.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		mustGit(t, "rm", "-q", "gone.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "gone.txt" || hunks[0].OldN != 2 || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one deletion hunk on gone.txt OldN=2", hunks, unsupported)
-		}
-	})
-
-	t.Run("binary file is an unsupported record", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "bin.dat", "\x00\x01\x02")
-		mustGit(t, "add", "bin.dat")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "binary file" || unsupported[0].File != "bin.dat" {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one binary record for bin.dat", hunks, unsupported)
-		}
-	})
-
-	t.Run("mode-only change is an unsupported record", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "script.sh", "echo hi\n")
-		mustGit(t, "add", "script.sh")
-		mustGit(t, "commit", "-q", "-m", "base")
-		mustGit(t, "update-index", "--chmod=+x", "script.sh")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "mode change" || unsupported[0].File != "script.sh" {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one mode record for script.sh", hunks, unsupported)
-		}
-	})
-
-	t.Run("mode change plus text edit keeps the hunk AND records the mode", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "script.sh", "one\ntwo\n")
-		mustGit(t, "add", "script.sh")
-		mustGit(t, "commit", "-q", "-m", "base")
-		writeFile(t, "script.sh", "one\nTWO\n")
-		mustGit(t, "add", "script.sh")
-		mustGit(t, "update-index", "--chmod=+x", "script.sh")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "script.sh" {
-			t.Fatalf("hunks = %+v, want the text hunk kept", hunks)
-		}
-		if len(unsupported) != 1 || unsupported[0].Reason != "mode change" {
-			t.Fatalf("unsupported = %+v, want the mode record alongside the hunk", unsupported)
-		}
-	})
-
-	t.Run("rename with edit is an unsupported record, hunks dropped", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "old.txt", "a\nb\nc\nd\ne\nf\ng\nh\n")
-		mustGit(t, "add", "old.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		mustGit(t, "mv", "old.txt", "new.txt")
-		writeFile(t, "new.txt", "a\nB\nc\nd\ne\nf\ng\nh\n")
-		mustGit(t, "add", "new.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "rename" {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one rename record with no hunks", hunks, unsupported)
-		}
-	})
-
-	t.Run("non-ASCII filename arrives raw and unquoted", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "fö.txt", "x\ny\n")
-		mustGit(t, "add", "fö.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		writeFile(t, "fö.txt", "X\ny\n")
-		mustGit(t, "add", "fö.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "fö.txt" || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one hunk on the raw name", hunks, unsupported)
-		}
-	})
-
-	t.Run("content line that looks like a diff header does not desync", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "real.txt", "keep\n-- a/decoy\nkeep2\n")
-		mustGit(t, "add", "real.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		// Deleting the decoy line makes the -U0 diff carry the content line
-		// "--- a/decoy", which must NOT be taken as a file header.
-		writeFile(t, "real.txt", "keep\nkeep2\n")
-		mustGit(t, "add", "real.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "real.txt" || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one hunk still attributed to real.txt", hunks, unsupported)
-		}
-	})
-
-	t.Run("empty added file is refused, not omitted", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "f.txt", "l1\nl2\n")
-		mustGit(t, "add", "f.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		// An empty added file produces a `new file mode` section with NO
-		// hunks — it must still be accounted for.
-		writeFile(t, "empty.txt", "")
-		mustGit(t, "add", "empty.txt")
-		writeFile(t, "f.txt", "l1\nEDIT\n")
-		mustGit(t, "add", "f.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "f.txt" {
-			t.Fatalf("hunks = %+v, want the f.txt edit only", hunks)
-		}
-		if len(unsupported) != 1 || unsupported[0].File != "empty.txt" {
-			t.Fatalf("unsupported = %+v, want a refusal naming empty.txt", unsupported)
-		}
-	})
-
-	t.Run("empty deleted file is refused, not omitted", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "gone.txt", "")
-		mustGit(t, "add", "gone.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		mustGit(t, "rm", "-q", "gone.txt")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].File != "gone.txt" {
-			t.Fatalf("hunks = %+v unsupported = %+v, want a refusal naming gone.txt", hunks, unsupported)
-		}
-	})
-
-	t.Run("noprefix and mnemonicPrefix configs cannot reshape the stream", func(t *testing.T) {
-		for _, cfg := range [][2]string{{"diff.noprefix", "true"}, {"diff.mnemonicPrefix", "true"}} {
-			newRepo(t)
-			writeFile(t, "f.txt", "l1\nl2\n")
-			mustGit(t, "add", "f.txt")
-			mustGit(t, "commit", "-q", "-m", "base")
-			writeFile(t, "f.txt", "l1\nEDIT\n")
-			mustGit(t, "add", "f.txt")
-			mustGit(t, "config", cfg[0], cfg[1])
-			hunks, unsupported := mustHunks(t)
-			want := Hunk{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}
-			if len(hunks) != 1 || hunks[0] != want || len(unsupported) != 0 {
-				t.Fatalf("%s: hunks = %+v unsupported = %+v, want exactly %+v", cfg[0], hunks, unsupported, want)
-			}
-			mustGit(t, "config", "--unset", cfg[0])
-		}
-	})
-
-	t.Run("color.ui=always cannot inject escapes into the stream", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "f.txt", "l1\nl2\n")
-		mustGit(t, "add", "f.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		writeFile(t, "f.txt", "l1\nEDIT\n")
-		mustGit(t, "add", "f.txt")
-		mustGit(t, "config", "color.ui", "always")
-		hunks, unsupported := mustHunks(t)
-		if len(hunks) != 1 || hunks[0].File != "f.txt" || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one clean hunk", hunks, unsupported)
-		}
-	})
-
-	t.Run("configured external diff driver is never invoked", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "f.txt", "l1\nl2\n")
-		mustGit(t, "add", "f.txt")
-		mustGit(t, "commit", "-q", "-m", "base")
-		writeFile(t, "f.txt", "l1\nEDIT\n")
-		mustGit(t, "add", "f.txt")
-		sentinel := filepath.Join(t.TempDir(), "sentinel")
-		stub := writeSentinelStub(t, filepath.Dir(sentinel), "extdiff", sentinel)
-		mustGit(t, "config", "diff.external", stub)
-		hunks, unsupported := mustHunks(t)
-		if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
-			t.Fatal("external diff driver was invoked")
-		}
-		if len(hunks) != 1 || hunks[0].File != "f.txt" || len(unsupported) != 0 {
-			t.Fatalf("hunks = %+v unsupported = %+v, want the real diff's hunk", hunks, unsupported)
-		}
-	})
-
-	t.Run("configured textconv driver is never invoked", func(t *testing.T) {
-		newRepo(t)
-		writeFile(t, "bin.dat", "\x00\x01\x02")
-		mustGit(t, "add", "bin.dat")
-		mustGit(t, "commit", "-q", "-m", "base")
-		writeFile(t, "bin.dat", "\x00\x03\x04")
-		mustGit(t, "add", "bin.dat")
-		sentinel := filepath.Join(t.TempDir(), "sentinel")
-		stub := writeSentinelStub(t, filepath.Dir(sentinel), "textconv", sentinel)
-		mustGit(t, "config", "diff.driver.textconv", stub)
-		hunks, unsupported := mustHunks(t)
-		if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
-			t.Fatal("textconv driver was invoked")
-		}
-		if len(hunks) != 0 || len(unsupported) != 1 || unsupported[0].Reason != "binary file" {
-			t.Fatalf("hunks = %+v unsupported = %+v, want one binary record", hunks, unsupported)
-		}
-	})
-}
-
-// TestBuildAndLandAmendedTip pins the temp-index amend: a staged patch
-// captured on one branch builds into ANOTHER branch's tip without any
-// checkout, preserving the tip's parent, author, and message; Land moves the
-// ref compare-and-swapped on the tip the build read; a patch that does not
-// apply leaves the repository (and the caller's index) untouched.
-func TestBuildAndLandAmendedTip(t *testing.T) {
-	newRepo(t)
-	// target owns shared.txt line 2; top adds only its own file, so the staged
-	// patch's context lines are identical in top's and target's trees.
-	writeFile(t, "shared.txt", "one\ntwo\nthree\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "seed shared")
-	mustGit(t, "checkout", "-q", "-b", "target")
-	writeFile(t, "shared.txt", "one\ntwo-owned\nthree\n")
-	mustGit(t, "commit", "-q", "-am", "target owns line 2")
-	oldTip := mustGit(t, "rev-parse", "HEAD")
-	oldParent := mustGit(t, "rev-parse", "HEAD^")
-	oldAuthor := mustGit(t, "log", "-1", "--format=%an <%ae> %aI", oldTip)
-	mustGit(t, "checkout", "-q", "-b", "top")
-	writeFile(t, "top.txt", "top\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "top work")
-
-	writeFile(t, "shared.txt", "one\ntwo-owned-fixed\nthree\n")
-	mustGit(t, "add", "shared.txt")
-	hunks, _, err := DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks: %v", err)
-	}
-	patch, err := DiffCachedPatchFor(hunks)
-	if err != nil || len(patch) == 0 {
-		t.Fatalf("DiffCachedPatchFor(all) = %d bytes, %v; want a non-empty patch", len(patch), err)
-	}
-
-	newTip, builtOn, err := BuildAmendedTip("target", patch)
-	if err != nil {
-		t.Fatalf("BuildAmendedTip: %v", err)
-	}
-	if newTip == oldTip {
-		t.Fatal("BuildAmendedTip returned the old tip; nothing was amended")
-	}
-	if builtOn != oldTip {
-		t.Fatalf("BuildAmendedTip built on %s, want the read tip %s", builtOn, oldTip)
-	}
-	// The build is side-effect-free: the ref has not moved yet.
-	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != oldTip {
-		t.Fatalf("target = %s after build, want untouched %s until Land", got, oldTip)
-	}
-	if err := LandAmendedTip("target", builtOn, newTip); err != nil {
-		t.Fatalf("LandAmendedTip: %v", err)
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
-		t.Fatalf("target = %s, want the landed tip %s", got, newTip)
-	}
-	if got := mustGit(t, "rev-parse", newTip+"^"); got != oldParent {
-		t.Fatalf("amended parent = %s, want %s (amend in place, not a new commit on top)", got, oldParent)
-	}
-	if got := mustGit(t, "log", "-1", "--format=%s", newTip); got != "target owns line 2" {
-		t.Fatalf("amended subject = %q, want the original preserved", got)
-	}
-	if got := mustGit(t, "log", "-1", "--format=%an <%ae> %aI", newTip); got != oldAuthor {
-		t.Fatalf("amended author = %q, want the original %q", got, oldAuthor)
-	}
-	if got := mustGit(t, "show", "target:shared.txt"); !strings.Contains(got, "two-owned-fixed") {
-		t.Fatalf("target:shared.txt = %q, want the absorbed edit", got)
-	}
-	// The caller's worktree and index are untouched: still on top, edit staged.
-	if got := mustGit(t, "rev-parse", "--abbrev-ref", "HEAD"); got != "top" {
-		t.Fatalf("HEAD = %q, want top (no checkout)", got)
-	}
-	if got := mustGit(t, "diff", "--cached", "--name-only"); got != "shared.txt" {
-		t.Fatalf("staged files = %q, want the edit still staged here", got)
-	}
-
-	// A patch that does not apply to target's tree fails cleanly: ref untouched.
-	garbage := []byte("diff --git a/shared.txt b/shared.txt\n--- a/shared.txt\n+++ b/shared.txt\n@@ -1,3 +1,3 @@\n-nope\n-lines\n-mismatch\n+x\n+y\n+z\n")
-	if _, _, err := BuildAmendedTip("target", garbage); err == nil {
-		t.Fatal("BuildAmendedTip with a non-applying patch succeeded")
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/target"); got != newTip {
-		t.Fatalf("target = %s after failed build, want untouched %s", got, newTip)
-	}
-}
-
-// TestBuildAmendedTipMergeTip pins the multi-parent path: amending a branch
-// whose tip is a merge commit preserves BOTH parents (the -p loop), the
-// subject, and the merged content.
-func TestBuildAmendedTipMergeTip(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "shared.txt", "one\ntwo\nthree\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "seed shared")
-	mustGit(t, "checkout", "-q", "-b", "side")
-	writeFile(t, "side.txt", "side\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "side work")
-	mustGit(t, "checkout", "-q", "main")
-	mustGit(t, "merge", "-q", "--no-ff", "-m", "merge side", "side")
-	oldTip := mustGit(t, "rev-parse", "HEAD")
-	oldParents := strings.Fields(mustGit(t, "rev-list", "--parents", "-n1", oldTip))[1:]
-	if len(oldParents) != 2 {
-		t.Fatalf("fixture tip has %d parents, want a merge commit", len(oldParents))
-	}
-
-	// Capture a patch against the merged tree from a throwaway branch.
-	mustGit(t, "checkout", "-q", "-b", "scratch")
-	writeFile(t, "shared.txt", "one\ntwo-fixed\nthree\n")
-	mustGit(t, "add", "shared.txt")
-	mergeHunks, _, err := DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks: %v", err)
-	}
-	patch, err := DiffCachedPatchFor(mergeHunks)
-	if err != nil || len(patch) == 0 {
-		t.Fatalf("DiffCachedPatchFor(all) = %d bytes, %v", len(patch), err)
-	}
-	mustGit(t, "reset", "-q", "--hard", "HEAD")
-
-	newTip, builtOn, err := BuildAmendedTip("main", patch)
-	if err != nil {
-		t.Fatalf("BuildAmendedTip on a merge tip: %v", err)
-	}
-	if err := LandAmendedTip("main", builtOn, newTip); err != nil {
-		t.Fatalf("LandAmendedTip on a merge tip: %v", err)
-	}
-	newParents := strings.Fields(mustGit(t, "rev-list", "--parents", "-n1", newTip))[1:]
-	if len(newParents) != 2 || newParents[0] != oldParents[0] || newParents[1] != oldParents[1] {
-		t.Fatalf("amended parents = %v, want the original merge parents %v in order", newParents, oldParents)
-	}
-	if got := mustGit(t, "log", "-1", "--format=%s", newTip); got != "merge side" {
-		t.Fatalf("amended subject = %q, want the merge subject preserved", got)
-	}
-	if got := mustGit(t, "show", "main:shared.txt"); !strings.Contains(got, "two-fixed") {
-		t.Fatalf("main:shared.txt = %q, want the absorbed edit", got)
-	}
-}
-
-// TestBuildAmendedTipRootTip pins the root-commit refusal: a branch whose
-// tip has no parent errors out at build time with the ref untouched.
-func TestBuildAmendedTipRootTip(t *testing.T) {
-	newRepo(t)
-	mustGit(t, "checkout", "-q", "--orphan", "lone")
-	writeFile(t, "lone.txt", "alone\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "root")
-	tip := mustGit(t, "rev-parse", "refs/heads/lone")
-
-	patch := []byte("diff --git a/lone.txt b/lone.txt\n--- a/lone.txt\n+++ b/lone.txt\n@@ -1 +1 @@\n-alone\n+company\n")
-	if _, _, err := BuildAmendedTip("lone", patch); err == nil || !strings.Contains(err.Error(), "root commit") {
-		t.Fatalf("BuildAmendedTip on a root tip = %v, want the root-commit refusal", err)
-	}
-	if got := mustGit(t, "rev-parse", "refs/heads/lone"); got != tip {
-		t.Fatalf("lone = %s after refused build, want untouched %s", got, tip)
-	}
-}
-
 // TestUpdateRefCompareAndSwap pins the update-ref old-value semantics that
 // LandAmendedTip's `update-ref ref newTip tip` relies on: a swap whose
 // expected old value is stale FAILS and moves nothing. (The mid-call race
@@ -2701,294 +2265,6 @@ func TestUpdateRefCompareAndSwap(t *testing.T) {
 	if got := mustGit(t, "rev-parse", "refs/heads/main"); got != newTip {
 		t.Fatalf("main = %s after failed CAS, want untouched %s", got, newTip)
 	}
-}
-
-// TestResetHardIn pins the dir handling: "" resets the current worktree.
-func TestResetHardIn(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "base.txt", "edited\n")
-	mustGit(t, "add", "base.txt")
-	if err := ResetHardIn("", "HEAD"); err != nil {
-		t.Fatalf("ResetHardIn: %v", err)
-	}
-	if got := mustGit(t, "status", "--porcelain"); got != "" {
-		t.Fatalf("status = %q, want clean after reset --hard", got)
-	}
-}
-
-// TestDiffCachedPatchFor pins the per-target patch reassembler: only the
-// wanted hunks are emitted (headers verbatim, bodies intact), and when two
-// targets own different hunks of the SAME file, each assembled patch's
-// post-image numbers are corrected for the omitted hunks — proven by
-// round-tripping every assembled patch through `git apply --cached
-// --unidiff-zero --check` against a temp index of the pre-image tree.
-func TestDiffCachedPatchFor(t *testing.T) {
-	newRepo(t)
-	// Pre-image: 8 lines; stage an UNEQUAL-size edit early in the file (1
-	// line -> 3 lines, net +2) plus a single-line edit later — the later
-	// hunk's NewStart must shift by −2 when the earlier hunk is omitted.
-	writeFile(t, "f.txt", "a1\np\nq\nr\ns\nt\nu\nz1\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "seed")
-	tip := mustGit(t, "rev-parse", "HEAD")
-	writeFile(t, "f.txt", "A1\nA2\nA3\np\nq\nr\ns\nt\nu\nZ1\n")
-	mustGit(t, "add", "f.txt")
-
-	hunks, unsupported, err := DiffCachedHunks()
-	if err != nil || len(hunks) != 2 || len(unsupported) != 0 {
-		t.Fatalf("fixture hunks = %+v (%v), unsupported=%v; want exactly two text hunks", hunks, err, unsupported)
-	}
-
-	applyCheck := func(t *testing.T, patch []byte) {
-		t.Helper()
-		tmp := filepath.Join(t.TempDir(), "idx")
-		env := append(os.Environ(), "LC_ALL=C", "GIT_INDEX_FILE="+tmp)
-		read := exec.Command("git", "read-tree", tip)
-		read.Env = env
-		if out, err := read.CombinedOutput(); err != nil {
-			t.Fatalf("read-tree: %v\n%s", err, out)
-		}
-		check := exec.Command("git", "apply", "--cached", "--unidiff-zero", "--check", "-")
-		check.Env = env
-		check.Stdin = bytes.NewReader(patch)
-		if out, err := check.CombinedOutput(); err != nil {
-			t.Fatalf("assembled patch does not apply to the pre-image tree: %v\n%s\npatch:\n%s", err, out, patch)
-		}
-	}
-
-	// Each single-hunk selection round-trips against the pre-image tree.
-	first, err := DiffCachedPatchFor(hunks[:1])
-	if err != nil {
-		t.Fatalf("DiffCachedPatchFor(first): %v", err)
-	}
-	if !strings.Contains(string(first), "A2") || strings.Contains(string(first), "Z1") {
-		t.Fatalf("first patch carries the wrong hunks:\n%s", first)
-	}
-	applyCheck(t, first)
-
-	second, err := DiffCachedPatchFor(hunks[1:])
-	if err != nil {
-		t.Fatalf("DiffCachedPatchFor(second): %v", err)
-	}
-	if strings.Contains(string(second), "A2") || !strings.Contains(string(second), "Z1") {
-		t.Fatalf("second patch carries the wrong hunks:\n%s", second)
-	}
-	// The delta-correction: the omitted first hunk is net +2 lines, so the
-	// second hunk's NewStart must read 8 (its position with only ITS change),
-	// not the full-staged 10.
-	if !strings.Contains(string(second), "@@ -8 +8 @@") {
-		t.Fatalf("second patch header not delta-corrected:\n%s", second)
-	}
-	applyCheck(t, second)
-
-	// Selecting both reproduces the full patch semantics.
-	both, err := DiffCachedPatchFor(hunks)
-	if err != nil {
-		t.Fatalf("DiffCachedPatchFor(both): %v", err)
-	}
-	applyCheck(t, both)
-}
-
-// TestDiffCachedPatchesForEquivalence is the batch API's safety net: one
-// shared capture must assemble byte-identical per-target patches to N
-// independent DiffCachedPatchFor calls — the delta correction is computed
-// per target against the same stream's omitted hunks.
-func TestDiffCachedPatchesForEquivalence(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "f.txt", "a1\np\nq\nr\ns\nt\nu\nz1\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "seed")
-	writeFile(t, "f.txt", "A1\nA2\nA3\np\nq\nr\ns\nt\nu\nZ1\n")
-	writeFile(t, "g.txt", "new-file\n")
-	mustGit(t, "add", "-A")
-
-	hunks, _, err := DiffCachedHunks()
-	if err != nil {
-		t.Fatalf("DiffCachedHunks: %v", err)
-	}
-	// Split the staged hunks across two targets, then compare the batched
-	// assembly with independent single calls.
-	first, err := DiffCachedPatchFor(hunks[:1])
-	if err != nil {
-		t.Fatalf("DiffCachedPatchFor(first): %v", err)
-	}
-	rest, err := DiffCachedPatchFor(hunks[1:])
-	if err != nil {
-		t.Fatalf("DiffCachedPatchFor(rest): %v", err)
-	}
-	batch, err := DiffCachedPatchesFor(map[string][]Hunk{
-		"early": hunks[:1],
-		"rest":  hunks[1:],
-	})
-	if err != nil {
-		t.Fatalf("DiffCachedPatchesFor: %v", err)
-	}
-	if string(batch["early"]) != string(first) {
-		t.Fatalf("batch[early] differs from single call:\nbatch:\n%s\nsingle:\n%s", batch["early"], first)
-	}
-	if string(batch["rest"]) != string(rest) {
-		t.Fatalf("batch[rest] differs from single call:\nbatch:\n%s\nsingle:\n%s", batch["rest"], rest)
-	}
-}
-
-// TestCommitRange pins the bounded range walk: exclude..include semantics
-// (shared history AND trunk-only commits excluded), the empty range, and the
-// injection guards.
-func TestCommitRange(t *testing.T) {
-	newRepo(t)
-	commit := func(name, content string) string {
-		writeFile(t, name, content)
-		mustGit(t, "add", "-A")
-		mustGit(t, "commit", "-q", "-m", name)
-		return mustGit(t, "rev-parse", "HEAD")
-	}
-	mustGit(t, "checkout", "-q", "-b", "feat")
-	b := commit("b.txt", "b\n")
-	c := commit("c.txt", "c\n")
-	mustGit(t, "checkout", "-q", "main")
-	d := commit("d.txt", "d\n") // trunk advanced past the branch point
-
-	set, err := CommitRange("main", "feat")
-	if err != nil {
-		t.Fatalf("CommitRange: %v", err)
-	}
-	if len(set) != 2 || !set[b] || !set[c] || set[d] {
-		t.Fatalf("main..feat = %v, want exactly {B,C} (D on the advanced trunk excluded)", set)
-	}
-
-	empty, err := CommitRange("feat", "feat")
-	if err != nil || len(empty) != 0 {
-		t.Fatalf("feat..feat = %v, %v; want empty, nil", empty, err)
-	}
-
-	if _, err := CommitRange("--evil", "feat"); err == nil {
-		t.Fatal("CommitRange accepted a flag-like exclude ref")
-	}
-	if _, err := CommitRange("main", "-bad"); err == nil {
-		t.Fatal("CommitRange accepted a flag-like include ref")
-	}
-}
-
-// TestBlamePorcelain pins the porcelain parser over a real repository: each
-// final line maps to its full provenance — the commit that last touched it,
-// its line number in that commit, and its path there — across two commits.
-func TestBlamePorcelain(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "f.txt", "one\ntwo\nthree\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "c1")
-	c1 := mustGit(t, "rev-parse", "HEAD")
-	writeFile(t, "f.txt", "one\nTWO!\nthree\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "c2")
-	c2 := mustGit(t, "rev-parse", "HEAD")
-
-	lines, err := BlamePorcelain("f.txt", "HEAD")
-	if err != nil {
-		t.Fatalf("BlamePorcelain: %v", err)
-	}
-	for n, want := range map[int]BlameLine{
-		1: {Commit: c1, OriginalLine: 1, FinalLine: 1, Path: "f.txt"},
-		2: {Commit: c2, OriginalLine: 2, FinalLine: 2, Path: "f.txt"},
-		3: {Commit: c1, OriginalLine: 3, FinalLine: 3, Path: "f.txt"},
-	} {
-		if lines[n] != want {
-			t.Fatalf("line %d = %+v, want %+v", n, lines[n], want)
-		}
-	}
-	if len(lines) != 3 {
-		t.Fatalf("lines = %v, want exactly 3 entries", lines)
-	}
-}
-
-// TestBlamePorcelainProvenance exercises the provenance the absorb gate
-// depends on, over real git: a descendant that inserts a line reports the
-// owned line's ORIGINAL number (shifted from its final position), and a
-// rename reports the historical path — both must survive to the caller, not
-// be flattened away.
-func TestBlamePorcelainProvenance(t *testing.T) {
-	newRepo(t)
-	writeFile(t, "f.txt", "top\nx\nbottom\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "c1")
-	writeFile(t, "f.txt", "top\nOWNED\nbottom\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "c2")
-	c2 := mustGit(t, "rev-parse", "HEAD")
-	writeFile(t, "f.txt", "inserted\ntop\nOWNED\nbottom\n")
-	mustGit(t, "add", "f.txt")
-	mustGit(t, "commit", "-q", "-m", "c3 shifts OWNED to line 3")
-
-	lines, err := BlamePorcelain("f.txt", "HEAD")
-	if err != nil {
-		t.Fatalf("BlamePorcelain: %v", err)
-	}
-	if got := lines[3]; got != (BlameLine{Commit: c2, OriginalLine: 2, FinalLine: 3, Path: "f.txt"}) {
-		t.Fatalf("line 3 = %+v, want c2's original line 2 shifted to 3", got)
-	}
-
-	mustGit(t, "mv", "f.txt", "g.txt")
-	mustGit(t, "commit", "-q", "-m", "c4 renames")
-	lines, err = BlamePorcelain("g.txt", "HEAD")
-	if err != nil {
-		t.Fatalf("BlamePorcelain after rename: %v", err)
-	}
-	if got := lines[3]; got.Commit != c2 || got.OriginalLine != 2 || got.FinalLine != 3 || got.Path != "f.txt" {
-		t.Fatalf("line 3 = %+v, want historical path f.txt retained", got)
-	}
-}
-
-// TestParseBlamePorcelain drives the canned-fixture half of the parser:
-// unquoted names with spaces, C-quoted UTF-8 and control-byte names, a
-// filename record missing entirely, and malformed headers — every one of
-// which must land in the map exactly or not at all.
-func TestParseBlamePorcelain(t *testing.T) {
-	sha := strings.Repeat("a", 40)
-
-	t.Run("unquoted names with spaces and UTF-8", func(t *testing.T) {
-		out := sha + " 2 5\nfilename dir with space/f ile.txt\n\tline\n" +
-			sha + " 1 1\nfilename utf-é.txt\n\tligne\n"
-		got := parseBlamePorcelain(out)
-		if got[5] != (BlameLine{Commit: sha, OriginalLine: 2, FinalLine: 5, Path: "dir with space/f ile.txt"}) {
-			t.Fatalf("spaced path = %+v", got[5])
-		}
-		if got[1] != (BlameLine{Commit: sha, OriginalLine: 1, FinalLine: 1, Path: "utf-é.txt"}) {
-			t.Fatalf("utf-8 path = %+v", got[1])
-		}
-	})
-
-	t.Run("C-quoted octal, quote, and control escapes decode", func(t *testing.T) {
-		out := sha + " 1 1\nfilename \"utf-\\303\\251.txt\"\n\tx\n" +
-			sha + " 2 2\nfilename \"quo\\\"te.txt\"\n\tx\n" +
-			sha + " 3 3\nfilename \"tab\\tname.txt\"\n\tx\n" +
-			sha + " 4 4\nfilename \"new\\nline.txt\"\n\tx\n" +
-			sha + " 5 5\nfilename \"back\\\\slash.txt\"\n\tx\n"
-		got := parseBlamePorcelain(out)
-		for n, want := range map[int]string{
-			1: "utf-é.txt",
-			2: `quo"te.txt`,
-			3: "tab\tname.txt",
-			4: "new\nline.txt",
-			5: `back\slash.txt`,
-		} {
-			if got[n].Path != want {
-				t.Fatalf("line %d path = %q, want %q", n, got[n].Path, want)
-			}
-		}
-	})
-
-	t.Run("malformed records are dropped, never guessed", func(t *testing.T) {
-		out := sha + " 1 1\n\tcontent with no filename record\n" + // no filename at all
-			"garbage header\n" +
-			sha + " 2 2\nfilename \"unbalanced\n\tx\n" + // broken quoting
-			sha + " 3\nfilename f.txt\n\tx\n" + // header missing finalLine
-			sha + " notnum 4\nfilename f.txt\n\tx\n" + // non-numeric origLine
-			sha + " 5 5\nfilename f.txt\n\tok\n"
-		got := parseBlamePorcelain(out)
-		if len(got) != 1 || got[5].Path != "f.txt" {
-			t.Fatalf("got = %+v, want only the well-formed line 5 entry", got)
-		}
-	})
 }
 
 // TestLocalBranchRefSkipsProbeForQualifiedAndSHA pins the spawn-count contract:
@@ -3155,83 +2431,6 @@ func TestRunInteractiveScrubsEnv(t *testing.T) {
 	}
 }
 
-// TestCheckIgnoreStdinSlashForm pins the wire contract at the builder level:
-// whatever native form a rel arrives in, check-ignore's stdin sees git's
-// slash-separated pathspec form, NUL-separated with a trailing NUL. The
-// conversion is a no-op on POSIX separators — this test pins the format and
-// the ToSlash application point so a Windows runner exercises the \ path.
-func TestCheckIgnoreStdinSlashForm(t *testing.T) {
-	rel := filepath.Join("sub", "file.txt")
-	got := string(checkIgnoreStdin([]string{rel, "top.txt"}))
-	want := filepath.ToSlash(rel) + "\x00" + "top.txt\x00"
-	if got != want {
-		t.Fatalf("checkIgnoreStdin = %q, want %q", got, want)
-	}
-}
-
-// TestCheckIgnoredNativeKeys pins the result contract: git's -z echo travels
-// in slash form but the returned map is keyed by the input rels, so callers
-// doing ignored[filepath.Rel output] hit. A nested rel exercises the
-// separator boundary the Windows path relies on.
-func TestCheckIgnoredNativeKeys(t *testing.T) {
-	newRepo(t)
-	repo, err := RepoRoot()
-	if err != nil {
-		t.Fatalf("RepoRoot: %v", err)
-	}
-	writeFile(t, filepath.Join(repo, ".gitignore"), "sub/\n")
-	mustGit(t, "add", ".gitignore")
-	mustGit(t, "commit", "-q", "-m", "gitignore")
-
-	rel := filepath.Join("sub", "deep", "file.txt")
-	ignored, err := CheckIgnored(repo, []string{rel, "tracked.txt"})
-	if err != nil {
-		t.Fatalf("CheckIgnored: %v", err)
-	}
-	if !ignored[rel] {
-		t.Fatalf("CheckIgnored keys must be input-form rels: %v missing %q", ignored, rel)
-	}
-	if ignored["tracked.txt"] {
-		t.Fatal("tracked.txt must not be reported ignored")
-	}
-}
-
-// TestLsTreeZ pins the rev-side tracked-path probe --dry-run previews use:
-// the set a fresh `git worktree add <branch>` would materialize, NUL-parsed.
-func TestLsTreeZ(t *testing.T) {
-	newRepo(t)
-	if err := os.MkdirAll(filepath.Join("nested", "dir"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join("nested", "dir", "file.txt"), "x\n")
-	writeFile(t, "space name.txt", "y\n")
-	mustGit(t, "add", "-A")
-	mustGit(t, "commit", "-q", "-m", "tree")
-	mustGit(t, "branch", "feat")
-	// An untracked file must NOT appear — ls-tree reads the commit's tree.
-	writeFile(t, "untracked.txt", "z\n")
-
-	paths, err := LsTreeZ("feat")
-	if err != nil {
-		t.Fatalf("LsTreeZ: %v", err)
-	}
-	got := map[string]bool{}
-	for _, p := range paths {
-		got[p] = true
-	}
-	for _, want := range []string{"base.txt", "nested/dir/file.txt", "space name.txt"} {
-		if !got[want] {
-			t.Fatalf("LsTreeZ missing %q: %v", want, paths)
-		}
-	}
-	if got["untracked.txt"] {
-		t.Fatalf("LsTreeZ included an untracked path: %v", paths)
-	}
-	if _, err := LsTreeZ("refs/heads/nonexistent"); err == nil {
-		t.Fatal("LsTreeZ on a missing ref did not error")
-	}
-}
-
 // TestPublishedStates exercises the full published enum: a pushed-unchanged
 // branch reads current, a locally-advanced one stale, a locally-rewritten one
 // diverged, a never-pushed one missing, and a name with no local ref at all
@@ -3299,5 +2498,75 @@ func TestPublishedStates(t *testing.T) {
 	}
 	if states["feat-current"] != PublishedMissing {
 		t.Fatalf("missing remote gave %q, want missing", states["feat-current"])
+	}
+}
+
+func TestIsCleanAndUnstagedIgnoreUntrackedFiles(t *testing.T) {
+	newRepo(t)
+	writeFile(t, "scratch-plan.md", "untracked notes\n")
+
+	clean, err := IsClean()
+	if err != nil {
+		t.Fatalf("IsClean: %v", err)
+	}
+	if !clean {
+		t.Fatal("untracked file should not mark working tree dirty")
+	}
+	unstaged, err := HasUnstagedChanges()
+	if err != nil {
+		t.Fatalf("HasUnstagedChanges: %v", err)
+	}
+	if unstaged {
+		t.Fatal("untracked file should not count as unstaged tracked change")
+	}
+	// Modifying a tracked file does mark dirty and unstaged.
+	writeFile(t, "base.txt", "modified\n")
+	if clean, _ := IsClean(); clean {
+		t.Fatal("modified tracked file should mark working tree dirty")
+	}
+	if unstaged, _ := HasUnstagedChanges(); !unstaged {
+		t.Fatal("modified tracked file should count as unstaged change")
+	}
+	// Add() stages only tracked files, leaving untracked files untouched.
+	if err := Add(); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	stagedOut := mustGit(t, "diff", "--cached", "--name-only")
+	if stagedOut != "base.txt" {
+		t.Fatalf("Add() staged %q, want only base.txt", stagedOut)
+	}
+}
+
+func TestCommitBodyAndBehindCount(t *testing.T) {
+	newRepo(t)
+	remoteDir := t.TempDir()
+	mustGit(t, "init", "-q", "--bare", remoteDir)
+	mustGit(t, "remote", "add", "origin", remoteDir)
+	mustGit(t, "push", "-q", "-u", "origin", "main")
+
+	writeFile(t, "base.txt", "v2\n")
+	mustGit(t, "add", "base.txt")
+	mustGit(t, "commit", "-q", "-m", "subject line", "-m", "detailed body line")
+
+	body, err := CommitBody("HEAD")
+	if err != nil {
+		t.Fatalf("CommitBody: %v", err)
+	}
+	if body != "detailed body line" {
+		t.Fatalf("CommitBody = %q, want %q", body, "detailed body line")
+	}
+
+	mustGit(t, "push", "-q", "origin", "main")
+	mustGit(t, "reset", "-q", "--hard", "HEAD~1")
+
+	behind, err := BehindCount("refs/heads/main", "refs/remotes/origin/main")
+	if err != nil {
+		t.Fatalf("BehindCount: %v", err)
+	}
+	if behind != 1 {
+		t.Fatalf("BehindCount = %d, want 1", behind)
+	}
+	if zero, err := BehindCount("refs/heads/main", "refs/remotes/origin/missing"); err != nil || zero != 0 {
+		t.Fatalf("BehindCount(missing) = (%d, %v), want (0, nil)", zero, err)
 	}
 }

@@ -9,19 +9,8 @@ import (
 	"testing"
 )
 
-// recovery, fold/squash/onto/rename/delete, undo, track/untrack, and sync.
-// TestWorktreeSharesStackState asserts the stack metadata (kept under the common
-
-// TestShellInstallEmitsShim asserts `st shell install` prints a cd shim that
-// references the directive file, for the shell the user names.
-func TestShellInstallEmitsShim(t *testing.T) {
-	t.Parallel()
-	r := newRepo(t)
-	out := r.stOK("shell", "install", "bash").stdout
-	if !strings.Contains(out, "builtin cd") || !strings.Contains(out, "ST_CD_FILE") {
-		t.Fatalf("shell install bash did not emit a cd shim:\n%s", out)
-	}
-}
+// Core stack journeys: lifecycle, modify, squash, onto, rename, delete,
+// track/untrack, restack guards, doctor --fix, and dry-run parity.
 
 // TestLifecycle exercises the core journey end to end: init, create two stacked
 // branches, inspect via log and status (text + JSON), navigate up/down/top/
@@ -40,10 +29,12 @@ func TestLifecycle(t *testing.T) {
 
 	// create two stacked branches.
 	r.writeFile("a.txt", "a\n")
-	res = r.stOK("create", "feat-a", "-a", "-m", "a")
+	r.git("add", "a.txt")
+	res = r.stOK("create", "feat-a", "-m", "a")
 	wantStdoutContains(t, res, "Created feat-a on top of main")
 	r.writeFile("b.txt", "b\n")
-	res = r.stOK("create", "feat-b", "-a", "-m", "b")
+	r.git("add", "b.txt")
+	res = r.stOK("create", "feat-b", "-m", "b")
 	wantStdoutContains(t, res, "Created feat-b on top of feat-a")
 
 	if got := r.currentBranch(); got != "feat-b" {
@@ -159,8 +150,8 @@ func TestLifecycle(t *testing.T) {
 	res = r.stOK("restack")
 	wantStdoutContains(t, res, "everything up to date")
 
-	// validate reports a healthy stack and exits 0.
-	res = r.stOK("validate")
+	// doctor reports a healthy stack and exits 0.
+	res = r.stOK("doctor")
 	wantStdoutContains(t, res, "no problems found")
 }
 
@@ -214,26 +205,6 @@ func TestModifyMessageReword(t *testing.T) {
 	}
 }
 
-// TestFold folds the top branch into its parent: the parent absorbs the commits
-// and the folded branch is removed.
-func TestFold(t *testing.T) {
-	t.Parallel()
-	r := newRepo(t)
-	r.initStack()
-	r.create("feat-a", "a.txt", "a\n", "a")
-	r.create("feat-b", "b.txt", "b\n", "b")
-	r.stOK("checkout", "feat-b")
-
-	res := r.stOK("fold")
-	wantStdoutContains(t, res, "Folded feat-b into feat-a")
-	if r.branchExists("feat-b") {
-		t.Fatalf("feat-b git branch should be gone after fold")
-	}
-	if !r.fileOnBranch("feat-a", "b.txt") {
-		t.Fatalf("feat-a should contain b.txt after fold")
-	}
-}
-
 // TestSquash collapses multiple commits on a branch into one.
 func TestSquash(t *testing.T) {
 	t.Parallel()
@@ -242,6 +213,7 @@ func TestSquash(t *testing.T) {
 	r.create("feat-a", "a.txt", "a\n", "a")
 	// Add a second commit via modify --commit.
 	r.writeFile("a2.txt", "a2\n")
+	r.git("add", "a2.txt")
 	r.stOK("modify", "--commit", "-m", "a2")
 
 	if n := r.git("rev-list", "--count", "main..feat-a"); n != "2" {
@@ -448,10 +420,10 @@ func TestRestackGuards(t *testing.T) {
 	wantStderrContains(t, res, `branch "ghost" is not tracked`)
 }
 
-// TestValidateRepairDrift forces drift by deleting a tracked branch behind st's
-// back, asserts validate exits non-zero, then repair fixes it and validate
+// TestDoctorFixDrift forces drift by deleting a tracked branch behind st's
+// back, asserts doctor exits non-zero, then doctor --fix fixes it and doctor
 // passes.
-func TestValidateRepairDrift(t *testing.T) {
+func TestDoctorFixDrift(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
@@ -462,15 +434,15 @@ func TestValidateRepairDrift(t *testing.T) {
 	r.stOK("checkout", "main")
 	r.git("branch", "-D", "feat-b")
 
-	res := r.st("validate")
+	res := r.st("doctor")
 	wantExit(t, res, 1)
 	wantStdoutContains(t, res, "problems:")
 	wantStdoutContains(t, res, "feat-b")
 
-	res = r.stOK("repair")
+	res = r.stOK("doctor", "--fix")
 	wantStdoutContains(t, res, "repaired:")
 
-	res = r.stOK("validate")
+	res = r.stOK("doctor")
 	wantStdoutContains(t, res, "no problems found")
 }
 
@@ -498,37 +470,13 @@ func TestRestackDryRun(t *testing.T) {
 	wantStdoutContains(t, res, `"dryRun": true`)
 }
 
-func TestFoldDryRun(t *testing.T) {
-	t.Parallel()
-	r := newRepo(t)
-	r.initStack()
-	r.create("feat-a", "a.txt", "a\n", "a")
-	r.create("feat-b", "b.txt", "b\n", "b")
-	r.create("feat-c", "c.txt", "c\n", "c")
-	r.stOK("checkout", "feat-a")
-	r.create("feat-d", "d.txt", "d\n", "d")
-	r.stOK("checkout", "feat-b")
-
-	beforeLog := r.stOK("log", "--json").stdout
-	beforeTips := captureTips(t, r, "feat-a", "feat-b", "feat-c", "feat-d")
-	got := decodeDryRunResult(t, r.stOK("fold", "--dry-run", "--json"))
-	assertDryRunResult(t, got, "feat-a", []string{"feat-d"}, []string{"feat-b"})
-
-	if afterLog := r.stOK("log", "--json").stdout; afterLog != beforeLog {
-		t.Fatalf("fold dry-run changed log\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
-	}
-	assertTips(t, r, beforeTips)
-	if !r.branchExists("feat-b") {
-		t.Fatal("fold dry-run deleted feat-b")
-	}
-}
-
 func TestSquashDryRun(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
 	r.writeFile("a2.txt", "a2\n")
+	r.git("add", "a2.txt")
 	r.stOK("modify", "--commit", "-m", "a2")
 	r.create("feat-b", "b.txt", "b\n", "b")
 	r.stOK("checkout", "feat-a")
@@ -550,13 +498,14 @@ func TestSquashDryRunSkipsDirtyLinkedWorktreeDescendant(t *testing.T) {
 	r.initStack()
 	r.create("feat-a", "a.txt", "a\n", "a")
 	r.writeFile("a2.txt", "a2\n")
+	r.git("add", "a2.txt")
 	r.stOK("modify", "--commit", "-m", "a2")
 	r.create("feat-b", "b.txt", "b\n", "b")
 	r.stOK("checkout", "feat-a")
 
 	wt := filepath.Join(t.TempDir(), "wt")
 	r.git("worktree", "add", "-q", wt, "feat-b")
-	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wt, "b.txt"), []byte("dirty\n"), 0o644); err != nil {
 		t.Fatalf("dirty linked worktree: %v", err)
 	}
 
@@ -617,7 +566,7 @@ func TestDeleteDryRun(t *testing.T) {
 	}
 }
 
-func TestSyncDryRunRefusesDirtyPrunedWorktree(t *testing.T) {
+func TestSyncDryRunSkipsForeignWorktreeBranch(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t)
 	r.initStack()
@@ -632,12 +581,13 @@ func TestSyncDryRunRefusesDirtyPrunedWorktree(t *testing.T) {
 		t.Fatalf("dirty linked worktree: %v", err)
 	}
 
-	res := r.st("sync", "--dry-run", "--json")
-	if res.exitCode == 0 {
-		t.Fatalf("sync dry-run should fail for a dirty pruned worktree\nstdout:\n%s", res.stdout)
+	res := r.stOK("sync", "--dry-run", "--json")
+	got := decodeDryRunResult(t, res)
+	if len(got.Deleted) != 0 {
+		t.Fatalf("sync dry-run predicted deleting foreign-worktree branch: %+v", got)
 	}
-	if !strings.Contains(res.stderr+res.stdout, "uncommitted changes in its worktree") {
-		t.Fatalf("sync dry-run error should mention the dirty worktree\nstdout:\n%s\nstderr:\n%s", res.stdout, res.stderr)
+	if !strings.Contains(strings.Join(got.Notes, "\n"), "skipped pruning feat-a") {
+		t.Fatalf("sync dry-run notes = %v, want skipped pruning feat-a", got.Notes)
 	}
 	if !r.branchExists("feat-a") {
 		t.Fatal("sync dry-run must not delete feat-a")
@@ -648,7 +598,7 @@ func TestSyncDryRunRefusesDirtyPrunedWorktree(t *testing.T) {
 		t.Fatalf("log --json invalid: %v\n%s", err, out)
 	}
 	if findNode(&root, "feat-a") == nil {
-		t.Fatalf("feat-a should remain tracked after refused sync dry-run:\n%s", out)
+		t.Fatalf("feat-a should remain tracked after sync dry-run:\n%s", out)
 	}
 }
 
@@ -701,72 +651,6 @@ func assertTips(t *testing.T, r *repo, want map[string]string) {
 			t.Fatalf("%s tip changed: before=%s after=%s", name, tip, got)
 		}
 	}
-}
-
-// TestAbsorbDryRunMapping drives the absorb attribution black-box on a real
-// 3-branch stack: a staged single-target edit maps to the branch whose tip
-// owns the line, refusals are empty, and NOTHING mutates (dry-run contract).
-func TestAbsorbDryRunMapping(t *testing.T) {
-	t.Parallel()
-	r := newRepo(t)
-	r.initStack()
-	// Each branch owns a distinct line of shared.txt.
-	r.create("feat-a", "shared.txt", "A\n", "a")
-	r.create("feat-b", "shared.txt", "A\nB\n", "b")
-	r.create("feat-c", "shared.txt", "A\nB\nC\n", "c")
-
-	// Stage a single-target edit to line 1 (owned by feat-a's tip).
-	r.writeFile("shared.txt", "A!\nB\nC\n")
-	r.git("add", "shared.txt")
-
-	tipsBefore := map[string]string{}
-	for _, b := range []string{"main", "feat-a", "feat-b", "feat-c"} {
-		tipsBefore[b] = r.rev(b)
-	}
-
-	out := r.stOK("absorb", "--dry-run", "--json").stdout
-	var res struct {
-		Summary  string `json:"summary"`
-		Absorbed []struct {
-			File   string `json:"file"`
-			Lines  string `json:"lines"`
-			Branch string `json:"branch"`
-			Commit string `json:"commit"`
-		} `json:"absorbed"`
-		Refused []struct {
-			File   string `json:"file"`
-			Lines  string `json:"lines"`
-			Reason string `json:"reason"`
-		} `json:"refused"`
-		DryRun bool `json:"dryRun"`
-	}
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		t.Fatalf("decode absorb json: %v\n%s", err, out)
-	}
-	if !res.DryRun {
-		t.Fatal("absorb --dry-run result not marked dryRun")
-	}
-	if len(res.Absorbed) != 1 || len(res.Refused) != 0 {
-		t.Fatalf("result = %+v, want exactly one absorbed hunk", res)
-	}
-	got := res.Absorbed[0]
-	if got.Branch != "feat-a" || got.File != "shared.txt" || got.Lines != "1" {
-		t.Fatalf("absorbed = %+v, want feat-a shared.txt:1", got)
-	}
-	if got.Commit != tipsBefore["feat-a"] {
-		t.Fatalf("absorbed commit = %s, want feat-a tip %s", got.Commit, tipsBefore["feat-a"])
-	}
-
-	// Zero mutation: every tip unchanged, and the staged hunk still staged.
-	for b, tip := range tipsBefore {
-		if r.rev(b) != tip {
-			t.Fatalf("%s moved during a dry-run absorb", b)
-		}
-	}
-	if diff := r.git("diff", "--cached", "--name-only"); !strings.Contains(diff, "shared.txt") {
-		t.Fatalf("dry-run unstaged the hunk; diff --cached = %q", diff)
-	}
-	r.stOK("validate")
 }
 
 // TestTrackAllDryRun previews the bulk adopt through the real binary: the

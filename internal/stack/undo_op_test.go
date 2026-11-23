@@ -82,7 +82,9 @@ func TestUndoCreateDeletesBranchAndRestoresHEAD(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 }
 
-func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
+// A created branch checked out in another worktree must cause Undo to refuse
+// cleanly without touching that worktree or deleting the branch.
+func TestUndoCreateRefusesForeignWorktreeOwner(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")
 	if err := f.Checkout("a"); err != nil {
@@ -90,78 +92,23 @@ func TestUndoCreateRemovesLinkedWorktreeBeforeDeletingBranch(t *testing.T) {
 	}
 
 	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
+	if _, err := Create(env, s, "b", "", false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.Checkout("a"); err != nil {
+		t.Fatal(err)
 	}
 	f.addWorktree("/wt/b", "b")
-	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
-
-	if _, err := Undo(env, s, entry, false); err != nil {
-		t.Fatalf("undo: %v", err)
-	}
-	if f.BranchExists("b") || s.IsTracked("b") {
-		t.Fatal("undo left the created branch behind")
-	}
-	if _, ok := f.linkedWorktrees["b"]; ok {
-		t.Fatal("undo left the created branch worktree behind")
-	}
-	assertUndoRestored(t, f, s, entry)
-}
-
-// A created branch whose worktree was materialized AFTER the create (so the
-// undo entry never recorded it) must still have its clean linked worktree
-// released before the branch delete — this is the recovery sequence the tool
-// itself recommends after a failed `st create --worktree`.
-func TestUndoCreateRemovesUnrecordedLinkedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
-	}
-	f.addWorktree("/wt/unrecorded", "b")
-
-	if _, err := Undo(env, s, entry, false); err != nil {
-		t.Fatalf("undo: %v", err)
-	}
-	if f.BranchExists("b") || s.IsTracked("b") {
-		t.Fatal("undo left the created branch behind")
-	}
-	if _, ok := f.linkedWorktrees["b"]; ok {
-		t.Fatal("undo left the unrecorded linked worktree behind")
-	}
-	assertUndoRestored(t, f, s, entry)
-}
-
-// A dirty unrecorded worktree must refuse, leaving both the worktree and the
-// branch in place.
-func TestUndoCreateRefusesDirtyUnrecordedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
-	}
-	f.addWorktree("/wt/unrecorded", "b")
-	f.markWorktreeDirty("b")
 
 	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
-		t.Fatalf("undo error = %v, want dirty-worktree refusal", err)
+	if err == nil || !strings.Contains(err.Error(), "another worktree") {
+		t.Fatalf("undo error = %v, want foreign-worktree refusal", err)
 	}
 	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("failed undo removed the dirty worktree")
+		t.Fatal("refused undo removed foreign worktree")
 	}
 	if !f.BranchExists("b") {
-		t.Fatal("failed undo deleted the branch anyway")
+		t.Fatal("refused undo deleted the branch anyway")
 	}
 }
 
@@ -253,11 +200,9 @@ func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 	}
 
 	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
+	if _, err := Create(env, s, "b", "", false); err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	f.addWorktree("/wt/b", "b")
-	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
 	if err := f.Checkout("main"); err != nil {
 		t.Fatal(err)
 	}
@@ -272,9 +217,6 @@ func TestUndoToleratesFinalCheckoutBranchOwnedByOtherWorktree(t *testing.T) {
 	}
 	if f.BranchExists("b") || s.IsTracked("b") {
 		t.Fatal("undo left the created branch behind")
-	}
-	if _, ok := f.linkedWorktrees["b"]; ok {
-		t.Fatal("undo left the created branch worktree behind")
 	}
 }
 
@@ -471,99 +413,6 @@ func TestUndoPropagatesFinalCheckoutErrorOnDirtyTree(t *testing.T) {
 
 	if _, err := Undo(env, s, entry, false); !errors.Is(err, boom) {
 		t.Fatalf("undo error = %v, want %v", err, boom)
-	}
-}
-
-// TestUndoCreateRefusesWorktreePathMismatch pins the safety half of undo's
-// worktree teardown: when the journal recorded a created worktree at one path
-// but the branch's live linked worktree is somewhere else, the journal and
-// topology disagree — refuse, and abort before the branch delete.
-func TestUndoCreateRefusesWorktreePathMismatch(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
-	}
-	f.addWorktree("/wt/other", "b")
-	entry.CreatedWorktrees = map[string]string{"b": "/wt/b"}
-
-	_, err := Undo(env, s, entry, false)
-	if err == nil {
-		t.Fatal("undo succeeded despite created-worktree path mismatch")
-	}
-	if !strings.Contains(err.Error(), "not removing an unexpected worktree") {
-		t.Fatalf("error = %v, want the path-mismatch refusal", err)
-	}
-	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("undo removed the mismatched worktree")
-	}
-	if !f.BranchExists("b") {
-		t.Fatal("undo deleted the branch despite refusing its worktree")
-	}
-}
-
-// TestUndoRefusesInsideUnrecordedDoomedWorktree pins the engine belt under
-// cmd's teleport pre-flight: a branch the undone op created whose worktree was
-// materialized AFTER the journal entry ran (so the journal recorded none) is
-// still doomed — Undo must refuse when the caller's cwd is inside it rather
-// than deleting the process's own worktree.
-func TestUndoRefusesInsideUnrecordedDoomedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	f.addWorktree("/wt/b", "b") // materialized after the op ran: unrecorded
-	f.repoRoot = "/wt/b"        // the caller is standing inside it
-	// (f.head stays "a" — the fake binds head to the main worktree; the linked
-	// worktree is where the process's cwd notionally sits via repoRoot)
-
-	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "you are inside it") {
-		t.Fatalf("undo = %v, want the cwd-inside refusal", err)
-	}
-	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("undo removed the worktree the caller was inside")
-	}
-	if !f.BranchExists("b") {
-		t.Fatal("undo deleted the branch despite refusing its worktree")
-	}
-}
-
-// TestUndoPropagatesRepoRootProbeFailure: the cwd guard is fail-closed — a
-// broken rev-parse probe surfaces rather than guessing "not inside" and
-// deleting the caller's worktree.
-func TestUndoPropagatesRepoRootProbeFailure(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	f.addWorktree("/wt/b", "b")
-	boom := errors.New("rev-parse exploded")
-	f.failErr["RepoRoot"] = boom
-
-	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "rev-parse exploded") {
-		t.Fatalf("undo = %v, want the RepoRoot probe failure surfaced", err)
-	}
-	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("undo removed the worktree after its cwd probe failed")
 	}
 }
 
@@ -926,47 +775,6 @@ func TestUndoCleanupThenBatchFailure(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 }
 
-// TestUndoEntryAbsorbedCommitsJSON pins the journal encoding of the absorb
-// recovery map: it round-trips through marshal/unmarshal, and entries written
-// before the field existed (no key at all) still decode with a nil map —
-// journal format is additive, not versioned.
-func TestUndoEntryAbsorbedCommitsJSON(t *testing.T) {
-	entry := UndoEntry{
-		Label:           "absorb",
-		State:           json.RawMessage(`{"version":1}`),
-		Refs:            map[string]string{"main": "aaa"},
-		AbsorbedCommits: map[string]string{"feat-a": "abc123"},
-	}
-	data, err := json.Marshal(entry)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	var decoded UndoEntry
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if decoded.AbsorbedCommits["feat-a"] != "abc123" {
-		t.Fatalf("absorbedCommits = %v, want feat-a -> abc123", decoded.AbsorbedCommits)
-	}
-
-	// An entry written by an st that predates the field: no key, decodes nil.
-	var old UndoEntry
-	if err := json.Unmarshal([]byte(`{"label":"absorb","state":{},"refs":{}}`), &old); err != nil {
-		t.Fatalf("unmarshal old-format entry: %v", err)
-	}
-	if old.AbsorbedCommits != nil {
-		t.Fatalf("old-format absorbedCommits = %v, want nil", old.AbsorbedCommits)
-	}
-	// And omitempty keeps new entries without absorbed commits byte-identical.
-	plain, err := json.Marshal(UndoEntry{Label: "modify", State: json.RawMessage(`{}`)})
-	if err != nil {
-		t.Fatalf("marshal plain: %v", err)
-	}
-	if strings.Contains(string(plain), "absorbedCommits") {
-		t.Fatalf("non-absorb entry carries the key: %s", plain)
-	}
-}
-
 // TestUndoBatchesExistenceProbes pins plan-016's spawn contract: an undo that
 // dooms several branches performs ONE Tips() batch read and zero per-ref
 // BranchExists/RevParse probes — previously each doomed branch, its parent,
@@ -1023,40 +831,6 @@ func TestUndoDegradesToPerBranchProbes(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 	if f.calls["BranchExists"]-before["BranchExists"] == 0 {
 		t.Fatal("Tips failure did not fall back to per-branch BranchExists probes")
-	}
-}
-
-// The preview twin: one Tips() batch answers the created-candidate, doomed
-// HEAD, restore-tip, and checkout-target questions — zero per-ref spawns.
-func TestUndoPreviewBatchesExistenceProbes(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-	entry := mustSnapshot(t, s, f, "track")
-	for _, name := range []string{"b", "c", "d"} {
-		if err := f.CreateBranch(name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	entry.CreatedBranches = []string{"b", "c", "d"}
-
-	before := f.callsSnapshot()
-	res, err := UndoPreview(env, s, entry, true, 1, nil)
-	if err != nil {
-		t.Fatalf("undo preview: %v", err)
-	}
-	for method, want := range map[string]int{"Tips": 1, "BranchExists": 0, "RevParse": 0} {
-		if got := f.calls[method] - before[method]; got != want {
-			t.Fatalf("%s calls during UndoPreview = %d, want %d", method, got, want)
-		}
-	}
-	if len(res.Blockers) != 0 {
-		t.Fatalf("preview blockers = %v, want none", res.Blockers)
-	}
-	if len(res.WouldDelete) != 3 {
-		t.Fatalf("WouldDelete = %v, want b, c, d", res.WouldDelete)
 	}
 }
 
@@ -1418,60 +1192,5 @@ func TestUndoDeletesDoomedInOneBatch(t *testing.T) {
 	assertUndoRestored(t, f, s, entry)
 	if res.Summary == "" {
 		t.Fatal("undo returned no summary")
-	}
-}
-
-// A stale unrecorded worktree must refuse, leaving the branch in place — a
-// dead registration cannot be probed or removed, so undo names the prune
-// remedy rather than tearing down what git still considers checked out.
-func TestUndoCreateRefusesStaleUnrecordedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
-	}
-	f.addWorktree("/wt/unrecorded", "b")
-	f.markWorktreeStale("/wt/unrecorded")
-
-	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "git worktree prune") {
-		t.Fatalf("undo error = %v, want a stale-registration refusal naming the remedy", err)
-	}
-	if !f.BranchExists("b") {
-		t.Fatal("failed undo deleted the branch anyway")
-	}
-}
-
-// A locked unrecorded worktree must refuse, leaving both the worktree and the
-// branch in place — the standing hold outranks undo's created-worktree
-// teardown, same as dirty.
-func TestUndoCreateRefusesLockedUnrecordedWorktree(t *testing.T) {
-	f, s, env := newEnvState()
-	mkBranch(t, env, s, f, "main", "a")
-	if err := f.Checkout("a"); err != nil {
-		t.Fatal(err)
-	}
-
-	entry := mustSnapshot(t, s, f, "create")
-	if _, err := CreateInWorktreePrep(env, s, "b"); err != nil {
-		t.Fatalf("create in worktree prep: %v", err)
-	}
-	f.addWorktree("/wt/unrecorded", "b")
-	f.markWorktreeLocked("/wt/unrecorded")
-
-	_, err := Undo(env, s, entry, false)
-	if err == nil || !strings.Contains(err.Error(), "is locked") {
-		t.Fatalf("undo error = %v, want locked-worktree refusal", err)
-	}
-	if _, ok := f.linkedWorktrees["b"]; !ok {
-		t.Fatal("failed undo removed the locked worktree")
-	}
-	if !f.BranchExists("b") {
-		t.Fatal("failed undo deleted the branch anyway")
 	}
 }

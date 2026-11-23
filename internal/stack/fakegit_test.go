@@ -75,26 +75,9 @@ type fakeGit struct {
 	// linkedWorktrees models extra (non-main) worktrees by branch -> path. The
 	// main worktree (f.head) is synthesized in Worktrees().
 	linkedWorktrees map[string]string
-	// stagedHunks/stagedUnsupported/blame are the canned inputs for the
-	// absorb attribution: DiffCachedHunks returns stagedHunks plus
-	// stagedUnsupported; BlamePorcelain returns blame[file], or blameErr[file]
-	// to fail one file's probe while the rest succeed.
-	stagedHunks       []git.Hunk
-	stagedUnsupported []git.UnsupportedRecord
-	blame             map[string]map[int]git.BlameLine
-	blameErr          map[string]error
-	// stagedPatch is the canned DiffCachedPatch payload; applyErr, when set,
-	// makes BuildAmendedTip fail like a patch that does not apply to the
-	// target's tree (nothing mutated). resetHardDirs records the ResetHardIn
-	// calls ("" = the current worktree) so tests can pin the absorb sequence.
-	stagedPatch []byte
-	applyErr    error
-
 	// looseOff disables the loose-ref fast path — modeling a layout where no
-	// loose ref file is readable (packed/mirror layouts), so every
-	// LooseBranchTip call misses and the caller falls back to RevParse.
-	looseOff      bool
-	resetHardDirs []string
+	// loose ref file is readable (packed/mirror layouts).
+	looseOff bool
 	// dirtyWT marks linked worktrees (by branch) as having a dirty tree, so
 	// IsCleanIn can model a skipped dependent in the cascade tests.
 	dirtyWT map[string]bool
@@ -299,8 +282,6 @@ type tipReadSpyGit struct {
 	tipsCalls          int
 	tipsForCalls       int
 	currentBranchCalls int
-	commitRangeCalls   int
-	blameCalls         int
 	worktreesCalls     int
 	tipsForNames       [][]string
 }
@@ -324,16 +305,6 @@ func (g *tipReadSpyGit) TipsFor(names []string) (map[string]string, error) {
 	g.tipsForCalls++
 	g.tipsForNames = append(g.tipsForNames, append([]string(nil), names...))
 	return g.Git.TipsFor(names)
-}
-
-func (g *tipReadSpyGit) CommitRange(exclude, include string) (map[string]bool, error) {
-	g.commitRangeCalls++
-	return g.Git.CommitRange(exclude, include)
-}
-
-func (g *tipReadSpyGit) BlamePorcelain(file, rev string) (map[int]git.BlameLine, error) {
-	g.blameCalls++
-	return g.Git.BlamePorcelain(file, rev)
 }
 
 func (g *tipReadSpyGit) Worktrees() ([]git.Worktree, error) {
@@ -430,93 +401,6 @@ func (f *fakeGit) squashInto(t *testing.T, trunk, branch string) {
 	f.branches[trunk] = id
 }
 
-// DiffCachedHunks returns the canned staged hunks a test set on stagedHunks.
-func (f *fakeGit) DiffCachedHunks() ([]git.Hunk, []git.UnsupportedRecord, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.fail("DiffCachedHunks"); err != nil {
-		return nil, nil, err
-	}
-	return f.stagedHunks, f.stagedUnsupported, nil
-}
-
-// BlamePorcelain returns the canned per-file blame a test set on blame, or the
-// per-file error in blameErr. The rev is ignored: engine tests only ever blame
-// HEAD.
-func (f *fakeGit) BlamePorcelain(file, _ string) (map[int]git.BlameLine, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.fail("BlamePorcelain"); err != nil {
-		return nil, err
-	}
-	if err := f.blameErr[file]; err != nil {
-		return nil, err
-	}
-	return f.blame[file], nil
-}
-
-// DiffCachedPatchesFor ignores the hunk selection (patch content is not
-// modeled; real reassembly is proven by the git-level and e2e tests). Each
-// target gets the same stagedPatch bytes.
-func (f *fakeGit) DiffCachedPatchesFor(want map[string][]git.Hunk) (map[string][]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.fail("DiffCachedPatchesFor"); err != nil {
-		return nil, err
-	}
-	patches := make(map[string][]byte, len(want))
-	for target := range want {
-		patches[target] = f.stagedPatch
-	}
-	return patches, nil
-}
-
-// BuildAmendedTip models the side-effect-free half: the new commit object is
-// minted (like commit-tree leaves objects in the odb) but no ref moves.
-// LandAmendedTip's old-tip check is the CAS.
-func (f *fakeGit) BuildAmendedTip(branch string, _ []byte) (string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls["BuildAmendedTip"]++
-	if f.applyErr != nil {
-		return "", "", f.applyErr
-	}
-	tip, ok := f.branches[branch]
-	if !ok {
-		return "", "", fmt.Errorf("no such branch %q", branch)
-	}
-	old := f.commits[tip]
-	id := f.newID()
-	f.commits[id] = &fakeCommit{id: id, parent: old.parent, subject: old.subject, content: old.content}
-	return id, tip, nil
-}
-
-func (f *fakeGit) LandAmendedTip(branch, oldTip, newTip string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls["LandAmendedTip"]++
-	tip, ok := f.branches[branch]
-	if !ok {
-		return fmt.Errorf("no such branch %q", branch)
-	}
-	if tip != oldTip {
-		return fmt.Errorf("branch %q moved since the amend was built", branch)
-	}
-	if _, ok := f.commits[newTip]; !ok {
-		return fmt.Errorf("no such commit %q", newTip)
-	}
-	f.branches[branch] = newTip
-	// Amending the checked-out branch moves HEAD under the staged copy —
-	// the edits are now part of the tip commit, so the index reads clean
-	// (the same self-resolution the engine relies on by skipping
-	// ResetHardIn when cur is the sole target). Amendments to other
-	// branches run on a temp index and touch no worktree state.
-	if branch == f.head {
-		f.staged = false
-	}
-	return nil
-}
-
 // LooseBranchTip mirrors the in-process loose-ref read: every fake ref
 // lands loose (like real git) unless the test disabled the fast path
 // entirely via looseOff.
@@ -531,33 +415,14 @@ func (f *fakeGit) LooseBranchTip(name string) (string, bool) {
 	return tip, ok
 }
 
-// ResetHardIn records the call; for the current worktree ("") it clears the
-// staged state, mirroring `git reset --hard` dropping the staged copy.
-func (f *fakeGit) ResetHardIn(dir, _ string) error {
+func (f *fakeGit) CommitBody(rev string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail("ResetHardIn"); err != nil {
-		return err
+	if err := f.fail("CommitBody"); err != nil {
+		return "", err
 	}
-	if dir != "" && !f.knownWorktreeDir(dir) {
-		return fmt.Errorf("no worktree at %q", dir)
-	}
-	f.resetHardDirs = append(f.resetHardDirs, dir)
-	if dir == "" || dir == "." || (f.repoRoot != "" && dir == f.repoRoot) {
-		f.staged = false
-		f.clean = true
-		f.stagedHunks = nil
-		f.stagedPatch = nil
-		return nil
-	}
-	// `reset --hard` restores a linked worktree's tracked files — drop the
-	// dirty flag so IsCleanIn answers like real git afterward.
-	for branch, path := range f.linkedWorktrees {
-		if path == dir {
-			delete(f.dirtyWT, branch)
-		}
-	}
-	return nil
+	_ = rev
+	return "", nil
 }
 
 // addWorktree registers a fake linked worktree for branch at path, a test seam
@@ -804,31 +669,21 @@ func (f *fakeGit) RepoRoot() (string, error) {
 	return f.repoRoot, nil
 }
 
-// WorktreeRemove tears down the linked worktree at dir, mirroring git's refusal
-// to remove a dirty worktree without --force or a locked worktree at all. It
-// deregisters the branch so a follow-up DeleteBranch no longer hits "checked
-// out in another worktree".
-func (f *fakeGit) WorktreeRemove(dir string, force bool) error {
+func (f *fakeGit) callsSnapshot() map[string]int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.fail("WorktreeRemove"); err != nil {
-		return err
+	out := make(map[string]int, len(f.calls))
+	for k, v := range f.calls {
+		out[k] = v
 	}
-	if f.lockedWT[dir] {
-		return fmt.Errorf("cannot remove a locked working tree %q", dir)
-	}
-	for branch, path := range f.linkedWorktrees {
-		if path != dir {
-			continue
-		}
-		if !force && f.dirtyWT[branch] {
-			return fmt.Errorf("worktree %q is dirty; use --force", dir)
-		}
-		delete(f.linkedWorktrees, branch)
-		delete(f.dirtyWT, branch)
-		return nil
-	}
-	return fmt.Errorf("no worktree at %q", dir)
+	return out
+}
+
+func ownsWorktree(f *fakeGit, branch string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.linkedWorktrees[branch]
+	return ok
 }
 
 func (f *fakeGit) Checkout(name string) error {
@@ -1312,31 +1167,6 @@ func (f *fakeGit) CommitList(base, branch string) ([]git.CommitInfo, error) {
 		out = append(out, git.CommitInfo{SHA: cur, Subject: f.commits[cur].subject})
 	}
 	return out, nil
-}
-
-// CommitRange mirrors `rev-list include ^exclude` over the fake's linear
-// parent chains: walk from include, stopping at anything reachable from
-// exclude.
-func (f *fakeGit) CommitRange(exclude, include string) (map[string]bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.fail("CommitRange"); err != nil {
-		return nil, err
-	}
-	to := f.resolve(include)
-	ex := f.resolve(exclude)
-	if to == "" || ex == "" {
-		return nil, fmt.Errorf("unknown revision in range %q..%q", exclude, include)
-	}
-	excluded := map[string]bool{}
-	for cur := ex; cur != ""; cur = f.commits[cur].parent {
-		excluded[cur] = true
-	}
-	set := map[string]bool{}
-	for cur := to; cur != "" && !excluded[cur]; cur = f.commits[cur].parent {
-		set[cur] = true
-	}
-	return set, nil
 }
 
 // RebaseContinue resolves the modeled conflict and finishes the rebase.

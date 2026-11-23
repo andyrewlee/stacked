@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
-
-	"github.com/andyrewlee/stacked/internal/git"
 )
 
 // TestModelInvariants applies long random sequences of stack operations to the
@@ -126,7 +124,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 		// and applied again.
 		var label string
 		var op func() error
-		switch rng.Intn(12) {
+		switch rng.Intn(10) {
 		case 0: // create off a random branch
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			nameSeq++
@@ -159,24 +157,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := Modify(env, s, "extra", true, true)
 				return err
 			}
-		case 3: // fold a branch whose parent is not the trunk
-			var cands []string
-			for _, n := range tracked {
-				if s.Branches[n].Parent != s.Trunk {
-					cands = append(cands, n)
-				}
-			}
-			if len(cands) == 0 {
-				continue
-			}
-			target := pick(rng, cands)
-			label = "fold"
-			op = func() error {
-				mustCheckout(t, f, target)
-				_, err := Fold(env, s)
-				return err
-			}
-		case 4: // move a branch onto a valid target
+		case 3: // move a branch onto a valid target
 			if len(tracked) == 0 {
 				continue
 			}
@@ -201,7 +182,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := Onto(env, s, target)
 				return err
 			}
-		case 5: // delete a random branch
+		case 4: // delete a random branch
 			if len(tracked) == 0 {
 				continue
 			}
@@ -211,7 +192,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := Delete(env, s, target, true)
 				return err
 			}
-		case 6: // squash a random branch (a no-op when it has a single commit)
+		case 5: // squash a random branch (a no-op when it has a single commit)
 			if len(tracked) == 0 {
 				continue
 			}
@@ -222,7 +203,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := Squash(env, s, "squashed")
 				return err
 			}
-		case 7: // rename a random branch to a fresh name
+		case 6: // rename a random branch to a fresh name
 			if len(tracked) == 0 {
 				continue
 			}
@@ -234,7 +215,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := Rename(env, s, target, newName)
 				return err
 			}
-		case 8: // untrack a random branch (re-parents its children)
+		case 7: // untrack a random branch (re-parents its children)
 			if len(tracked) == 0 {
 				continue
 			}
@@ -244,7 +225,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := UntrackBranch(env, s, target)
 				return err
 			}
-		case 9: // track a freshly-minted untracked branch (exercises inferParent)
+		case 8: // track a freshly-minted untracked branch (exercises inferParent)
 			parent := pick(rng, append([]string{"main"}, tracked...))
 			nameSeq++
 			name := fmt.Sprintf("b%d", nameSeq)
@@ -258,29 +239,7 @@ func runModel(t *testing.T, seed int64, steps int) {
 				_, err := TrackBranch(env, s, "", "")
 				return err
 			}
-		case 10: // absorb a staged hunk owned by the current branch's tip
-			if len(tracked) == 0 {
-				continue
-			}
-			target := pick(rng, tracked)
-			label = "absorb"
-			op = func() error {
-				mustCheckout(t, f, target)
-				tip, err := f.RevParse(target)
-				if err != nil {
-					return err
-				}
-				// Re-seeded on EVERY invocation: Absorb ends with ResetHardIn
-				// which clears the staged state, and the undo oracle applies
-				// this closure twice.
-				f.staged = true
-				f.stagedHunks = []git.Hunk{{File: "f.txt", OldStart: 2, OldN: 1, NewStart: 2, NewN: 1}}
-				f.blame = map[string]map[int]git.BlameLine{"f.txt": {2: blameID(tip, 2, "f.txt")}}
-				f.stagedPatch = []byte("model patch")
-				_, err = Absorb(env, s)
-				return err
-			}
-		case 11: // remote-backed sync, sometimes with an upstream-merged branch
+		case 9: // remote-backed sync, sometimes with an upstream-merged branch
 			label = "sync"
 			op = func() error {
 				if len(tracked) > 0 && rng.Intn(2) == 0 {

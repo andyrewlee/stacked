@@ -15,6 +15,21 @@ import (
 	"strings"
 )
 
+// IsHex40 reports whether s is a 40-character lowercase hexadecimal SHA-1
+// object id.
+func IsHex40(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < 40; i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // BranchExists reports whether a local branch with the given name exists.
 func BranchExists(name string) bool {
 	return ok("show-ref", "--verify", "--quiet", LocalBranchNameRef(name))
@@ -330,18 +345,6 @@ func CreateBranch(name string) error {
 	return err
 }
 
-// CreateBranchAt creates a new local branch at ref without checking it out.
-func CreateBranchAt(name, ref string) error {
-	if err := validRefArg("branch", name); err != nil {
-		return err
-	}
-	if err := validRefArg("ref", ref); err != nil {
-		return err
-	}
-	_, err := Run("branch", name, ref)
-	return err
-}
-
 // DeleteBranch deletes the named local branch. When force is true the branch is
 // removed even if it is not fully merged.
 func DeleteBranch(name string, force bool) error {
@@ -486,39 +489,6 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w", ancestorRef, descendantRef, err)
 }
 
-// CommitRange returns the set of commit SHAs reachable from include but not
-// from exclude — `git rev-list include ^exclude`, i.e. exclude..include — in
-// one bounded invocation. The walk stops at the excluded history, so the cost
-// is O(range size), not O(repo history). The "^" prefix on the exclude ref
-// also means it can never be parsed as an option.
-func CommitRange(exclude, include string) (map[string]bool, error) {
-	if err := validRefArg("ref", exclude); err != nil {
-		return nil, err
-	}
-	if err := validRefArg("ref", include); err != nil {
-		return nil, err
-	}
-	out, err := Run("rev-list", localBranchRef(include), "^"+localBranchRef(exclude))
-	if err != nil {
-		return nil, err
-	}
-	return revListSet(out), nil
-}
-
-// revListSet splits rev-list output into a SHA set.
-func revListSet(out string) map[string]bool {
-	set := map[string]bool{}
-	if out == "" {
-		return set
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if line != "" {
-			set[line] = true
-		}
-	}
-	return set
-}
-
 // RenameBranch renames a local branch ("git branch -m old new").
 func RenameBranch(oldName, newName string) error {
 	if err := validRefArg("branch", oldName); err != nil {
@@ -528,20 +498,6 @@ func RenameBranch(oldName, newName string) error {
 		return err
 	}
 	_, err := Run("branch", "-m", oldName, newName)
-	return err
-}
-
-// ForceBranch points the branch name at ref without checking it out
-// ("git branch -f name ref"). It refuses to move the currently checked-out
-// branch, matching git's own behavior.
-func ForceBranch(name, ref string) error {
-	if err := validRefArg("branch", name); err != nil {
-		return err
-	}
-	if err := validRefArg("ref", ref); err != nil {
-		return err
-	}
-	_, err := Run("branch", "-f", name, ref)
 	return err
 }
 
@@ -686,4 +642,40 @@ func CommitList(base, branch string) ([]CommitInfo, error) {
 		commits = append(commits, CommitInfo{SHA: sha, Subject: subject})
 	}
 	return commits, nil
+}
+
+// CommitBody returns the trimmed body (lines after the subject) of rev.
+func CommitBody(rev string) (string, error) {
+	if err := validRefArg("ref", rev); err != nil {
+		return "", err
+	}
+	out, err := Run("log", "-1", "--format=%b", rev)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// BehindCount returns how many commits exist on remoteRef that are not yet on
+// localRef (`git rev-list --count localRef..remoteRef`). Returns 0 when
+// remoteRef does not exist or localRef is up to date.
+func BehindCount(localRef, remoteRef string) (int, error) {
+	if err := validRefArg("ref", localRef); err != nil {
+		return 0, err
+	}
+	if err := validRefArg("ref", remoteRef); err != nil {
+		return 0, err
+	}
+	if !ok("show-ref", "--verify", "--quiet", remoteRef) {
+		return 0, nil
+	}
+	out, err := Run("rev-list", "--count", localRef+".."+remoteRef)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("parsing rev-list count %q: %w", out, err)
+	}
+	return n, nil
 }

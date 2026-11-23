@@ -636,7 +636,7 @@ func TestRestackCascadeLockedWorktreeSkipNote(t *testing.T) {
 		t.Fatalf("notes = %v, want exactly one skip note", notes)
 	}
 	if !strings.Contains(notes[0], "feat-a") || !strings.Contains(notes[0], "locked") ||
-		!strings.Contains(notes[0], "st worktree unlock feat-a") {
+		!strings.Contains(notes[0], "git worktree unlock") {
 		t.Fatalf("note = %q, want a lock-naming skip with the unlock remedy", notes[0])
 	}
 }

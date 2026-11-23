@@ -4,30 +4,29 @@
 for input, JSON-capable commands emit machine-readable JSON on request, and all
 commands report outcomes through stable exit codes.
 
-## No prompts
+## No prompts & untracked-file safety
 
-Local stack operations do not read from stdin or open an interactive editor.
-`git rebase --onto` never invokes an editor, and `st continue` pins
-`GIT_EDITOR=true`/`GIT_SEQUENCE_EDITOR=true`; when a rebase stops
-on a conflict, `st` returns control to you (exit code 2) rather than blocking —
-resolve the files, `git add` them, and run `st continue` (or `st abort`).
+- Local stack operations never read from stdin or open an interactive editor.
+  `git rebase --onto` never invokes an editor, and `st continue` pins
+  `GIT_EDITOR=true`/`GIT_SEQUENCE_EDITOR=true`; when a rebase stops on a
+  conflict, `st` returns control to you (exit code 2) rather than blocking —
+  resolve the files, `git add` them, and run `st continue` (or `st abort`).
+- **Untracked files never block stack operations.** Clean-tree checks (`sync`,
+  `restack`, `delete`, `onto`, `squash`) ignore untracked files (`git status
+  --porcelain --untracked-files=no`), and `-a`/`--all` on `create`/`modify`
+  stages tracked modifications and deletions only (`git add -u`). Local plans,
+  scratch scripts, and untracked notes stay untouched unless you explicitly
+  `git add` them.
+- `st modify` amends **staged changes by default** (`-a` is opt-in, default
+  `false`), matching `git commit --amend`.
+- Version note: on Git <2.26 the default rebase backend drops commits that
+  started empty (`git commit --allow-empty`) during a restack cascade; Git 2.26+
+  preserves them.
 
-Version note: on Git <2.26 the default rebase backend drops commits that
-started empty (`git commit --allow-empty`) during a restack cascade; Git 2.26+
-preserves them. If a stack relies on intentionally empty commits, drive `st`
-on Git 2.26+.
-
-Remote Git operations use your configured Git transport. `st sync` may fetch and
-`st submit` may push, so credentials, SSH agents, and host prompts behave like
-the corresponding `git fetch`/`git push` commands in your environment.
-`st open` only reads remote configuration — it never contacts a host; its one
-side effect is spawning the platform's URL opener (`open`/`xdg-open`/`rundll32`),
-and only in text mode (`--json`/`--dry-run` never spawn).
-`st sync --no-fetch` performs no remote calls at all (the prune/restack basis is
-the local trunk, so a branch landed only on the remote survives until the local
-trunk advances), and `st prune` never fetches either — it measures "merged"
-against the local trunk, or `refs/remotes/<remote>/<trunk>` when given
-`--remote`.
+Remote Git operations use your configured Git transport, and native GitHub PR
+operations shell out to the `gh` CLI when the remote is a GitHub repository and
+`gh` is on `PATH` (pass `--no-pr` to `st submit` for push-only mode, or
+`--no-fetch` to `st sync` for offline local sync).
 
 ## Exit codes
 
@@ -39,19 +38,18 @@ Branch on the exit code; do not parse messages.
 | 1 | usage error / generic failure | fix the invocation |
 | 2 | rebase conflict in progress | resolve + `git add`, then `st continue` (or `st abort`) |
 | 3 | repo not initialized | run `st init` |
-| 4 | working tree is dirty | commit or stash, then retry |
+| 4 | working tree has tracked uncommitted changes | commit or stash, then retry |
 | 5 | another `st` command holds the repo lock, **or** an abandoned `lock.reclaim` guard needs an operator | `"locked"`: retry once it finishes; `"locked_guard"`: stop — a human must remove the guard file (see CONTRIBUTING) |
 | 70 | internal error (a bug in `st`) | not self-recoverable; report it |
 
 ## JSON output
 
-Every subcommand except `__complete` and `completion` and `shell` accepts `--json`
-(`__complete` is the hidden completion endpoint, not a user command). The built-ins `help`,
-`-h`/`--help`, `version`, and `-v`/`--version` also accept `--json`. Successful
-JSON output is a single indented JSON value on **stdout** — an object, except
-`st worktree ls --json`, which returns an array. On failure, `--json`
-writes a structured envelope to **stderr** and the process still exits with the
-code above:
+Every subcommand except `__complete` and `completion` accepts `--json`
+(`__complete` is the hidden completion endpoint, not a user command). The
+built-ins `help`, `-h`/`--help`, `version`, and `-v`/`--version` also accept
+`--json`. Successful JSON output is a single indented JSON object on **stdout**.
+On failure, `--json` writes a structured envelope to **stderr** and the process
+still exits with the code above:
 
 ```json
 { "error": { "code": "conflict",
@@ -59,469 +57,137 @@ code above:
              "branch": "feat-b", "onto": "feat-a" } }
 ```
 
-`error.code` is one of: `error` (1), `paused` (1 — a tracked branch's rebase
-is paused in ANOTHER worktree; the envelope also carries `branch` and
-`worktree`, the path where `st continue`/`st abort` must run), `conflict` (2), `not_initialized` (3),
-`dirty` (4), `locked` (5), `locked_guard` (5 — an abandoned `lock.reclaim`
-guard; operator action required, do not retry), `internal` (70, a recovered panic). So an agent can read stdout for
-the result, stderr for the error envelope, and the exit code for the category.
-On a `conflict` the envelope also carries `branch` (the branch whose rebase
-stopped) and `onto` (its parent), so you can re-orient without parsing the
-message.
+`error.code` is one of: `error` (1), `paused` (1 — a tracked branch's rebase is
+paused in ANOTHER worktree; the envelope also carries `branch` and `worktree`,
+the path where `st continue`/`st abort` must run), `conflict` (2),
+`not_initialized` (3), `dirty` (4), `locked` (5), `locked_guard` (5 — an
+abandoned `lock.reclaim` guard; operator action required, do not retry),
+`internal` (70, a recovered panic). On a `conflict` the envelope also carries
+`branch` (the branch whose rebase stopped) and `onto` (its parent).
 
 ### Result shapes
 
-- **Stack-mutating commands** (`create`, `modify`, `restack`, `continue`, `fold`,
-  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`, `prune`, `sync`)
-  share one shape:
+- **Stack-mutating commands** (`create`, `modify`, `restack`, `continue`,
+  `squash`, `onto`, `delete`, `track`, `untrack`, `rename`, `sync`) share one
+  shape:
   ```json
   { "summary": "...", "branch": "feat-b", "restacked": ["feat-c"] }
   ```
-  `branch`, `restacked`, `deleted`, `reparented`, `notes`, `tracked`, and `dryRun` are all
-  `omitempty` — absent when empty or false. `reparented` lists
-  `[{ "branch", "oldParent", "newParent" }]` for every child whose stack parent
-  changed (`delete`, `sync`, `prune`, `fold`, and their `--dry-run` previews). `track --all` adopts every
-  untracked local branch in one shot, inferring each parent (so an existing
-  `a→b→c` stack becomes a real chain); it adds `"tracked": {"name": "parent"}`
-  and `notes` entries for skipped branches (e.g. orphans sharing no history
-  with the trunk). `track --all --dry-run` previews the same inferred map with
-  `"dryRun": true` and records nothing (`--dry-run` requires `--all`). `st prune` deletes every tracked branch already merged into
-  the trunk (or into `refs/remotes/<remote>/<trunk>` with `--remote`, never
-  fetching) and reports them in `deleted`; it never moves HEAD, so it refuses
-  when the current branch itself is merged ("check out another branch or run
-  st sync"). Preview-capable commands (`restack`, `sync`,
-  `onto`, `fold`, `squash`, `delete`, `prune`, `create`, `modify`, `untrack`,
-  `rename`) return the same result shape with `"dryRun": true` under
-  `--dry-run`, computed by a read-only planner — no lock, no undo entry, no
-  mutation. `modify --dry-run` previews the amend (or `--commit`) plus its
-  upstack `restacked` cascade; `untrack --dry-run` and `rename --dry-run` name
-  each re-parenting child in `notes`; `create --dry-run` reports the same
-  refusals the real create would. In a multi-worktree repo, `restack`/`sync`
-  rebase a dependent branch that lives in another worktree *inside that worktree*;
-  a dirty dependent worktree is skipped and named in `notes` (e.g. `"skipped
-  feat-a: its worktree is dirty (…)"`) rather than clobbered. When run from a
-  tracked branch, `sync` scopes pruning and restacking to the current stack
-  (pass `--all` for the whole forest; from trunk or an untracked branch it
-  always syncs the whole forest). If `sync` prunes the current branch and it
-  has a single surviving child (not checked out in another worktree), `sync`
-  switches HEAD to that child, setting `branch` and adding `"switched to <child>"`
-  to `notes`. `continue` resumes an interrupted restack scoped to that
-  operation's subtree (never touching unrelated stacks/worktrees) and restores
-  HEAD to the original branch when possible,
-  emitting `{ "summary": "continued restack", "restacked": [...] }` plus a
-  `notes` entry naming the branch whose conflict was just completed.
-- **`absorb --json`** — its own shape, NOT the shared one:
+  `branch`, `restacked`, `deleted`, `reparented`, `notes`, `tracked`, and
+  `dryRun` are `omitempty`. `reparented` lists `[{ "branch", "oldParent",
+  "newParent" }]` for every child whose stack parent changed (`delete`, `sync`,
+  and their `--dry-run` previews). `track --all` adds `"tracked": {"name":
+  "parent"}` and `notes` entries for skipped branches (e.g. orphans). Preview
+  runs (`--dry-run`) return the same shape with `"dryRun": true` and perform no
+  writes, no lock, and no undo entry.
+- **`sync --submit --json`** (`-s`) — runs `sync` (fetching trunk, querying
+  recently merged GitHub PRs via `gh` when on a GitHub remote so squash-merged
+  PRs are pruned reliably, pruning merged branches, advancing HEAD to a single
+  surviving child, and restacking) and immediately submits the surviving stack
+  (retargeting child PR bases before pushing, force-pushing with lease, and
+  refreshing managed stack blocks). Emits `summary`, `branch`, `restacked`,
+  `deleted`, `reparented`, `notes`, `pushed`, and `prs`.
+- **`submit --json`** — pushes the full current stack bottom→top (`--upto` stops
+  at current branch; `--all` pushes the whole forest). On GitHub remotes with
+  `gh` available (unless `--no-pr`), `submit` automatically:
+  1. Retargets open PRs whose GitHub base differs from their local stack parent
+     **before pushing** (preventing GitHub from auto-closing child PRs).
+  2. Force-pushes branches with `--force-with-lease`.
+  3. Creates missing PRs bottom-up (honoring `--draft`, `--title`, `--body`) and
+     idempotently maintains a `<!-- st:stack:start -->`…`<!-- st:stack:end -->`
+     stack navigation block inside multi-PR stacks while preserving author prose.
+
+  One shape for every outcome:
+  `{ "remote", "dryRun", "pushed": [], "prs": [], "repoURL", "prHints": [], "notes": [], "published", "summary", "failed" }`
+  (`prs`, `repoURL`, `prHints`, `notes`, `published`, `summary`, and `failed`
+  are `omitempty`). Each `prs` element has `{ "branch", "base", "number", "url",
+  "draft", "action" }` (`action` is one of `created`, `retargeted`, `updated`,
+  `unchanged`, `would_create`, `would_retarget`, `would_update`). Under
+  `--dry-run`, `published` maps each branch to its state against the remote's
+  local tracking ref (`current`, `stale`, `diverged`, `missing`, `unknown`). On
+  partial push failure, confirmed `pushed` branches and the first rejected
+  `failed` branch are emitted on stdout alongside the stderr error envelope.
+- **`log --json`** — a recursive tree rooted at the trunk. By default when on a
+  tracked branch, `log` scopes to the **current stack**; on trunk, detached
+  HEAD, or with `--all`, it renders the whole forest.
   ```json
-  { "summary": "...", "absorbed": [{ "file", "lines", "branch", "commit" }],
-    "refused": [{ "file", "lines", "reason" }], "restacked": [], "notes": [],
-    "dryRun": true }
-  ```
-  `restacked`, `notes`, and `dryRun` are `omitempty`. `--dry-run` maps staged
-  hunks to the stack commits owning their lines with zero mutation
-  (`"dryRun": true`). Every staged section must classify as plain text hunks
-  or be refused — metadata-only changes such as empty added/deleted files,
-  mode-only changes, renames/copies, binary files, and quoted paths are all
-  refused, and a raw staged-path inventory cross-check fails closed on
-  anything the parser cannot account for. The staged diff is captured with
-  pinned flags, so user diff configuration (prefixes, color, external diff,
-  textconv) cannot reshape it. Targets are restricted to branches on the current
-  stack's path (the current branch plus its ancestors): a hunk owned by a
-  commit tipped only by an off-path tracked branch is refused, naming that
-  branch. Attribution also requires identity coordinates from blame: a hunk
-  whose lines sit at a different line number or path in the owning commit —
-  shifted by a descendant's edit, or belonging to a since-renamed file — is
-  refused, because the amend applies the hunk at its HEAD line numbers and
-  shifted coordinates could land on the wrong occurrence of repeated text.
-  Bare `absorb` applies any plan with ZERO refusals — multi-target
-  plans amend each owning tip with its own hunks and run one cascade; any
-  refusal (or a dirty target worktree) comes back unapplied with the summary
-  prefixed `"not applied: ..."` and exit 0 (refusals are data, not errors).
-  `absorbed[].commit` reports each branch's live post-cascade tip. An applied absorb reports the amended tip in `absorbed[].commit`
-  and the cascaded branches in `restacked`; a conflict mid-cascade exits 2
-  for `st continue`/`st abort`, and one `st undo` reverts the amend plus the
-  cascade.
-- **`create --worktree --json`** — creates and tracks the branch without moving
-  the current worktree, materializes the new branch's linked worktree, copies
-  `.worktreeinclude` entries, and returns
-  `{ "branch", "parent", "worktree", "copied": [], "switched": bool, "summary" }`
-  (`copied` is `omitempty`). `switched` is true only when the `st shell install`
-  shim is active and the command wrote `$ST_CD_FILE`; without the shim, text mode
-  prints a `cd` hint instead. `--worktree` cannot be combined with `-m`/`-a`;
-  commit inside the created worktree afterward. `create --worktree --dry-run`
-  returns the same payload plus `"dryRun": true` — the predicted `worktree`
-  path and `copied` set (the `.worktreeinclude` selection a real run would
-  copy, collision refusals included) — without creating branch, worktree, or
-  copies and without writing `$ST_CD_FILE`.
-- **`log --json`** — a recursive tree rooted at the trunk:
-  ```json
-  { "name": "main", "tip": "…", "current": false, "needsRestack": false,
+  { "name": "main", "tip": "…", "trunkBehind": 2, "current": false,
+    "needsRestack": false,
     "children": [ { "name": "feat-a", "parent": "main", "parentSHA": "…",
                     "tip": "…", "current": true, "needsRestack": false,
-                    "topCommit": "add a", "children": [] } ] }
+                    "topCommit": "add a",
+                    "pr": { "number": 35, "url": "…", "state": "OPEN",
+                            "draft": false, "base": "main",
+                            "baseMismatch": false, "checks": "passing" },
+                    "children": [] } ] }
   ```
-  `tip` is the branch's LIVE tip SHA (`omitempty` — absent when the ref is
-  gone, which is itself the drift signal); `parentSHA` is the recorded base.
-  `tip` vs `parentSHA` answers "did this branch move since the stack recorded
-  it" in one poll. In a multi-worktree repo each node may also carry `worktree` (the on-disk path
-  of the linked worktree the branch lives in) and `dirty` (true when that
-  worktree has uncommitted changes); both are `omitempty`, so single-tree output
-  is unchanged. When the branch's worktree sits paused mid-rebase the node also
-  carries `paused: true` and `conflictedFiles` (the unmerged paths the pause is
-  waiting on — the file list `status --json` reports for the current worktree,
-  here resolved per linked worktree); both are `omitempty`. A paused worktree
-  lists detached under `git worktree list`, so this attribution comes from the
-  rebase head-name — the branch the pause belongs to still gets its `worktree`/
-  `dirty` fields. A node also carries `locked: true` (`omitempty`) when its
-  worktree is under `git worktree lock` (see `st worktree lock`) — the hold
-  restack/removal honors. When the pause is in the MAIN worktree the node carries
-  `paused`+`conflictedFiles` only (the linked-only `worktree`/`dirty` fields
-  stay absent). When tracked branches are unreachable from the trunk (a parent
-  cycle or a dangling recorded parent), the ROOT node carries `unreachable` —
-  the sorted names, `omitempty` — since they cannot appear in the tree; text
-  prints the same list as a `warning:` line advising `st repair`.
-- **`status --json`** — `{ "branch", "trunk", "role", "children": [], "worktreeClean": bool }`; `parent` is present for tracked branches, `tip` is the current branch's live tip (`omitempty`, absent on detached HEAD or a deleted ref), and `needsRestack` is present only when it applies. `published` (`omitempty`) classifies the live tip against the branch's `refs/remotes/origin/<branch>` tracking ref: `current` (equal), `stale` (tracking ref is an ancestor — the branch is ahead; a submit is needed), `diverged` (tracking ref exists but is not an ancestor — the published history was rewritten locally), `missing` (no tracking ref — never pushed or pruned), or `unknown` (the comparison could not be made). It describes the last fetch or push only — never the server's current state — and is absent when no `origin` remote is configured or HEAD is detached. During a paused restack it also carries `rebaseInProgress` (set true), `rebaseBranch` (the branch the rebase stopped on), and `conflictedFiles` — so an agent can re-orient after exit 2 without raw git. In a multi-worktree repo it also carries `worktree` (the path of the worktree the current branch lives in, `omitempty` — including the main worktree, unlike `log --json`'s linked-only `worktree` fields).
-- **`commits --json`** — `st commits [<branch>]` lists the commits between the
-  branch's RECORDED base and its live tip:
-  `{ "branch", "parentSHA", "commits": [ { "sha", "subject" }, … ] }` —
-  `parentSHA` is the stack model's recorded base (not a recomputed merge-base),
-  so a drifted stack reports its stale base honestly; the drift itself shows up
-  via `needsRestack`/`validate`. `commits` is newest-first and always a list
-  (`[]` when the range is empty). The trunk is refused — it has no stack base —
-  and an untracked branch gets the canonical `branch "X" is not tracked`. Text
-  mode prints `sha subject` per line, newest first.
+  `tip` is the live tip SHA; `trunkBehind` (`omitempty`, on root) reports how
+  many commits local trunk is behind `origin/<trunk>` without hitting the
+  network; `pr` (`omitempty`) is populated when `--pr` is passed; `worktree`,
+  `dirty`, `paused`, `conflictedFiles`, and `locked` (`omitempty`) annotate
+  branches checked out in other linked worktrees (the caller's own worktree is
+  omitted unless paused mid-rebase); `unreachable` (`omitempty`, on root) lists
+  corrupt branches not reachable from trunk.
+- **`status --json`** — `{ "branch", "trunk", "trunkBehind", "role", "parent",
+  "tip", "published", "children": [], "commits": [ { "sha", "subject" } ],
+  "needsRestack", "worktreeClean": bool, "rebaseInProgress", "rebaseBranch",
+  "conflictedFiles", "worktree", "pr" }` (`trunkBehind`, `parent`, `tip`,
+  `published`, `commits`, `needsRestack`, `rebaseInProgress`, `rebaseBranch`,
+  `conflictedFiles`, `worktree`, and `pr` are `omitempty`). `commits` lists the
+  current tracked branch's commits in `parentSHA..HEAD` newest-first. `--pr`
+  populates `pr` via `gh`.
 - **`checkout --json`** — with a name, `{ "branch", "switched": bool }`; with no
-  name, `{ "trunk", "current", "branches": [] }`. When the branch lives in another
-  worktree, checkout teleports there and adds `worktree` (the path, `omitempty`).
-- **`validate --json`** — `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if problems)
-- **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up` adds `children` at a branch point). When the move teleports into another worktree, the `summary` names the worktree path; with the `st shell install` shim the shell `cd`s there (the binary writes the path to `$ST_CD_FILE`).
-- **`worktree --json`** (`wt`) — `st worktree <branch>` returns `{ "branch", "path", "copied": [], "summary" }` (`copied` lists `.worktreeinclude` files brought over, `omitempty`); `st worktree ls` returns an array of `{ "path", "branch", "head", … }` — `…` includes `locked`, `detached`, `bare`, and `prunable` (`omitempty` each); `prunable` means git considers the registration stale (typically its directory was deleted out from under it — clear it with `git worktree prune`); `st worktree rm <branch>` returns `{ "branch", "removed" }` (`removed` is a STRING — the released path). The bulk forms return aggregates: `st worktree --all` → `{ "created": [{ "branch", "path", "copied": [], "summary" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` and `st worktree rm --all` → `{ "removed": [{ "branch", "path" }], "skipped": [{ "branch", "reason" }], "failed": { "branch", "error" } }` — note `removed` is an ARRAY of objects in the bulk form, unlike the single-branch string. Both stop at the first hard failure (`failed`, non-zero exit) and skip branches into `skipped` with a `reason`: `rm --all` reasons are "worktree has uncommitted changes", "checked out in the main worktree", "you are inside it", "a rebase is in progress there", "worktree is locked", and "stale worktree registration (directory gone); run `git worktree prune`"; `--all` skips the main worktree's branch and every branch whose worktree sits paused mid-rebase the same way. `st worktree lock <branch>` / `st worktree unlock <branch>` set and clear the worktree's git lock — the standing hold every mutation gate honors — and return `{ "branch", "path", "locked": bool }` (idempotent: re-locking or re-unlocking reports the current state; `lock` takes an optional `--reason <string>` recorded in git's lock metadata). The add forms take `--dry-run`: `st worktree <branch> --dry-run` returns the same payload plus `"dryRun": true`, and `st worktree --all --dry-run` the same aggregate plus `"dryRun": true` — predicting each row's `path` and `copied` (the `.worktreeinclude` selection a real run would make, including its collision refusals) without creating anything. `st shell install` emits a shell script, not JSON.
-- **`submit --json`** — `submit` pushes the full current stack
-  (bottom→top in dependency order); `submit --upto` stops at the current branch
-  (bottom→current); `submit --all` pushes the whole tracked forest in
-  dependency order (parents before children) and works from any branch,
-  including trunk or detached HEAD (`--upto` and `--all` are mutually exclusive). One shape for every outcome:
-  `{ "remote", "dryRun", "pushed": [], "repoURL", "prHints": [], "published", "summary", "failed" }`
-  (`repoURL`, `prHints`, `summary`, and `failed` are `omitempty`; from trunk,
-  `pushed` is empty and `summary` explains why). Under `--dry-run`, `published`
-  (`omitempty`) maps each would-push branch to its state against the named
-  remote's `refs/remotes/<remote>/<branch>` tracking ref — `current`, `stale`,
-  `diverged`, `missing`, or `unknown`, same semantics as `status --json`'s
-  field — so the preview answers "is a submit needed" per branch without a
-  fetch. On successful non-trunk submits,
-  `prHints` always lists `{ "head", "base", "compareURL" }` objects for every
-  pushed branch so each stacked PR
-  targets its stack parent (text mode prints compare URLs only for newly created
-  remote branches, or unpushed branches under `--dry-run`, to avoid noise on
-  force-update re-pushes); `compareURL` is present for known compare URL shapes
-  (github.com, gitlab.com, and self-hosted hosts whose name carries a
-  `github`/`gitlab` label); for unrecognized hosts the hint object still
-  carries `head`/`base` but `compareURL` is simply absent. Submit reads the single
-  batch push's own per-ref statuses, so a partial failure can report a
-  non-prefix outcome — e.g. `pushed` `[A,C]` with `failed` `B` when the remote
-  accepted A and C but rejected B in the same push: the result is the same
-  shape carrying `{ "remote", "dryRun", "pushed", "failed" }`, `pushed` lists
-  every branch the remote confirmed updated or already current in stack order,
-  `failed` names the first confirmed rejection, and the process still exits
-  non-zero with the error envelope on stderr. A ref whose outcome the push did
-  not confirm is reported in neither field — the stderr message describes the
-  uncertainty instead.
-- **`open --json`** — the compare-URL list `submit` prints, without the push:
-  `{ "remote", "dryRun", "repoURL", "prHints": [ { "head", "base", "compareURL" } ],
-  "summary" }` (`repoURL`, `prHints`, and `summary` are `omitempty`; a hint's
-  `compareURL` is absent for unrecognized forge hosts). `--json` never spawns a
-  browser — the URLs are data for the agent to route — and neither does
-  `--dry-run`, which prints `would open` lines instead. Bare `st open` opens the
-  current branch's compare URL; `--all` opens every tracked branch's. Text mode
-  is the one command that leaves the terminal: it spawns the platform opener
-  (`open`/`xdg-open`/`rundll32`) once per URL. The command is read-only — no
-  lock, no undo entry, no ref moves — so an agent can safely run the JSON form
-  to collect URLs instead of spawning anything.
-- **`init --json`** — one shape for both outcomes:
-  `{ "trunk", "initialized": bool, "alreadyInitialized": bool }` (a fresh init
-  sets `initialized`; an already-initialized repo sets `alreadyInitialized`).
-- **operational** — each emits a small fixed object:
-  - `abort --json` → `{ "aborted": true, "summary" }`.
-  - `undo --json` → `{ "undone": true, "label", "restored": [] }` (`label` names the
-    reverted command; `restored` lists branches whose tips were moved back).
-    `notes` is `omitempty`: advisory warnings — undoing an `absorb` entry adds
-    the amended commits the ref-restore orphaned (they still carry the staged
-    edits) plus a `git cherry-pick` recovery pointer. An
-    empty journal is still a success: `{ "undone": false }` on stdout, exit 0
-    (text mode prints `nothing to undo`).
-  - `undo <n> --json` (n > 1) rewinds the newest `n` entries newest-first and
-    returns the multi-step shape:
-    `{ "undone": true, "count": n, "restored": [], "steps": [ { "index",
-    "label", "restored": [], "notes": [] } ], "notes": [] }` — `count` is the
-    requested depth, `restored` the deduped union across steps, `steps` one
-    entry per completed undo (`index` is the `--list` position as of when the
-    command ran; per-step `notes` is `omitempty`, as is the top-level `notes`
-    union). A count beyond the journal depth is a usage error (exit 1), as
-    are `n <= 0` and a non-integer count. A refusal mid-sequence stops there:
-    the partial aggregate (same shape, `steps` listing what already ran,
-    `undone` true once anything was reverted) is emitted on stdout and the
-    error envelope names the stopping step — `stopped at step k of n undoing
-    "<label>": …`.
-  - `undo --list --json` previews the journal without reverting:
-    `{ "entries": [ { "index", "label", "currentBranch", "createdBranches": [],
-      "createdWorktrees": {}, "refs": {} } ] }`, newest first — `index` 1 is
-    what a bare `undo` reverts. `refs` maps each recorded branch to the tip it
-    would be reset to; `createdBranches`/`createdWorktrees` name what the op
-    created and undo would remove (both `omitempty`, as is `currentBranch`);
-    the internal state snapshot is never emitted. An empty journal emits
-    `{ "entries": [] }` (exit 0; text prints `nothing to undo`).
-  - `undo --dry-run --json` previews what the NEXT entry would revert —
-    unlike `--list` it diffs the journal against live refs and worktrees:
-    ```json
-    { "dryRun": true, "label": "…",
-      "wouldRestore": [{"branch","from","to","commitsLostFromRef"}],
-      "wouldDelete":  [{"branch","worktree","worktreeDirty","isCurrentWorktree"}],
-      "wouldCheckout": "main", "wouldDetach": true, "journalDrop": true,
-      "observed": {"entryIndex": 1, "tips": {}}, "blockers": [],
-      "notes": ["…"] }
-    ```
-    `commitsLostFromRef` counts commits reachable from the live tip but not
-    the recorded one (per-ref — other refs may still reach them); it is the
-    string `"unknown"` when either object is missing, and `from` is the zero
-    SHA / `tips.<branch>` is `null` when the live ref is gone. `worktree` is
-    the LIVE owning path (discovered even when the journal recorded none).
-    `blockers` lists, in the real undo's gate order, everything a real run
-    would refuse on: `rebase_in_progress`, `state_too_new`,
-    `malformed_snapshot`, `malformed_journal`,
-    `ref_moved_since:<b>`, `paused_rebase:<b>`,
-    `cwd_inside_created_worktree:<b>`,
-    `recorded_worktree_mismatch:<b>`, `worktree_dirty:<b>`,
-    `missing_restore_target:<b>` — a missing ref is
-    NOT a blocker (undo
-    restores it). `ref_moved_since:<b>` marks a branch whose live tip no
-    longer matches either the recorded pre- or post-operation tip — it moved
-    outside `st`; the real run refuses unless `--force`, and the dry-run
-    reports it only on the newest entry (deeper steps run after the earlier
-    restores rewrite the refs the preview still sees). `paused_rebase:<b>`
-    marks a branch this entry would rewrite that has a rebase paused in a
-    linked worktree (that worktree lists as `detached`, so only the rebase
-    head-name names its branch); the real run refuses unless `--force`.
-    `malformed_journal`
-    is emitted when an entry's ref values are not full commit ids — such
-    entries are already dropped at journal load, so it can only appear when
-    the journal raced a manual edit mid-command. `wouldCheckout` is the landing branch a real run performs,
-    or null when the recorded branch would be deleted by the undo itself,
-    and when `wouldDetach` is set — the
-    doomed-current-branch path whose intermediate checkout a real run
-    predicts will be blocked (target already checked out in another
-    worktree, or local changes in the caller's worktree): a real run parks
-    HEAD detached and skips the recorded-branch restore rather than
-    refusing. `notes` is `omitempty`: advisory
-    warnings a real undo would also print — e.g. undoing an `absorb` entry
-    names the amended commits (still carrying the staged edits) that the
-    ref-restore orphans, with a `git cherry-pick` recovery pointer. A
-    computed preview exits 0 even with
-    blockers (they are data); an empty journal emits
-    `{ "dryRun": true, "undone": false }`. `--dry-run` and `--list` are
-    mutually exclusive (exit 1), and `--force` pairs with neither —
-    `--force`/`--dry-run` and `--force`/`--list` both exit 1, since a
-    preview or listing never moves refs and has nothing to force. The
-    preview holds the advisory lock but
-    mutates nothing — state, journal, refs, worktrees, and cwd are unchanged,
-    and a later real `st undo` revalidates everything (no reservation).
-  - `undo --dry-run <n> --json` (n > 1) previews each of the newest `n` steps
-    in undo order: `{ "dryRun": true, "count": n, "steps": [ <preview object>,
-    … ] }` where each element is the single-entry preview shape above with
-    `observed.entryIndex` set to its `--list` position. Each step is computed
-    against the state that step's real undo would see (the live state for
-    step 1, then the snapshot the preceding step would restore); live
-    refs/tips still reflect the pre-undo world — a real run revalidates
-    everything at each step.
-  - `repair --json` → `{ "repaired": bool, "fixes": [] }` (`repaired` is true when
-    `fixes` is non-empty; both are present on every run).
+  name, `{ "trunk", "current", "branches": [] }`. Refuses clearly if the target
+  branch is checked out in another worktree.
+- **`doctor --json`** (alias `validate`) — without `--fix`:
+  `{ "ok": bool, "tracked": n, "problems": [], "warnings": [] }` (exit 1 if
+  problems; drift warnings scope to the current stack unless `--all`). With
+  `--fix`: `{ "repaired": bool, "fixes": [] }`.
+- **Navigation** (`up`/`down`/`top`/`bottom`) — `{ "branch", "summary" }` (`up`
+  adds `children` at a branch point).
+- **`init --json`** — `{ "trunk", "initialized": bool, "alreadyInitialized": bool }`.
+- **`abort --json`** — `{ "aborted": true, "summary" }`.
+- **`undo --json`** — reverts the last stack-mutating command:
+  `{ "undone": true, "label", "restored": [], "notes": [] }` (`notes` is
+  `omitempty`). An empty journal emits `{ "undone": false }` (exit 0). Refuses
+  if a recorded branch moved outside `st` or has a paused rebase unless
+  `--force` is passed.
 
 ## Idempotency & safety
 
-- `restack`, `sync`, `validate`, `log`, `status` are safe to re-run.
-- `st restack --all` restacks every tracked branch (the whole forest) from any
-  branch or worktree — the current branch need not be tracked; branches living
-  in dirty linked worktrees are skipped into `notes`. `--all --dry-run`
-  previews the same set.
-- `st restack --dry-run`, `st sync --dry-run`, `st onto --dry-run`,
-  `st fold --dry-run`, `st squash --dry-run`, `st delete --dry-run`, and
-  `st prune --dry-run` preview
-  the branches that *would* be rebased, moved, folded, squashed, or deleted.
-  They return a `{"dryRun": true, ...}` result without changing stack metadata or
-  branch refs. `sync --dry-run` does not fetch; it uses the current local trunk or
-  already-cached `refs/remotes/<remote>/<trunk>` — under `--no-fetch` it
-  previews against the same local-trunk basis the apply uses. `st sync
-  --no-fetch` skips `git fetch` and the trunk fast-forward (the note reports
-  `trunk: skipped (--no-fetch)`), then prunes and restacks against the local
-  trunk.
-- `restack` requires a clean tree (exit 4 otherwise) and is idempotent once the
-  stack is in sync.
-- Every mutating command refuses (exit 1) while a rebase is paused — in the
-  current worktree, or in a LINKED worktree when the paused branch is the trunk
-  or a tracked branch. A linked worktree mid-rebase lists as `detached`, so
-  the refusal resolves the paused branch through the rebase head-name and
-  names the worktree path to resolve (`st continue`/`st abort` run there).
-  Pauses on branches `st` does not track never block. `continue`, `abort`,
-  `undo`, and the `worktree` commands bypass this sweep — `continue`/`abort`
-  resolve pauses, while `undo` and `worktree rm` apply their own narrower
-  refusals scoped to the refs or worktree they would touch.
-- `undo` reverts the last mutating command's metadata and branch tips; it does not
-  touch the working tree. Only commands routed through the shared `mutate`
-  wrapper journal entries — `create`, `modify`, `fold`, `squash`, `onto`,
-  `delete`, `rename`, `track`, `untrack`, `restack`, `prune`, `absorb`,
-  `repair`, `sync`'s local mutations, and `create --worktree`. `worktree`
-  add/rm/`--all`, `init`, `submit`, `checkout`/navigation, `continue`,
-  `abort`, and `undo` itself record nothing and are not undoable.
-  `undo <n>` rewinds the newest `n` journal entries
-  newest-first; each step drops its journal entry only after its restore
-  completes — within a step the snapshot-ref restore is one atomic
-  transaction, but earlier cleanup (deleting branches/worktrees the undone
-  command created) may already have run when a later phase fails. A failed
-  step keeps its entry, so rerunning `st undo` after fixing the cause is
-  safe; a state-save failure specifically reports that the refs were already
-  restored. The already-undone prefix is reported in place.
-  Entries written by current `st` also pin the post-operation tips, so undo
-  first verifies nothing moved outside `st` between the command and the
-  undo: a branch with external commits — or a branch the op deleted that
-  someone recreated — is refused (`ref_moved_since` in `--dry-run`) rather
-  than silently rewound, and `st undo --force` restores anyway while naming
-  the overwritten refs. Entries recorded before this pinning — or retained
-  for a FAILED operation whose refs `st abort`/`st continue` legitimately
-  moved afterwards — restore unconditionally, as they always did.
-  Undo also refuses when a ref it would rewrite — or a doomed branch it
-  would delete — has a rebase paused in a linked worktree
-  (`paused_rebase` in `--dry-run`): git refuses the delete mid-cleanup and a
-  later `--continue`/`--abort` would update-ref the branch anyway, so a
-  restore cannot stick. Pauses on branches the entry does not touch never
-  block it; `st undo --force` bypasses the refusal.
-- Mutating commands, HEAD-moving navigation (`checkout <branch>`,
-  `up`, `down`, `top`, `bottom`), and `init` are serialized across `st`
-  processes by an advisory lock (a second one fails fast rather than
-  corrupting state): flock on unix-like platforms, an exclusive lock file
-  elsewhere. A contender exits 5 (`"code": "locked"`). Pure readers stay
-  available while the lock is held: bare `st checkout` (branch listing),
-  `status`, `log`, `validate`, and every `--dry-run` preview. Navigation
-  locks only through its own checkout — the lock releases when the process
-  exits, so it never pins your interactive shell. To have `st` itself wait instead of looping in your
-  shell, set `ST_LOCK_WAIT` to a Go duration or bare seconds
-  (`ST_LOCK_WAIT=10s` or `ST_LOCK_WAIT=10`) — acquisition is retried for up to
-  that budget and exit 5 still means the lock never cleared. On non-flock
-  platforms an *abandoned* `lock.reclaim` guard (left by a dead process) is
-  also exit 5 but carries `"code": "locked_guard"` — a maintenance error
-  naming the guard path; it is never removed automatically and never retried,
-  even with `ST_LOCK_WAIT` set. See CONTRIBUTING's troubleshooting section for
-  the operator procedure.
-
-## Orchestrating parallel agents
-
-One stack, N agents, one worktree per branch:
-
-1. **Spawn.** `st create <name> --worktree --json` returns `worktree` (the
-   directory to start the agent in) and `switched` (whether the calling shell
-   teleported). For an existing branch: `st worktree <branch> --json` returns
-   `path`. To seed every tracked branch at once: `st worktree --all --json`
-   returns `{"created":[{"branch","path","copied":[],"summary"}],
-   "skipped":[{"branch","reason"}],"failed":{"branch","error"}}` — the branch
-   checked out in the main worktree is skipped, a branch paused mid-rebase in
-   its worktree is skipped as "a rebase is in progress there", and adds stop
-   at the first hard failure (`failed`, non-zero exit; rerunning is safe —
-   materialization is idempotent). `st worktree --all --dry-run --json`
-   previews the same rows with `"dryRun": true` — each predicted `path` and
-   `copied` — without creating anything.
-2. **Observe.** `st log --json` carries, per node, `worktree` (the branch is
-   claimed by that worktree), `dirty` (uncommitted work there), and
-   `needsRestack`. A node with no `worktree` field is unclaimed.
-3. **Coordinate.** `st restack` / `st sync` rebase branches living in other
-   worktrees *inside those worktrees* automatically and SKIP dirty ones, naming
-   them in the result's `notes` — so an orchestrator's loop is `st log --json`
-   (who needs restack) then `st restack --all` (whole forest from any worktree,
-   dirty agents skipped), re-checking `notes` for skipped branches. `st sync` works from
-   a linked worktree too (a dirty trunk worktree blocks it with an error naming
-   the path). To hold a worktree against every mutation while an agent works in
-   it, `st worktree lock <branch>` (`--reason` names the holder): a locked
-   worktree's branch is skipped by the restack cascade the same way (the note
-   names the lock), every removal path refuses or skips it, and `st worktree
-   unlock <branch>` releases the hold. `st worktree ls --json` reports each
-   worktree's `locked` flag, so locks set with plain `git worktree lock` are
-   honored identically. A worktree whose directory was deleted out from under
-   it stays registered until `git worktree prune` clears the row: `st`
-   surfaces it as `prunable` in `ls --json`, skips it in the cascade and
-   `rm --all` (naming the stale registration and the remedy), and refuses it
-   in `rm`/`delete`/`worktree add` rather than probing the dead path.
-4. **Clean up.** `st worktree rm <branch>` releases a branch's worktree, and
-   `st worktree rm --all` releases the linked worktree of every tracked
-   branch that has one — worktrees of untracked branches are untouched
-   (dirty ones are skipped into `skipped`, mirroring `worktree --all`'s shape);
-   `st undo` after a `create --worktree` also removes the worktree it created.
-   A worktree paused mid-rebase is found even though `git worktree list`
-   reports it `detached` — `rm` refuses it and `rm --all` skips it as
-   "a rebase is in progress there", rather than answering "no worktree".
-
-   Worktree paths are byte-exact: on git ≥ 2.36 the listing uses the
-   NUL-framed `worktree list --porcelain -z` grammar, so paths containing
-   newlines or other control bytes round-trip losslessly through JSON. On
-   older git the line-based listing is used only when the repository's
-   worktree metadata provably contains no CR/LF path bytes; a repo whose
-   worktree paths need them fails with an actionable error naming git ≥ 2.36
-   rather than returning a corrupted ownership map. Terminal output always
-   escapes control bytes in paths.
+- `restack`, `sync`, `doctor`, `log`, `status`, and `submit` are safe to re-run.
+- `st` **never creates or deletes git worktrees on disk**. It is fully
+  multi-worktree aware: restacking a stack rebases clean linked-worktree
+  descendants in place, skips dirty/locked/stale linked worktrees with a note,
+  and refuses to delete branches currently checked out in another worktree.
+- Mutating commands, HEAD-moving navigation (`checkout <branch>`, `up`, `down`,
+  `top`, `bottom`), `submit`, and `init` are serialized across `st` processes by
+  an advisory lock (exit 5 / `"locked"`, configurable via `ST_LOCK_WAIT`).
+  Read-only commands (`status`, `log`, `doctor`, bare `st checkout`, and all
+  `--dry-run` previews) bypass the lock.
+- Only commands routed through `mutateState` (`create`, `modify`, `squash`,
+  `onto`, `delete`, `rename`, `track`, `untrack`, `restack`, `doctor --fix`,
+  and `sync`'s local mutations) record an undo entry.
 
 ## Discoverability
 
-- `st --help` lists every command; `st help <command>` prints its summary, usage,
-  and aliases. The usage line documents the command's flags, and `st <command> -h`
-  prints that same usage line — or, with `--json`, the same machine-readable
-  object as `st help <command> --json` (aliases resolve identically). `st version`
-  reports the build.
-- `st help`, `st help <command>`, and `st version` accept `--json` and emit the
-  same information as a machine-readable payload — the command list as
-  `{ "commands": [ { "name", "summary", "usage", "aliases", "flags", "subVerbs" }, … ] }`.
-  Each `flags` entry is `{ "name", "type": "bool"|"string", "default", "summary" }`
-  and lists *declared* flags, so `-m`, `--message`, and `--json` each appear
-  separately; positionals remain described only by the prose `usage`.
-  `subVerbs` (`omitempty`) lists the literal sub-verbs a command accepts —
-  `worktree`'s `ls`/`rm`, `shell`'s `install`, `completion`'s shells — so the
-  sub-verb surface is data, not something to regex out of `usage`.
-- `st version --json` emits `{ "version", "commit", "built", "go" }` —
-  `version` is the release version (an ldflags stamp wins, then the module
-  version a `go install` recorded, then the compiled-in default); `commit` is
-  the VCS revision (≤12 chars, with a ` (dirty)` suffix when the tree was
-  dirty), `built` the VCS commit time, and `go` the toolchain version — all
-  three `omitempty`, absent when the build carries no VCS metadata.
-- `st guide` (or `st guide --json`) prints the recommended end-to-end
-  workflow; `--json` emits `{ "steps": [ "…", … ], "docs": "…" }` where `steps`
-  is the same annotated command list text mode prints and `docs` points at
-  `st help <command>` for per-command usage.
-- `ST_DEBUG=1 st <cmd>` writes one stderr line per git spawn (the argv and
-  its cwd) — the fastest way to see which probes a command actually ran when
-  diagnosing a slow call.
+- `st --help` lists every command; `st help <command>` prints its summary,
+  usage, and aliases. `st <command> -h --json` emits the same object as
+  `st help <command> --json`.
+- `st help --json` emits `{ "commands": [ { "name", "summary", "usage",
+  "aliases", "flags", "subVerbs" }, … ] }`, where each `flags` entry is
+  `{ "name", "type": "bool"|"string", "default", "summary" }`.
+- `st version --json` emits `{ "version", "commit", "built", "go" }`.
+- `st guide --json` emits `{ "steps": [ "…" ], "docs": "…" }`.
+- `ST_DEBUG=1 st <cmd>` logs every git subprocess spawn to stderr.
 
 ### Internal: `st __complete`
 
-`st __complete` is the read-only endpoint the generated shell-completion hooks
-call once per keystroke — it is plumbing, not a user surface: hidden from
-`st help`, `help --json`, word-1 candidates, and did-you-mean suggestions, and
-exempt from the git-version check so the per-keystroke cost stays flat.
-
-```
-st __complete <command-or-alias> <index> -- <prior words...>
-```
-
-`<index>` must equal the number of `<prior words>` (the generated hooks always
-pass every word between the command and the cursor). Output is one branch name
-per line on stdout; anything that is not malformed argv — an unknown command,
-no repo, missing/unreadable/future state, a detached HEAD, a failed probe —
-prints nothing and exits 0. Malformed argv is a usage error (exit 1). The
-endpoint never takes the lock and never writes; it reads the state file plus
-at most two flat git probes (`for-each-ref` or `worktree list`, and a HEAD
-lookup for `onto`) — no fetch, no `rev-list`.
-
-Candidate policy: `checkout`/`co` → trunk + tracked branches; `onto`/`move` →
-tracked + trunk minus the current branch's subtree; `track` → untracked local
-branches, or tracked + trunk when completing `--parent`'s value; `worktree`/`wt`
-→ tracked branches lacking a linked worktree, or — after `rm`/`remove` —
-branches owning one; `delete`, `untrack`, and `commits` → tracked branches;
-`rename` →
-tracked + trunk on the first positional (the new-name positional completes
-nothing). All other commands and positions emit nothing.
-
-`ST_COMPLETE_BIN` overrides the binary the generated hooks invoke — point it
-at a build under test instead of the installed `st`.
+`st __complete <command-or-alias> <index> -- <prior words...>` is the hidden,
+read-only completion endpoint invoked by generated shell scripts
+(`st completion <bash|zsh|fish>`). Candidate policy: `checkout`/`co` → trunk +
+tracked branches; `onto`/`move` → tracked + trunk minus the current branch's
+subtree; `track` → untracked local branches (or tracked + trunk after
+`--parent`); `delete` and `untrack` → tracked branches; `rename` → tracked +
+trunk on the first positional. `ST_COMPLETE_BIN` overrides the binary invoked by
+generated hooks.

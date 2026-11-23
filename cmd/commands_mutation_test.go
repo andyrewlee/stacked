@@ -267,14 +267,14 @@ func TestUndoRefFailureRetainsEntryAndState(t *testing.T) {
 	// A modify-style entry: no created branches, refs = pre-op tips. The
 	// amend touches a file feat-b does not, so the cascade restack is clean.
 	write(t, "a2.txt", "C\n")
-	if err := runModify([]string{"-a"}); err != nil {
+	mustRun(t, "git", "add", "a2.txt")
+	if err := runModify(nil); err != nil {
 		t.Fatalf("modify: %v", err)
 	}
-	entries, err := stack.ListUndo()
-	if err != nil {
-		t.Fatalf("ListUndo: %v", err)
+	newest, ok, err := stack.PeekUndo()
+	if err != nil || !ok {
+		t.Fatalf("PeekUndo: ok=%v err=%v", ok, err)
 	}
-	newest := entries[len(entries)-1]
 	if newest.Label != "modify" {
 		t.Fatalf("newest undo entry = %q, want the modify", newest.Label)
 	}
@@ -364,12 +364,8 @@ func TestUndoRefFailureRetainsEntryAndState(t *testing.T) {
 	if !bytes.Equal(gotState, wantState) {
 		t.Fatalf("state after retry:\n got  %s\nwant %s", gotState, wantState)
 	}
-	after, err := stack.ListUndo()
-	if err != nil {
-		t.Fatalf("ListUndo: %v", err)
-	}
-	if len(after) != len(entries)-1 {
-		t.Fatalf("journal depth = %d after retry, want %d (exactly one entry dropped)", len(after), len(entries)-1)
+	if after, ok, err := stack.PeekUndo(); err != nil || !ok || after.Label == "modify" {
+		t.Fatalf("after retry PeekUndo = %+v ok=%v err=%v, want modify dropped", after, ok, err)
 	}
 }
 
@@ -416,9 +412,9 @@ func TestMutateRefusesPausedRebase(t *testing.T) {
 		t.Fatalf("expected a rebase in progress")
 	}
 
-	before, err := stack.ListUndo()
+	beforeBytes, err := os.ReadFile(".git/stacked/undo.json")
 	if err != nil {
-		t.Fatalf("ListUndo: %v", err)
+		t.Fatalf("read undo.json before: %v", err)
 	}
 	for _, run := range [][]string{
 		// Args chosen so each command parses cleanly and reaches the gate.
@@ -440,12 +436,12 @@ func TestMutateRefusesPausedRebase(t *testing.T) {
 		}
 	}
 	// The refusal happens before any undo entry is recorded.
-	after, err := stack.ListUndo()
+	afterBytes, err := os.ReadFile(".git/stacked/undo.json")
 	if err != nil {
-		t.Fatalf("ListUndo: %v", err)
+		t.Fatalf("read undo.json after: %v", err)
 	}
-	if len(after) != len(before) {
-		t.Fatalf("refused mutations journaled entries: %d -> %d", len(before), len(after))
+	if !bytes.Equal(beforeBytes, afterBytes) {
+		t.Fatal("refused mutations modified undo.json")
 	}
 }
 
@@ -476,102 +472,6 @@ func TestUndoEmptyJournalJSONAndText(t *testing.T) {
 	})
 	if !strings.Contains(out, "nothing to undo") {
 		t.Fatalf("undo on an empty journal = %q, want %q", out, "nothing to undo")
-	}
-}
-
-// `st undo --list` is a pure read of the journal: newest first, index 1 naming
-// what bare undo would revert, and the journal itself untouched — a bare undo
-// must still work after listing.
-func TestUndoList(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-
-	// Empty journal mirrors bare undo's empty case in both modes.
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--list"}); err != nil {
-			t.Fatalf("undo --list on an empty journal: %v", err)
-		}
-	})
-	if !strings.Contains(out, "nothing to undo") {
-		t.Fatalf("undo --list on an empty journal = %q, want %q", out, "nothing to undo")
-	}
-	type listEntry struct {
-		Index            int               `json:"index"`
-		Label            string            `json:"label"`
-		CurrentBranch    string            `json:"currentBranch"`
-		CreatedBranches  []string          `json:"createdBranches"`
-		CreatedWorktrees map[string]string `json:"createdWorktrees"`
-		Refs             map[string]string `json:"refs"`
-	}
-	var empty struct {
-		Entries []listEntry `json:"entries"`
-	}
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--list", "--json"}); err != nil {
-			t.Fatalf("undo --list --json on an empty journal: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "undo --list --json (empty journal)", out, &empty)
-	if len(empty.Entries) != 0 {
-		t.Fatalf("undo --list --json on an empty journal = %+v, want no entries", empty.Entries)
-	}
-
-	// Two mutations list newest-first; index 1 is the next undo target.
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--list"}); err != nil {
-			t.Fatalf("undo --list: %v", err)
-		}
-	})
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("undo --list = %q, want 2 entries", out)
-	}
-	if !strings.HasPrefix(lines[0], "1: create") ||
-		!strings.Contains(lines[0], "created feat-b") ||
-		!strings.Contains(lines[0], "on feat-a") {
-		t.Fatalf("undo --list newest line = %q, want '1: create' for feat-b taken from feat-a", lines[0])
-	}
-	if !strings.HasPrefix(lines[1], "2: create") ||
-		!strings.Contains(lines[1], "created feat-a") ||
-		!strings.Contains(lines[1], "on main") {
-		t.Fatalf("undo --list oldest line = %q, want '2: create' for feat-a taken from main", lines[1])
-	}
-
-	var listed struct {
-		Entries []listEntry `json:"entries"`
-	}
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--list", "--json"}); err != nil {
-			t.Fatalf("undo --list --json: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "undo --list --json", out, &listed)
-	if len(listed.Entries) != 2 {
-		t.Fatalf("undo --list --json entries = %+v, want 2", listed.Entries)
-	}
-	top := listed.Entries[0]
-	if top.Index != 1 || top.Label != "create" || top.CurrentBranch != "feat-a" ||
-		len(top.CreatedBranches) != 1 || top.CreatedBranches[0] != "feat-b" {
-		t.Fatalf("undo --list --json newest entry = %+v, want index 1 create feat-b on feat-a", top)
-	}
-	// refs are the PRE-op tips the entry would restore: feat-b did not exist
-	// when the second create was snapshotted, so it must be absent.
-	if _, ok := top.Refs["main"]; !ok {
-		t.Fatalf("undo --list --json refs = %v, want main's recorded tip", top.Refs)
-	}
-	if _, ok := top.Refs["feat-b"]; ok {
-		t.Fatalf("undo --list --json refs = %v, want no feat-b (created by this entry)", top.Refs)
-	}
-
-	// --list did not consume the journal: bare undo still reverts the create.
-	if err := runUndo(nil); err != nil {
-		t.Fatalf("undo after --list: %v", err)
-	}
-	if _, ok := stateT(t).Branches["feat-b"]; ok {
-		t.Fatal("undo after --list left feat-b tracked")
 	}
 }
 
@@ -631,8 +531,8 @@ func TestRepairInvalidParentUsesMergeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runRepair(nil); err != nil {
-		t.Fatalf("repair: %v", err)
+	if err := runDoctor([]string{"--fix"}); err != nil {
+		t.Fatalf("doctor --fix: %v", err)
 	}
 	a, _ = stateT(t).Get("feat-a")
 	if a.Parent != "main" || a.ParentSHA != base {
@@ -651,8 +551,8 @@ func TestRepairMissingParentPreservesChildBase(t *testing.T) {
 	mustCheckout(t, "main")
 	mustRun(t, "git", "branch", "-D", "feat-a")
 
-	if err := runRepair(nil); err != nil {
-		t.Fatalf("repair: %v", err)
+	if err := runDoctor([]string{"--fix"}); err != nil {
+		t.Fatalf("doctor --fix: %v", err)
 	}
 	child, _ := stateT(t).Get("feat-b")
 	if child.Parent != "main" || child.ParentSHA != oldBase {
@@ -698,51 +598,6 @@ func TestUndoKeepsUnrelatedBranchCreatedAfterSnapshot(t *testing.T) {
 	}
 	if !git.BranchExists("scratch") {
 		t.Fatal("undo deleted unrelated branch scratch")
-	}
-}
-
-func TestUndoCreateWorktreeRemovesLinkedWorktree(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	type createWorktreeJSON struct {
-		Branch   string   `json:"branch"`
-		Parent   string   `json:"parent"`
-		Worktree string   `json:"worktree"`
-		Copied   []string `json:"copied,omitempty"`
-		Switched bool     `json:"switched"`
-		Summary  string   `json:"summary"`
-	}
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
-			t.Fatalf("create feat-a --worktree: %v", err)
-		}
-	})
-	var created createWorktreeJSON
-	decodeStrictJSON(t, "create --worktree for undo", out, &created)
-	if cur := curBranch(t); cur != "main" {
-		t.Fatalf("current branch = %q, want main", cur)
-	}
-
-	// No cache reset here on purpose: create --worktree warmed the cache and
-	// then mutated topology; undo must see the created worktree through the
-	// invalidated cache (the pre-invalidation workaround was a manual reset).
-	if err := runUndo(nil); err != nil {
-		t.Fatalf("undo create --worktree: %v", err)
-	}
-	if git.BranchExists("feat-a") {
-		t.Fatal("undo left created branch feat-a behind")
-	}
-	if stateT(t).IsTracked("feat-a") {
-		t.Fatal("undo left feat-a tracked")
-	}
-	if _, err := os.Stat(created.Worktree); !os.IsNotExist(err) {
-		t.Fatalf("undo left created worktree at %q: %v", created.Worktree, err)
-	}
-	list := mustRun(t, "git", "worktree", "list", "--porcelain")
-	if strings.Contains(list, "refs/heads/feat-a") {
-		t.Fatalf("undo left feat-a registered as a worktree:\n%s", list)
 	}
 }
 
@@ -795,18 +650,14 @@ func TestUndoDeleteCurrentRestoresCheckout(t *testing.T) {
 	}
 }
 
-func TestUndoCreateAfterModifyUndoPreservesDirtyWorktree(t *testing.T) {
+func TestUndoCreatePreservesDirtyWorktree(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
 
+	// Dirty a.txt locally after create; undoing create should still preserve the
+	// working tree modification instead of clobbering it.
 	write(t, "a.txt", "a-modified\n")
-	if err := runModify([]string{"-a"}); err != nil {
-		t.Fatalf("modify: %v", err)
-	}
-	if err := runUndo(nil); err != nil {
-		t.Fatalf("undo modify: %v", err)
-	}
 	if err := runUndo(nil); err != nil {
 		t.Fatalf("undo create with dirty worktree: %v", err)
 	}
@@ -818,30 +669,6 @@ func TestUndoCreateAfterModifyUndoPreservesDirtyWorktree(t *testing.T) {
 	}
 	if got, err := os.ReadFile("a.txt"); err != nil || string(got) != "a-modified\n" {
 		t.Fatalf("worktree a.txt = %q err %v, want preserved modification", got, err)
-	}
-}
-
-func TestUndoFoldCurrentRestoresCheckout(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-
-	if err := runFold(nil); err != nil {
-		t.Fatalf("fold current branch: %v", err)
-	}
-	if got := curBranch(t); got != "feat-a" {
-		t.Fatalf("after fold HEAD = %q, want feat-a", got)
-	}
-
-	if err := runUndo(nil); err != nil {
-		t.Fatalf("undo fold: %v", err)
-	}
-	if got := curBranch(t); got != "feat-b" {
-		t.Fatalf("after undo HEAD = %q, want feat-b", got)
-	}
-	if !git.BranchExists("feat-b") {
-		t.Fatal("undo did not restore folded branch")
 	}
 }
 
@@ -945,161 +772,6 @@ func TestUndoDeletesPartialRenameWhenStateNotSaved(t *testing.T) {
 	}
 	if got := curBranch(t); got != "feat-a" {
 		t.Fatalf("HEAD = %q, want feat-a", got)
-	}
-}
-
-// TestAbsorbUndoRecoveryPointer pins the full journal-to-output path over real
-// git: `st absorb` records the amended tip on its undo entry, `st undo
-// --dry-run` warns about the orphaned commit BEFORE undoing, and `st undo`
-// names it again so the staged edit stays recoverable.
-func TestAbsorbUndoRecoveryPointer(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "f.txt", "A0\nB0\n", "a")
-
-	// Stage an edit to line 1 — owned by feat-a's tip.
-	write(t, "f.txt", "A2\nB0\n")
-	mustRun(t, "git", "add", "f.txt")
-	if err := runAbsorb(nil); err != nil {
-		t.Fatalf("absorb: %v", err)
-	}
-
-	amended := mustRun(t, "git", "rev-parse", "feat-a")
-	entry, ok, err := stack.PeekUndo()
-	if err != nil || !ok {
-		t.Fatalf("peek undo: %v (ok=%v)", err, ok)
-	}
-	if entry.AbsorbedCommits["feat-a"] != amended {
-		t.Fatalf("absorbedCommits = %v, want feat-a -> %s", entry.AbsorbedCommits, amended)
-	}
-
-	var dryErr error
-	dry := captureStdout(t, func() { dryErr = runUndo([]string{"--dry-run"}) })
-	if dryErr != nil {
-		t.Fatalf("undo --dry-run: %v", dryErr)
-	}
-	if !strings.Contains(dry, amended) || !strings.Contains(dry, "cherry-pick") {
-		t.Fatalf("dry-run = %q, want the amended SHA and recovery hint before undoing", dry)
-	}
-
-	var undoErr error
-	out := captureStdout(t, func() { undoErr = runUndo(nil) })
-	if undoErr != nil {
-		t.Fatalf("undo: %v", undoErr)
-	}
-	if !strings.Contains(out, amended) || !strings.Contains(out, "git cherry-pick "+amended) {
-		t.Fatalf("undo output = %q, want the amended SHA and a cherry-pick command", out)
-	}
-	if got := mustRun(t, "git", "cat-file", "-t", amended); got != "commit" {
-		t.Fatalf("cat-file -t %s = %q, want the orphaned commit still resolvable", amended, got)
-	}
-}
-
-// TestAbsorbFailedUndoRecoveryPointer pins the mid-op checkpoint through the
-// journal: absorb amends feat-a, the cascade conflicts on feat-b, and the
-// RETAINED undo entry must already carry the amended commit pointer — the
-// pre-fix code annotated it only on success, so abort→undo orphaned the
-// staged edit namelessly. Text and JSON get fresh fixtures.
-func TestAbsorbFailedUndoRecoveryPointer(t *testing.T) {
-	for _, mode := range []string{"text", "json"} {
-		t.Run(mode, func(t *testing.T) {
-			asJSON := mode == "json"
-			newRepo(t)
-			mustInit(t)
-			// The adjacency fixture: feat-a owns line 1, feat-b edits line 2,
-			// so amending feat-a forces a genuine cascade conflict on feat-b.
-			write(t, "shared.txt", "A0\nB0\n")
-			mustRun(t, "git", "add", "shared.txt")
-			mustRun(t, "git", "commit", "-q", "-m", "seed")
-			mustCreate(t, "feat-a", "shared.txt", "A1\nB0\n", "a")
-			mustCreate(t, "feat-b", "shared.txt", "A1\nB1\n", "b")
-			tipsBefore := map[string]string{}
-			for _, b := range []string{"main", "feat-a", "feat-b"} {
-				tipsBefore[b] = mustRun(t, "git", "rev-parse", b)
-			}
-			write(t, "shared.txt", "A2\nB1\n")
-			mustRun(t, "git", "add", "shared.txt")
-
-			var absorbArgs []string
-			if asJSON {
-				absorbArgs = []string{"--json"}
-			}
-			err := runAbsorb(absorbArgs)
-			if !errors.Is(err, stack.ErrConflict) || exitCode(err) != 2 {
-				t.Fatalf("absorb = %v (exit %d), want a conflict (exit 2)", err, exitCode(err))
-			}
-			amended := mustRun(t, "git", "rev-parse", "feat-a")
-			if amended == tipsBefore["feat-a"] {
-				t.Fatal("feat-a unchanged; the amend should have landed before the conflict")
-			}
-
-			// The checkpoint survived CleanupUndoOnError: the retained absorb
-			// entry already names the commit holding the staged edit.
-			entry, ok, err := stack.PeekUndo()
-			if err != nil || !ok {
-				t.Fatalf("peek undo: %v (ok=%v)", err, ok)
-			}
-			if entry.Label != "absorb" {
-				t.Fatalf("entry label = %q, want absorb", entry.Label)
-			}
-			if entry.AbsorbedCommits["feat-a"] != amended {
-				t.Fatalf("absorbedCommits = %v, want feat-a -> %s", entry.AbsorbedCommits, amended)
-			}
-
-			if err := runAbort(nil); err != nil {
-				t.Fatalf("abort: %v", err)
-			}
-
-			// Both the preview and the applied undo name the amended commit.
-			dryArgs := []string{"--dry-run"}
-			undoArgs := []string{}
-			if asJSON {
-				dryArgs = append(dryArgs, "--json")
-				undoArgs = append(undoArgs, "--json")
-			}
-			var dryErr error
-			dry := captureStdout(t, func() { dryErr = runUndo(dryArgs) })
-			if dryErr != nil {
-				t.Fatalf("undo --dry-run: %v", dryErr)
-			}
-			var undoErr error
-			out := captureStdout(t, func() { undoErr = runUndo(undoArgs) })
-			if undoErr != nil {
-				t.Fatalf("undo: %v", undoErr)
-			}
-			if asJSON {
-				var dryPayload struct {
-					Notes []string `json:"notes"`
-				}
-				if err := json.Unmarshal([]byte(dry), &dryPayload); err != nil {
-					t.Fatalf("dry-run JSON does not decode: %v\n%s", err, dry)
-				}
-				if joined := strings.Join(dryPayload.Notes, "\n"); !strings.Contains(joined, amended) {
-					t.Fatalf("dry-run notes = %v, want %s", dryPayload.Notes, amended)
-				}
-				var undoPayload struct {
-					Notes []string `json:"notes"`
-				}
-				if err := json.Unmarshal([]byte(out), &undoPayload); err != nil {
-					t.Fatalf("undo JSON does not decode: %v\n%s", err, out)
-				}
-				if joined := strings.Join(undoPayload.Notes, "\n"); !strings.Contains(joined, amended) || !strings.Contains(joined, "cherry-pick") {
-					t.Fatalf("undo notes = %v, want %s and a cherry-pick pointer", undoPayload.Notes, amended)
-				}
-			} else {
-				if !strings.Contains(dry, amended) || !strings.Contains(dry, "cherry-pick") {
-					t.Fatalf("dry-run = %q, want the amended SHA and recovery hint", dry)
-				}
-				if !strings.Contains(out, amended) || !strings.Contains(out, "git cherry-pick "+amended) {
-					t.Fatalf("undo = %q, want the amended SHA and a cherry-pick command", out)
-				}
-			}
-			for b, tip := range tipsBefore {
-				if got := mustRun(t, "git", "rev-parse", b); got != tip {
-					t.Fatalf("%s = %s after undo, want restored %s", b, got, tip)
-				}
-			}
-		})
 	}
 }
 
@@ -1234,30 +906,13 @@ func TestUndoPeekFailureSurfaces(t *testing.T) {
 	}
 }
 
-// TestUndoRejectsFutureSnapshotBeforeWorktreePreparation pins ordering: the
-// snapshot's schema check must run BEFORE prepareUndoCurrentCreatedWorktree —
-// the case where undo would chdir out of and delete the worktree it is being
-// invoked from. A future-schema snapshot refuses with ErrStateTooNew and
-// leaves cwd, worktree, refs, state, and journal untouched.
-func TestUndoRejectsFutureSnapshotBeforeWorktreePreparation(t *testing.T) {
+// TestUndoRejectsFutureSnapshot pins that a future-schema snapshot in undo.json
+// refuses with ErrStateTooNew and leaves refs, state, and journal untouched,
+// while legacy v0 and current v1 snapshots still undo cleanly.
+func TestUndoRejectsFutureSnapshot(t *testing.T) {
 	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
 	mustInit(t)
-
-	var created struct {
-		Branch   string `json:"branch"`
-		Parent   string `json:"parent"`
-		Worktree string `json:"worktree"`
-		Switched bool   `json:"switched"`
-		Summary  string `json:"summary"`
-	}
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-wt", "--worktree", "--json"}); err != nil {
-			t.Fatalf("create --worktree: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "create --worktree", out, &created)
-	wtDir := created.Worktree
+	mustCreate(t, "feat-wt", "wt.txt", "wt\n", "wt")
 
 	gitDir, err := git.GitCommonDir()
 	if err != nil {
@@ -1266,8 +921,7 @@ func TestUndoRejectsFutureSnapshotBeforeWorktreePreparation(t *testing.T) {
 	stateFile := filepath.Join(gitDir, "stacked", "state.json")
 	undoFile := filepath.Join(gitDir, "stacked", "undo.json")
 
-	// Bump ONLY the newest journal entry's snapshot version; the rest of the
-	// journal — labels, refs, created-worktree records — is byte-identical.
+	// Bump ONLY the newest journal entry's snapshot version.
 	data, err := os.ReadFile(undoFile)
 	if err != nil {
 		t.Fatal(err)
@@ -1296,20 +950,9 @@ func TestUndoRejectsFutureSnapshotBeforeWorktreePreparation(t *testing.T) {
 	}
 	wtTip := mustRun(t, "git", "rev-parse", "feat-wt")
 
-	// Run the undo from INSIDE the created worktree — pre-check ordering is
-	// what the test exists to prove.
-	t.Chdir(wtDir)
-	resetProcCaches()
-
 	err = runUndo(nil)
 	if !errors.Is(err, stack.ErrStateTooNew) {
 		t.Fatalf("undo error = %v, want wrapped ErrStateTooNew", err)
-	}
-	if cwd, _ := os.Getwd(); cwd != wtDir {
-		t.Fatalf("cwd = %q, want still inside %q — preparation ran before the barrier", cwd, wtDir)
-	}
-	if _, err := os.Stat(wtDir); err != nil {
-		t.Fatalf("created worktree removed during refused undo: %v", err)
 	}
 	if !git.BranchExists("feat-wt") {
 		t.Fatal("refused undo deleted the created branch")
@@ -1459,12 +1102,12 @@ func TestNoopRepairDoesNotReplacePreviousUndo(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
 	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	if err := runRepair(nil); err != nil {
-		t.Fatalf("noop repair: %v", err)
+	if err := runDoctor([]string{"--fix"}); err != nil {
+		t.Fatalf("noop doctor --fix: %v", err)
 	}
 
 	if err := runUndo(nil); err != nil {
-		t.Fatalf("undo after noop repair: %v", err)
+		t.Fatalf("undo after noop doctor --fix: %v", err)
 	}
 	if git.BranchExists("feat-a") {
 		t.Fatal("undo did not remove branch from the last successful create")
@@ -1479,8 +1122,7 @@ func TestNoArgMutatorsRejectPositionalArgs(t *testing.T) {
 		{"abort", runAbort},
 		{"bottom", runBottom},
 		{"continue", runContinue},
-		{"fold", runFold},
-		{"repair", runRepair},
+		{"doctor", runDoctor},
 		{"restack", runRestack},
 		{"squash", runSquash},
 		{"top", runTop},
@@ -1939,8 +1581,8 @@ func TestTrackAllDryRun(t *testing.T) {
 			t.Fatalf("dry-run tracked %s", name)
 		}
 	}
-	if entries, err := stack.ListUndo(); err != nil || len(entries) != 0 {
-		t.Fatalf("journal after preview = %v entries err %v, want 0", len(entries), err)
+	if _, ok, err := stack.PeekUndo(); err != nil || ok {
+		t.Fatalf("journal after preview: ok=%v err=%v, want empty", ok, err)
 	}
 
 	// The JSON arm is the shared dryRun shape: dryRun true plus the tracked
@@ -2002,115 +1644,6 @@ func TestTrackAllJSONShape(t *testing.T) {
 }
 
 // --- prune + sync --no-fetch -------------------------------------------------
-
-func TestPruneDeletesMergedKeepsHEAD(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-merged", "m.txt", "m\n", "m")
-	mustCreate(t, "feat-live", "l.txt", "l\n", "l")
-
-	// Land feat-merged's commit on main, then return HEAD to the live branch.
-	mustCheckout(t, "main")
-	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-merged")
-	mustCheckout(t, "feat-live")
-
-	out := captureStdout(t, func() {
-		if err := runPrune(nil); err != nil {
-			t.Fatalf("prune: %v", err)
-		}
-	})
-	if !strings.Contains(out, "feat-merged") {
-		t.Fatalf("prune output should name the deleted branch, got:\n%s", out)
-	}
-	if curBranch(t) != "feat-live" {
-		t.Fatalf("HEAD = %q, want feat-live (prune never moves HEAD)", curBranch(t))
-	}
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-merged").Run() == nil {
-		t.Fatal("merged feat-merged still exists after prune")
-	}
-	if s := stateT(t); s.IsTracked("feat-merged") || !s.IsTracked("feat-live") {
-		t.Fatalf("state tracks feat-merged=%v feat-live=%v", s.IsTracked("feat-merged"), s.IsTracked("feat-live"))
-	}
-}
-
-func TestPruneRefusesCurrentMergedBranch(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
-	mustRun(t, "git", "checkout", "-q", "feat-a")
-
-	err := runPrune(nil)
-	if err == nil || !strings.Contains(err.Error(), "check out another branch or run st sync") {
-		t.Fatalf("prune on merged HEAD: err=%v", err)
-	}
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
-		t.Fatal("refused prune deleted feat-a")
-	}
-}
-
-func TestPruneDryRunDeletesNothing(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
-
-	var res map[string]any
-	out := captureStdout(t, func() {
-		if err := runPrune([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("prune --dry-run: %v", err)
-		}
-	})
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		t.Fatalf("decode result: %v\n%s", err, out)
-	}
-	if res["dryRun"] != true {
-		t.Fatalf("dryRun = %v", res["dryRun"])
-	}
-	deleted, _ := res["deleted"].([]any)
-	if len(deleted) != 1 || deleted[0] != "feat-a" {
-		t.Fatalf("deleted = %v, want [feat-a]", res["deleted"])
-	}
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
-		t.Fatal("dry run deleted feat-a")
-	}
-}
-
-func TestPruneRemoteBasisAndMissingRemoteRef(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-
-	remoteDir := t.TempDir()
-	mustRun(t, "git", "init", "-q", "--bare", remoteDir)
-	mustRun(t, "git", "remote", "add", "origin", remoteDir)
-	mustRun(t, "git", "push", "-q", "-u", "origin", "main")
-
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCheckout(t, "main")
-	mustRun(t, "git", "merge", "-q", "--ff-only", "feat-a")
-
-	// origin/main still points at the init commit — feat-a is NOT merged into
-	// it, so --remote origin must not prune feat-a even though local main has it.
-	if err := runPrune([]string{"--remote", "origin"}); err != nil {
-		t.Fatalf("prune --remote origin: %v", err)
-	}
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() != nil {
-		t.Fatal("feat-a was pruned against a remote ref that does not contain it")
-	}
-
-	// A remote with no tracking ref for the trunk must fail loudly.
-	r2Dir := t.TempDir()
-	mustRun(t, "git", "init", "-q", "--bare", r2Dir)
-	mustRun(t, "git", "remote", "add", "r2", r2Dir)
-	if err := runPrune([]string{"--remote", "r2"}); err == nil || !strings.Contains(err.Error(), "no tracking ref") {
-		t.Fatalf("prune --remote r2 (unfetched): err=%v", err)
-	}
-	if err := runPrune([]string{"--remote", "nope"}); err == nil || !strings.Contains(err.Error(), `remote "nope" does not exist`) {
-		t.Fatalf("prune --remote nope: err=%v", err)
-	}
-}
 
 func TestSyncNoFetchKeepsRemoteOnlyMerged(t *testing.T) {
 	newRepo(t)
@@ -2207,495 +1740,7 @@ func TestSyncNoFetchNotFooledByTrunkTag(t *testing.T) {
 
 // --- undo --dry-run ---------------------------------------------------------
 
-// The preview changes nothing observable: state.json and undo.json are
-// byte-identical afterwards, every ref and worktree survives, cwd is
-// unmoved, and a following real undo still reverts the same entry.
-func TestUndoDryRunMutatesNothing(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	gitDir, err := git.GitCommonDir()
-	if err != nil {
-		t.Fatalf("git common dir: %v", err)
-	}
-	stBytes, err := os.ReadFile(filepath.Join(gitDir, "stacked", "state.json"))
-	if err != nil {
-		t.Fatalf("read state.json: %v", err)
-	}
-	journalBytes, err := os.ReadFile(filepath.Join(gitDir, "stacked", "undo.json"))
-	if err != nil {
-		t.Fatalf("read undo journal: %v", err)
-	}
-	headBefore := mustRun(t, "git", "rev-parse", "HEAD")
-	tipBefore := mustRun(t, "git", "rev-parse", "feat-a")
-
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("undo --dry-run: %v", err)
-		}
-	})
-	var res map[string]any
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		t.Fatalf("decode preview: %v\n%s", err, out)
-	}
-	if res["dryRun"] != true || res["journalDrop"] != true {
-		t.Fatalf("preview = %v", res)
-	}
-	deleted, _ := res["wouldDelete"].([]any)
-	if len(deleted) != 1 {
-		t.Fatalf("wouldDelete = %v, want [feat-a]", res["wouldDelete"])
-	}
-	if res["wouldCheckout"] != "main" {
-		t.Fatalf("wouldCheckout = %v, want main", res["wouldCheckout"])
-	}
-	if bl, _ := res["blockers"].([]any); len(bl) != 0 {
-		t.Fatalf("blockers = %v, want []", res["blockers"])
-	}
-
-	stBytes2, err := os.ReadFile(filepath.Join(gitDir, "stacked", "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	journalBytes2, err := os.ReadFile(filepath.Join(gitDir, "stacked", "undo.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stBytes) != string(stBytes2) {
-		t.Fatal("preview rewrote state.json")
-	}
-	if string(journalBytes) != string(journalBytes2) {
-		t.Fatal("preview rewrote the undo journal")
-	}
-	if got := mustRun(t, "git", "rev-parse", "HEAD"); got != headBefore {
-		t.Fatal("preview moved HEAD")
-	}
-	if got := mustRun(t, "git", "rev-parse", "feat-a"); got != tipBefore {
-		t.Fatal("preview moved feat-a")
-	}
-	if curBranch(t) != "feat-a" {
-		t.Fatalf("cwd branch = %q, want feat-a", curBranch(t))
-	}
-
-	// Non-reservation: the real undo still applies the entry afterwards.
-	if err := runUndo(nil); err != nil {
-		t.Fatalf("real undo after preview: %v", err)
-	}
-	if exec.Command("git", "rev-parse", "--verify", "-q", "feat-a").Run() == nil {
-		t.Fatal("real undo did not delete feat-a")
-	}
-}
-
-func TestUndoDryRunEmptyJournal(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("undo --dry-run on empty journal: %v", err)
-		}
-	})
-	var res struct {
-		DryRun bool `json:"dryRun"`
-		Undone bool `json:"undone"`
-	}
-	decodeStrictJSON(t, "undo --dry-run (empty)", out, &res)
-	if !res.DryRun || res.Undone {
-		t.Fatalf("empty preview = %+v, want {dryRun:true, undone:false}", res)
-	}
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run"}); err != nil {
-			t.Fatalf("undo --dry-run text on empty journal: %v", err)
-		}
-	})
-	if !strings.Contains(out, "nothing to undo") {
-		t.Fatalf("text = %q", out)
-	}
-}
-
-func TestUndoDryRunMutuallyExclusiveWithList(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	if err := runUndo([]string{"--dry-run", "--list"}); err == nil {
-		t.Fatal("--dry-run --list should be a usage error")
-	}
-}
-
-func TestUndoDryRunModifyShowsRestore(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	recorded := mustRun(t, "git", "rev-parse", "feat-a")
-	write(t, "a.txt", "a2\n")
-	if err := runModify([]string{"-a"}); err != nil {
-		t.Fatalf("modify: %v", err)
-	}
-	live := mustRun(t, "git", "rev-parse", "feat-a")
-
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("undo --dry-run: %v", err)
-		}
-	})
-	var res struct {
-		DryRun       bool   `json:"dryRun"`
-		Label        string `json:"label"`
-		WouldRestore []struct {
-			Branch             string `json:"branch"`
-			From               string `json:"from"`
-			To                 string `json:"to"`
-			CommitsLostFromRef any    `json:"commitsLostFromRef"`
-		} `json:"wouldRestore"`
-		WouldCheckout string `json:"wouldCheckout"`
-		JournalDrop   bool   `json:"journalDrop"`
-		Observed      struct {
-			EntryIndex int                `json:"entryIndex"`
-			Tips       map[string]*string `json:"tips"`
-		} `json:"observed"`
-		Blockers []string `json:"blockers"`
-	}
-	decodeStrictJSON(t, "undo --dry-run", out, &res)
-	if !strings.HasPrefix(res.Label, "modify") {
-		t.Fatalf("label = %q", res.Label)
-	}
-	var featA *struct {
-		Branch             string `json:"branch"`
-		From               string `json:"from"`
-		To                 string `json:"to"`
-		CommitsLostFromRef any    `json:"commitsLostFromRef"`
-	}
-	for i := range res.WouldRestore {
-		if res.WouldRestore[i].Branch == "feat-a" {
-			featA = &res.WouldRestore[i]
-		}
-	}
-	if featA == nil {
-		t.Fatalf("wouldRestore = %+v, want a feat-a row", res.WouldRestore)
-	}
-	if featA.From != live || featA.To != recorded {
-		t.Fatalf("feat-a restore = %s→%s, want %s→%s", featA.From, featA.To, live, recorded)
-	}
-	if n, ok := featA.CommitsLostFromRef.(float64); !ok || n != 1 {
-		t.Fatalf("commitsLostFromRef = %v, want 1", featA.CommitsLostFromRef)
-	}
-}
-
-// Text-mode preview mirrors the JSON: restores/deletes/checkout lines and a
-// blocker row (a paused rebase is a data row, not an error).
-func TestUndoDryRunTextOutput(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	// A modify so the entry records restores; the create adds a delete.
-	write(t, "a.txt", "a2\n")
-	if err := runModify([]string{"-a"}); err != nil {
-		t.Fatalf("modify: %v", err)
-	}
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run"}); err != nil {
-			t.Fatalf("undo --dry-run: %v", err)
-		}
-	})
-	if !strings.Contains(out, "would undo: modify") {
-		t.Fatalf("missing would-undo line:\n%s", out)
-	}
-	if !strings.Contains(out, "restores: feat-a") || !strings.Contains(out, "commits lost") {
-		t.Fatalf("missing restores line:\n%s", out)
-	}
-	if !strings.Contains(out, "checkout: feat-a") {
-		t.Fatalf("missing checkout line:\n%s", out)
-	}
-
-	// A rename leaves the entry's recorded currentBranch name deleted: the
-	// preview reports "(recorded branch no longer exists)" for the checkout
-	// and lists the renamed-to branch as a delete (it is entry-created).
-	if err := runRename([]string{"feat-renamed"}); err != nil {
-		t.Fatalf("rename: %v", err)
-	}
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run"}); err != nil {
-			t.Fatalf("undo --dry-run (rename): %v", err)
-		}
-	})
-	if !strings.Contains(out, "deletes: feat-renamed") {
-		t.Fatalf("missing deletes line:\n%s", out)
-	}
-	if !strings.Contains(out, "no longer exists") {
-		t.Fatalf("expected the missing-checkout-target hint:\n%s", out)
-	}
-}
-
-// A paused rebase is a blocker row, not an exit code: the preview still
-// reports the recorded intent and mutates nothing.
-func TestUndoDryRunDuringRebase(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "conf-a", "f.txt", "A\n", "a")
-	mustCreate(t, "conf-b", "f.txt", "A\nB\n", "b")
-	mustCheckout(t, "conf-a")
-	write(t, "f.txt", "X\n")
-	if err := runModify([]string{"-a"}); err == nil {
-		t.Fatal("expected a conflict restacking conf-b")
-	}
-
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run", "--json"}); err != nil {
-			t.Fatalf("undo --dry-run during rebase: %v", err)
-		}
-	})
-	var res struct {
-		DryRun        bool     `json:"dryRun"`
-		Label         string   `json:"label"`
-		WouldCheckout *string  `json:"wouldCheckout"`
-		Blockers      []string `json:"blockers"`
-	}
-	decodeStrictJSON(t, "undo --dry-run during rebase", out, &res)
-	found := false
-	for _, b := range res.Blockers {
-		if b == "rebase_in_progress" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("blockers = %v, want rebase_in_progress", res.Blockers)
-	}
-	// The rebase is untouched — abort must still work.
-	if err := runAbort(nil); err != nil {
-		t.Fatalf("abort after preview: %v", err)
-	}
-}
-
 // --- multi-step undo (st undo <n>) ------------------------------------------
-
-// `st undo <n>` rewinds the newest n journal entries newest-first: each step
-// is its own unit and the journal ends shortened by n.
-func TestUndoMultiStepRewindsNewestFirst(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	mustCreate(t, "feat-c", "c.txt", "c\n", "c")
-
-	if before, err := stack.ListUndo(); err != nil || len(before) != 3 {
-		t.Fatalf("journal before = %v entries err %v, want 3", len(before), err)
-	}
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"2"}); err != nil {
-			t.Fatalf("undo 2: %v", err)
-		}
-	})
-	if !strings.Contains(out, "undid: create (step 1 of 2)") ||
-		!strings.Contains(out, "undid: create (step 2 of 2)") {
-		t.Fatalf("undo 2 output = %q, want two step lines", out)
-	}
-	for _, name := range []string{"feat-c", "feat-b"} {
-		if git.BranchExists(name) || stateT(t).IsTracked(name) {
-			t.Fatalf("undo 2 left %s behind", name)
-		}
-	}
-	if cur := curBranch(t); cur != "feat-a" {
-		t.Fatalf("current branch = %q, want feat-a", cur)
-	}
-	entries, err := stack.ListUndo()
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("journal after = %v entries err %v, want 1", len(entries), err)
-	}
-	if entries[0].Label != "create" {
-		t.Fatalf("remaining entry label = %q, want create", entries[0].Label)
-	}
-}
-
-// The step count is validated up front: non-integers, zero/negative, extra
-// positionals, a count beyond the journal depth, and a count under --list all
-// refuse before anything mutates.
-func TestUndoStepCountRefusals(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	for _, args := range [][]string{
-		{"0"}, {"-1"}, {"x"}, {"1", "2"}, {"2"}, {"--list", "1"},
-	} {
-		if err := runUndo(args); err == nil {
-			t.Fatalf("undo %v succeeded, want refusal", args)
-		}
-	}
-	if !git.BranchExists("feat-a") || !stateT(t).IsTracked("feat-a") {
-		t.Fatal("a refused undo mutated feat-a")
-	}
-	if entries, err := stack.ListUndo(); err != nil || len(entries) != 1 {
-		t.Fatalf("journal = %v entries err %v, want 1 untouched", len(entries), err)
-	}
-}
-
-// A refusal mid-sequence is per-entry atomic: the completed prefix stays
-// undone and the error names the stopping step.
-func TestUndoMultiStepStopsAtGate(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	var created struct {
-		Branch   string `json:"branch"`
-		Parent   string `json:"parent"`
-		Worktree string `json:"worktree"`
-		Switched bool   `json:"switched"`
-		Summary  string `json:"summary"`
-	}
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
-			t.Fatalf("create feat-a --worktree: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "create --worktree", out, &created)
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-
-	// Dirty feat-a's linked worktree: step 2's worktree removal must refuse.
-	if err := os.WriteFile(filepath.Join(created.Worktree, "dirty.txt"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := runUndo([]string{"2"})
-	if err == nil || !strings.Contains(err.Error(), "stopped at step 2 of 2") {
-		t.Fatalf("undo 2 = %v, want stopped-at-step-2 refusal", err)
-	}
-	// Step 1's undo is kept: feat-b is gone; the blocked step left feat-a and
-	// its worktree intact, and its journal entry still recorded.
-	if git.BranchExists("feat-b") || stateT(t).IsTracked("feat-b") {
-		t.Fatal("partial undo left feat-b behind")
-	}
-	if !git.BranchExists("feat-a") {
-		t.Fatal("blocked step deleted feat-a")
-	}
-	if _, serr := os.Stat(created.Worktree); serr != nil {
-		t.Fatalf("blocked step removed worktree %q: %v", created.Worktree, serr)
-	}
-	if entries, lerr := stack.ListUndo(); lerr != nil || len(entries) != 1 {
-		t.Fatalf("journal after partial undo = %v entries err %v, want 1", len(entries), lerr)
-	}
-}
-
-// The same stop in JSON mode emits the partial aggregate on stdout (the
-// worktree rm --all precedent) plus the error envelope on stderr.
-func TestUndoMultiStepPartialJSON(t *testing.T) {
-	newRepo(t)
-	t.Setenv("HOME", t.TempDir())
-	mustInit(t)
-
-	var created struct {
-		Branch   string `json:"branch"`
-		Parent   string `json:"parent"`
-		Worktree string `json:"worktree"`
-		Switched bool   `json:"switched"`
-		Summary  string `json:"summary"`
-	}
-	out := captureStdout(t, func() {
-		if err := runCreate([]string{"feat-a", "--worktree", "--json"}); err != nil {
-			t.Fatalf("create feat-a --worktree: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "create --worktree", out, &created)
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-	if err := os.WriteFile(filepath.Join(created.Worktree, "dirty.txt"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var payload struct {
-		Undone   bool     `json:"undone"`
-		Count    int      `json:"count"`
-		Restored []string `json:"restored"`
-		Steps    []struct {
-			Index    int      `json:"index"`
-			Label    string   `json:"label"`
-			Restored []string `json:"restored"`
-		} `json:"steps"`
-	}
-	out = captureStdout(t, func() {
-		if err := runUndo([]string{"--json", "2"}); err == nil {
-			t.Fatal("undo 2 succeeded, want partial stop")
-		}
-	})
-	decodeStrictJSON(t, "undo 2 --json partial", out, &payload)
-	if !payload.Undone || payload.Count != 2 || len(payload.Steps) != 1 || payload.Steps[0].Index != 1 {
-		t.Fatalf("partial payload = %+v, want undone count=2 steps=[index 1]", payload)
-	}
-}
-
-// `st undo <n> --json` reports the multi-step shape: count, per-step
-// index/label/restored, and the deduped restored union.
-func TestUndoMultiStepJSON(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-
-	var payload struct {
-		Undone   bool     `json:"undone"`
-		Count    int      `json:"count"`
-		Restored []string `json:"restored"`
-		Steps    []struct {
-			Index    int      `json:"index"`
-			Label    string   `json:"label"`
-			Restored []string `json:"restored"`
-		} `json:"steps"`
-	}
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--json", "2"}); err != nil {
-			t.Fatalf("undo 2 --json: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "undo 2 --json", out, &payload)
-	if !payload.Undone || payload.Count != 2 || len(payload.Steps) != 2 {
-		t.Fatalf("payload = %+v, want undone count=2 steps=2", payload)
-	}
-	if payload.Steps[0].Index != 1 || payload.Steps[1].Index != 2 {
-		t.Fatalf("step indexes = %d,%d, want 1,2", payload.Steps[0].Index, payload.Steps[1].Index)
-	}
-}
-
-// `st undo --dry-run <n>` previews each step in order against the state that
-// step's real undo would see — and mutates nothing.
-func TestUndoDryRunMultiStep(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-	mustCreate(t, "feat-b", "b.txt", "b\n", "b")
-
-	var payload struct {
-		DryRun bool                       `json:"dryRun"`
-		Count  int                        `json:"count"`
-		Steps  []*stack.UndoPreviewResult `json:"steps"`
-	}
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--json", "--dry-run", "2"}); err != nil {
-			t.Fatalf("undo --dry-run 2: %v", err)
-		}
-	})
-	decodeStrictJSON(t, "undo --dry-run 2 --json", out, &payload)
-	if !payload.DryRun || payload.Count != 2 || len(payload.Steps) != 2 {
-		t.Fatalf("payload = %+v, want dryRun count=2 steps=2", payload)
-	}
-	if payload.Steps[0].Observed.EntryIndex != 1 || payload.Steps[1].Observed.EntryIndex != 2 {
-		t.Fatalf("entryIndex = %d,%d, want 1,2",
-			payload.Steps[0].Observed.EntryIndex, payload.Steps[1].Observed.EntryIndex)
-	}
-	// Chained state: step 1 deletes feat-b, step 2 sees it already gone and
-	// deletes feat-a.
-	if len(payload.Steps[0].WouldDelete) != 1 || payload.Steps[0].WouldDelete[0].Branch != "feat-b" {
-		t.Fatalf("step 1 wouldDelete = %+v, want [feat-b]", payload.Steps[0].WouldDelete)
-	}
-	if len(payload.Steps[1].WouldDelete) != 1 || payload.Steps[1].WouldDelete[0].Branch != "feat-a" {
-		t.Fatalf("step 2 wouldDelete = %+v, want [feat-a]", payload.Steps[1].WouldDelete)
-	}
-	if entries, err := stack.ListUndo(); err != nil || len(entries) != 2 {
-		t.Fatalf("journal after preview = %v entries err %v, want 2 untouched", len(entries), err)
-	}
-	if !git.BranchExists("feat-b") {
-		t.Fatal("preview deleted feat-b")
-	}
-}
 
 // TestUndoRefusesExternalDrift pins the CAS behavior end to end on real git:
 // a branch committed on outside st between the op and the undo refuses —
@@ -2730,15 +1775,6 @@ func TestUndoRefusesExternalDrift(t *testing.T) {
 	}
 	// The refused entry stays in the journal for the --force retry.
 	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run"}); err != nil {
-			t.Fatalf("dry-run after refused undo: %v", err)
-		}
-	})
-	if !strings.Contains(out, "ref_moved_since:feat-a") {
-		t.Fatalf("dry-run output = %q, want a ref_moved_since blocker", out)
-	}
-
-	out = captureStdout(t, func() {
 		if err := runUndo([]string{"--force"}); err != nil {
 			t.Fatalf("undo --force over a diverged ref: %v", err)
 		}
@@ -2752,8 +1788,8 @@ func TestUndoRefusesExternalDrift(t *testing.T) {
 }
 
 // A poisoned journal entry — ref values that are not full commit ids — is
-// ignored everywhere the journal is read: it can neither be previewed nor
-// applied, and the emit contains no raw journal bytes.
+// ignored everywhere the journal is read, so undo skips it and restores only
+// the healthy entry without echoing raw journal bytes.
 func TestUndoJournalRejectsNonOIDRefValues(t *testing.T) {
 	newRepo(t)
 	mustInit(t)
@@ -2779,42 +1815,14 @@ func TestUndoJournalRejectsNonOIDRefValues(t *testing.T) {
 	writeJSONFile(t, filepath.Join(gitDir, "stacked", "undo.json"), poisoned)
 
 	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run"}); err != nil {
-			t.Fatalf("dry-run over a poisoned entry: %v", err)
+		if err := runUndo(nil); err != nil {
+			t.Fatalf("undo over a poisoned entry: %v", err)
 		}
 	})
 	if strings.Contains(out, "HEAD~2") || strings.Contains(out, "\x1b") {
-		t.Fatalf("dry-run echoed journal values: %q", out)
+		t.Fatalf("undo echoed poisoned journal values: %q", out)
 	}
-	if !strings.Contains(out, "would undo: healthy") {
-		t.Fatalf("dry-run = %q, want only the healthy entry previewed", out)
-	}
-}
-
-// A multi-step dry-run must not raise ghost drift on deeper steps: a real
-// undo restores each step's pre-op refs before the next runs, and the
-// previews model state, not refs, so only the newest entry compares live
-// tips.
-func TestUndoDryRunMultiStepNoGhostDrift(t *testing.T) {
-	newRepo(t)
-	mustInit(t)
-	mustCreate(t, "feat-a", "a.txt", "a\n", "a")
-
-	write(t, "a.txt", "a2\n")
-	if err := runModify([]string{"-a"}); err != nil {
-		t.Fatalf("modify 1: %v", err)
-	}
-	write(t, "a.txt", "a3\n")
-	if err := runModify([]string{"-a"}); err != nil {
-		t.Fatalf("modify 2: %v", err)
-	}
-
-	out := captureStdout(t, func() {
-		if err := runUndo([]string{"--dry-run", "2"}); err != nil {
-			t.Fatalf("dry-run 2: %v", err)
-		}
-	})
-	if strings.Contains(out, "ref_moved_since") {
-		t.Fatalf("multi-step dry-run raised ghost drift: %q", out)
+	if !strings.Contains(out, "undid: healthy") {
+		t.Fatalf("undo = %q, want only the healthy entry applied", out)
 	}
 }

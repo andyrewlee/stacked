@@ -138,22 +138,10 @@ func (c *cachedPort) remoteExists(name string) bool {
 	return err == nil
 }
 
-// WorktreeRemove routes the engine-driven worktree removal through the cache
-// invalidation. The cache is reset even when the removal fails: a failed git
-// worktree command can still have changed registration state, and a spare
-// re-list is cheap.
-func (c *cachedPort) WorktreeRemove(dir string, force bool) error {
-	err := c.Git.WorktreeRemove(dir, force)
-	c.resetMemos()
-	resetProcCaches()
-	return err
-}
-
 // Checkout and CheckoutDetach move HEAD, which changes which branch the
-// current worktree owns — so they must invalidate the worktree cache too, or a
-// later worktrees() read (e.g. sync's prune step after detaching HEAD) sees the
-// stale pre-checkout ownership and can remove the wrong worktree. Reset even on
-// error: a partial checkout can still have moved HEAD, and a re-list is cheap.
+// current worktree owns — so they must invalidate the worktree cache too.
+// Reset even on error: a partial checkout can still have moved HEAD, and a
+// re-list is cheap.
 func (c *cachedPort) Checkout(name string) error {
 	err := c.Git.Checkout(name)
 	c.resetMemos()

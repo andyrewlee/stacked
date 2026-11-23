@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // Reparent records one surviving tracked branch whose recorded parent changed
@@ -303,7 +304,7 @@ func unreachableNotes(s *State) []string {
 	if len(un) == 0 {
 		return nil
 	}
-	return []string{fmt.Sprintf("tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st repair`", s.Trunk, joinComma(un))}
+	return []string{fmt.Sprintf("tracked branches unreachable from trunk %q (cycle or dangling parent): %s — run `st doctor --fix`", s.Trunk, strings.Join(un, ", "))}
 }
 
 func skippedWorktreeNotesFrom(skipped []string, reasons map[string]wtSkipReason) []string {
@@ -320,7 +321,7 @@ func skippedWorktreeNotesFrom(skipped []string, reasons map[string]wtSkipReason)
 func skippedWorktreeNote(name string, reason wtSkipReason) string {
 	switch reason {
 	case wtSkipLocked:
-		return fmt.Sprintf("skipped %s: its worktree is locked (git worktree lock; `st worktree unlock %s`, then re-run)", name, name)
+		return fmt.Sprintf("skipped %s: its worktree is locked (git worktree lock; unlock it with `git worktree unlock`, then re-run)", name)
 	case wtSkipStale:
 		return fmt.Sprintf("skipped %s: its worktree registration is stale (the directory is gone); run `git worktree prune` to clear it, then re-run", name)
 	case wtSkipPausedRebase:

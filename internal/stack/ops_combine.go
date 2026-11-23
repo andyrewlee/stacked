@@ -1,93 +1,11 @@
-// ops_combine.go — history-combining ops: Fold collapses a branch into its
-// parent; Squash rewrites a branch's commits into one.
+// ops_combine.go — history-combining ops: Squash rewrites a branch's commits
+// into one and restacks its descendants.
 package stack
 
 import (
 	"fmt"
 	"strings"
 )
-
-// Fold folds the current branch into its parent: the parent advances to include
-// the branch's commits, the branch is deleted, and its children are re-parented
-// onto the parent.
-func Fold(env Env, s *State) (*OpResult, error) {
-	g := env.Git
-	if err := requireClean(g); err != nil {
-		return nil, err
-	}
-	cur, b, err := currentTracked(g, s)
-	if err != nil {
-		return nil, err
-	}
-	parent := b.Parent
-	if parent == s.Trunk {
-		return nil, fmt.Errorf("cannot fold %q into the trunk %q", cur, parent)
-	}
-	needs, err := s.NeedsRestack(g, cur)
-	if err != nil {
-		return nil, err
-	}
-	if needs {
-		return nil, fmt.Errorf("%q needs restack before folding (run: st restack)", cur)
-	}
-	// Fold deletes cur only AFTER g.Checkout(parent) below moves the caller's
-	// own worktree HEAD off it — so cur needs no worktree release: it is
-	// always checked out exactly where the caller stands (a branch is checked
-	// out in at most one worktree). A caller inside cur's linked worktree
-	// folds in place and that worktree ends up owning parent.
-	if owner, elsewhere, err := s.ownerElsewhere(g, parent); err != nil {
-		return nil, err
-	} else if elsewhere {
-		return nil, fmt.Errorf("cannot fold into %q because it is checked out in another worktree %q", parent, owner.Path)
-	}
-
-	curTip, err := g.RevParse(branchTipRef(cur))
-	if err != nil {
-		return nil, err
-	}
-	// Capture the parent's tip first so the git side can be rolled back if a later
-	// step fails. Advancing the parent ref and only then failing to check out or
-	// delete would leave the parent silently holding cur's commits while the
-	// persisted metadata still listed cur as a separate branch — a repo/state
-	// disagreement a naive retry would compound. The metadata is therefore moved
-	// (re-parent children, untrack cur) and saved only after every git mutation
-	// has committed.
-	parentTip, err := g.RevParse(branchTipRef(parent))
-	if err != nil {
-		return nil, err
-	}
-	if err := g.ForceBranch(parent, curTip); err != nil {
-		return nil, fmt.Errorf("advancing %q to %q: %w", parent, cur, err)
-	}
-	if err := g.Checkout(parent); err != nil {
-		err = fmt.Errorf("checking out %q: %w", parent, err)
-		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
-			return nil, AlsoFailed(err, fmt.Sprintf("roll back %q", parent), rollbackErr)
-		}
-		return nil, err
-	}
-	if err := g.DeleteBranch(cur, true); err != nil {
-		if rollbackErr := g.UpdateRef(branchTipRef(parent), parentTip); rollbackErr != nil {
-			return nil, AlsoFailed(fmt.Errorf("deleting %q: %w", cur, err), fmt.Sprintf("roll back %q", parent), rollbackErr)
-		}
-		if restoreErr := g.Checkout(cur); restoreErr != nil {
-			return nil, AlsoFailed(fmt.Errorf("deleting %q: %w", cur, err), fmt.Sprintf("restore %q after rolling back %q", cur, parent), restoreErr)
-		}
-		return nil, fmt.Errorf("deleting %q: %w", cur, err)
-	}
-	beforeParents := parentSnapshot(s)
-	s.RemoveBranch(cur)
-	reparented := diffReparents(beforeParents, s)
-	if err := env.save(); err != nil {
-		return nil, err
-	}
-
-	upstack, err := finishUpstack(env, s, parent)
-	if err != nil {
-		return nil, err
-	}
-	return &OpResult{Summary: fmt.Sprintf("Folded %s into %s", cur, parent), Branch: parent, Restacked: upstack.restacked, Reparented: reparented, Notes: upstack.notes}, nil
-}
 
 // Squash collapses every commit on the current branch (since its parent) into
 // one, then restacks its descendants. With an empty message the squashed

@@ -204,14 +204,14 @@ func TestPRHintsForSkipsUnlistedAndOmitsURLOnEmptyRepo(t *testing.T) {
 func TestRemoteToHTTPSConversions(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		raw         string
-		wantURL     string
-		wantHostHit bool // whether host should classify to a known forge shape
+		raw        string
+		wantURL    string
+		wantGitHub bool
 	}{
 		{"git@github.com:o/r.git", "https://github.com/o/r", true},
-		{"git@gitlab.com:o/r.git", "https://gitlab.com/o/r", true},
+		{"git@gitlab.com:o/r.git", "https://gitlab.com/o/r", false},
 		{"https://github.com/o/r.git", "https://github.com/o/r", true},
-		{"ssh://git@gitlab.example.com/o/r.git", "https://gitlab.example.com/o/r", true},
+		{"ssh://git@github.example.com/o/r.git", "https://github.example.com/o/r", true},
 		{"https://user:pw@github.com/o/r.git", "https://github.com/o/r", true},
 		{"not-a-url", "", false},
 	}
@@ -220,11 +220,8 @@ func TestRemoteToHTTPSConversions(t *testing.T) {
 		if gotURL != tc.wantURL {
 			t.Errorf("RemoteToHTTPS(%q) url = %q, want %q", tc.raw, gotURL, tc.wantURL)
 		}
-		if tc.wantURL == "" {
-			continue
-		}
-		if tc.wantHostHit && forgeKind(host) == forgeUnknown {
-			t.Errorf("RemoteToHTTPS(%q) host %q did not classify to a forge", tc.raw, host)
+		if got := IsGitHubHost(host); got != tc.wantGitHub {
+			t.Errorf("IsGitHubHost(%q) = %v, want %v", host, got, tc.wantGitHub)
 		}
 	}
 }
