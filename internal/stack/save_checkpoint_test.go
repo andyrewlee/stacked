@@ -13,9 +13,8 @@ import (
 //
 // The existing Save-seam tests cover the onto reparent
 // (TestOntoPersistsReparentBeforeRestackingDescendants) and the per-prune save
-// (TestSyncPersistsEachSuccessfulPrune); this covers the restack cascade, the
-// path CLAUDE.md calls out ("checkpoint at safe points ... so a later conflict
-// cannot lose progress").
+// (TestSyncPersistsEachSuccessfulPrune); this covers the restack cascade
+// checkpoint invariant so a later conflict cannot lose progress.
 func TestRestackPersistsEachBranchBeforeMidwayConflict(t *testing.T) {
 	f, s, env := newEnvState()
 	mkBranch(t, env, s, f, "main", "a")

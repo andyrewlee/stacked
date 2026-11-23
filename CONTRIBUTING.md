@@ -58,7 +58,7 @@ supported Git versions use a fallback.
 The tricky logic is a pure **engine** (`internal/stack`) that talks to git through
 a small **port** interface, so it tests against an in-memory fake instead of
 spawning git. Commands in `cmd/` are thin adapters: parse flags → `mutate()` →
-render. See `CLAUDE.md` for the full map and `docs/AGENT.md` for the machine
+render. See `AGENTS.md` for the repo map and `docs/AGENT.md` for the machine
 interface (JSON, exit codes).
 
 ## Adding a command (recipe)

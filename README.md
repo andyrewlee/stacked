@@ -299,4 +299,4 @@ Every command below except `__complete` and `completion` (plus `help`/`version`)
 
 The repo closes its own loop locally — `make test-fast` runs the pure fake-git engine suite in ~1s, and `make ci` runs version-pin checks, `gofumpt`, strict `golangci-lint`, `go vet` (+ Windows/Plan 9 cross-vet), `-race` tests, black-box e2e, and a merged coverage gate (≥75% total, ≥50% per function).
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the add-a-command recipe and **[CLAUDE.md](CLAUDE.md)** for the architecture.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the add-a-command recipe and **[AGENTS.md](AGENTS.md)** for the architecture and constraints.
