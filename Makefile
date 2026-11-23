@@ -12,7 +12,7 @@ GOLANGCI_VERSION := v2.12.2
 
 # GoReleaser is likewise an external binary (release-time only). The pin's major
 # must match the .goreleaser.yaml config schema `version:`.
-GORELEASER_VERSION := v2.17.0
+GORELEASER_VERSION := v2.18.2
 
 # The minimum git version st requires at runtime — enforced by check-git-version
 # here and by git.RequireMinVersion in the binary. Keep in sync with the

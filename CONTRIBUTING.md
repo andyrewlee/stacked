@@ -129,9 +129,9 @@ heading, and bump `defaultVersion` in `cmd/root.go` to match the tag —
 `make check-release-version RELEASE_TAG=vX.Y.Z` verifies the pin (`make
 release` runs it). `make release`/`make snapshot` need the external
 `goreleaser` binary — match `GORELEASER_VERSION` in the Makefile (currently
-`v2.17.0`; `brew install goreleaser` tracks latest, so check
+`v2.18.2`; `brew install goreleaser` tracks latest, so check
 `goreleaser --version`, or pin exactly with
-`go install github.com/goreleaser/goreleaser/v2@v2.17.0`). It is not a Go
+`go install github.com/goreleaser/goreleaser/v2@v2.18.2`). It is not a Go
 dependency.
 
 `bash scripts/check-install-signatures.sh` exercises the installer's
