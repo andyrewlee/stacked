@@ -1,346 +1,302 @@
 # stacked
 
-`stacked` is a sharp, zero-dependency CLI for managing **stacked diffs** on top of
-plain `git`, with native GitHub stacked-PR support via `gh`. The CLI command is `st`.
+**Sharp, zero-dependency stacked diffs for Git and GitHub — built for humans and coding agents.**
 
-A *stack* is a chain of small branches where each one is based on the branch below
-it instead of all on `main`. This keeps each change small and reviewable while you
-keep building on top. `stacked` automates rebasing your stack as lower branches
-change, pruning merged branches, and keeping GitHub PR bases and stack links in sync.
+`st` turns stacked branches into a fast, predictable loop: break large changes into small reviewable PRs, amend lower branches without hand-rebasing the chain, and let `st` keep your GitHub PR bases, stack links, and merged branches in sync.
 
-`stacked` is a thin, ergonomic layer over `git` (and optionally `gh`):
+```sh
+# 1. Build a 2-PR stack
+git add auth.go && st create feat-auth -m "Add token validator"
+git add api.go  && st create feat-api  -m "Wire auth into /v1 endpoints"
 
-- **Native GitHub stacked PRs via `gh`.** When `gh` is on your `PATH` and your
-  remote is GitHub, `st submit` retargets open PR bases *before* pushing, pushes
-  your stack with `--force-with-lease`, creates missing PRs bottom-up, and
-  maintains an idempotent stack-navigation block in multi-PR stacks. `st sync -s`
-  fetches, prunes merged PRs (including squash-merged PRs via GitHub + 3-way
-  merge-tree), restacks survivors, retargets PRs, and force-pushes in one command.
-  Pass `--no-pr` (or omit `gh`) for pure git push-only mode.
-- **No third-party dependencies.** Written in pure Go using only the standard
-  library, shelling out to your system `git` and `gh`.
-- **Untracked-file safe.** Untracked files (agent plans, notes, scratch files)
-  never block stack operations (`restack`, `sync`, `modify`, `delete`, `onto`,
-  `squash`) and are never swept into commits (`st modify` defaults to staged
-  changes; `-a` stages modified *tracked* files only, matching `git commit -a`).
-- **Local metadata only.** The stack topology (which branch's parent is which) is
-  stored in a single JSON file inside your repo's common `.git` directory.
+# 2. Push & open stacked GitHub PRs (with auto-maintained stack links)
+st submit
+# pushed feat-auth
+# pushed feat-api
+#
+# pull requests:
+#   #41 feat-auth -> main (created)       https://github.com/org/repo/pull/41
+#   #42 feat-api -> feat-auth (created)   https://github.com/org/repo/pull/42
 
-## How the local metadata works
+# 3. See stack + live PR & CI status
+st log --pr
+#     ◉ feat-api [#42 ✓]  Wire auth into /v1 endpoints
+#   ○ feat-auth [#41 ✓]  Add token validator
+# ○ main
 
-`stacked` stores all of its state under `.git/stacked/` in your repo — the
-stack topology in `state.json`, plus the undo journal (`undo.json`) and the
-lock files (`lock`, and on non-flock platforms `lock.excl`/`lock.reclaim`)
-alongside it.
+# 4. Address review on PR #41 — PR #42 restacks automatically
+st down
+git add auth.go && st modify && st submit
 
-Because it lives inside `.git`, it is per-repo, never committed, and never pushed.
-`state.json` records the trunk branch and, for each tracked branch, its parent branch
-and the parent commit SHA it was last rebased onto:
+# 5. PR #41 merges on GitHub — prune, advance HEAD, restack, retarget PR #42 -> main, and push
+st sync --submit
+```
+
+---
+
+## Why `st`?
+
+- **Native GitHub stacked PRs via `gh` — no extra account or hosted service.**
+  On GitHub remotes with `gh` installed, `st submit` retargets open PR bases *before* pushing (so GitHub never auto-closes child PRs), force-pushes with `--force-with-lease`, creates missing PRs bottom-up, and maintains a clean navigation block in multi-PR stacks without touching your PR description. Pass `--no-pr` (or skip `gh`) for push-only Git mode.
+- **One-command post-merge drill (`st sync --submit`).**
+  Fetches trunk, detects merged and squash-merged PRs (via GitHub PR state *and* 3-way `git merge-tree`), prunes the merged branch, moves you to the next branch in the stack, restacks descendants, retargets the new bottom PR to `main`, and force-pushes — all in one shot.
+- **Built for coding agents & automation.**
+  Zero interactive prompts, structured `--json` output across the CLI, stable exit codes (`2` conflict, `3` uninitialized, `4` dirty tree, `5` lock held), advisory locking for concurrent runs, and `st guide` for instant self-orientation.
+- **Untracked-file safe.**
+  Untracked scratch files (`plans/`, notes, local logs) never block `restack`, `sync`, `modify`, `delete`, `onto`, or `squash`, and never leak into commits. `st modify` defaults to **staged changes only**; `-a` stages modified *tracked* files only (matching `git commit -a`).
+- **Plain Git underneath, zero dependencies.**
+  Written in pure Go using only the standard library. All stack metadata lives locally in `.git/stacked/state.json` — never committed, never pushed, and automatically shared across `git worktree`s (without `st` ever creating or deleting worktrees on disk).
+
+---
+
+## Install
+
+**One-line installer** (macOS & Linux, amd64/arm64 — verifies release checksums):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/andyrewlee/stacked/main/install.sh | sh
+```
+
+Installs `st` to `/usr/local/bin` (override with `INSTALL_DIR`). Until release signing is provisioned, pass `ST_ALLOW_UNVERIFIED=1` (the installer refuses unverifiable downloads by default).
+
+**With Go:**
+
+```sh
+go install github.com/andyrewlee/stacked/cmd/st@latest
+```
+
+**Prebuilt archives:** download `stacked_<version>_<os>_<arch>.tar.gz` and `checksums.txt` from the [releases page](https://github.com/andyrewlee/stacked/releases).
+
+**From source:** requires **Go 1.26+** and **Git 2.17+** on your `PATH` (**Git 2.31+** recommended for native common-dir path resolution; **Git 2.26+** preserves empty commits during restack). Optional native GitHub PR automation uses your existing authenticated [`gh`](https://cli.github.com/) CLI. Running the full `make ci` gate also needs `golangci-lint` v2: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
+
+```sh
+git clone https://github.com/andyrewlee/stacked.git
+cd stacked
+make build          # produces ./st with version stamped from git
+./st version
+```
+
+---
+
+## The Stacked-PR Workflow
+
+### 1. Initialize once per repo
+
+```sh
+st init                 # auto-detects trunk (origin/HEAD -> current branch -> main)
+st init --trunk main    # or specify explicitly
+```
+
+Already have local branches? Adopt them without recreating anything:
+
+```sh
+st track                # track current branch (infers parent from commit graph)
+st track --all          # adopt every untracked local branch in one pass
+```
+
+### 2. Stack small branches as you go
+
+```sh
+# Branch 1 on main
+git add schema.sql && st create db-schema -m "Add users table"
+
+# Branch 2 stacked on db-schema
+git add store.go   && st create user-store -m "Add UserStore queries"
+
+# Branch 3 stacked on user-store
+git add handler.go && st create user-api   -m "Expose /users endpoint"
+```
+
+### 3. Submit the whole stack to GitHub
+
+```sh
+st submit               # push bottom..top, create/retarget PRs, update stack links
+st submit --draft       # open newly created PRs as drafts
+st submit --upto        # stop at current branch (omit upstack descendants)
+st submit --no-pr       # push branches only; skip GitHub PR management
+```
+
+For multi-PR stacks, `st submit` appends an idempotent stack block to each PR description while keeping all of your own prose outside the markers untouched:
+
+```markdown
+<!-- st:stack:start -->
+**Stack:**
+- #41 (`db-schema` → `main`)
+- 👉 **#42** (`user-store` → `db-schema`) *(this PR)*
+- #43 (`user-api` → `user-store`)
+
+<sub>Managed by `st`. Merge bottom-up.</sub>
+<!-- st:stack:end -->
+```
+
+Single-PR stacks stay completely clean (no stack block added unless one already exists).
+
+### 4. Revise lower PRs without manual rebasing
+
+```sh
+st bottom               # jump to db-schema (or st down / st checkout db-schema)
+# ...edit schema.sql...
+git add schema.sql
+st modify               # amends db-schema, then restacks user-store & user-api
+st submit               # force-pushes updated stack & keeps PRs in sync
+```
+
+Need a new commit instead of amending? Use `st modify --commit -m "Handle null email"`. Want to collapse a messy branch back into one clean commit? Run `st squash -m "Add users table"`.
+
+### 5. After the bottom PR merges
+
+```sh
+st sync --submit        # or shorthand: st sync -s
+```
+
+In one command, `st`:
+1. Fetches and fast-forwards `main`.
+2. Detects merged PRs — via Git ancestry, 3-way `git merge-tree` squash-merge detection, *and* GitHub PR state.
+3. Deletes `db-schema`, re-parents `user-store` onto `main`, and switches `HEAD` to `user-store`.
+4. Restacks `user-store` and `user-api` onto the new `main`.
+5. Retargets PR #42's GitHub base from `db-schema` → `main` **before** pushing, force-pushes the updated stack, and refreshes the stack links on #42 and #43.
+
+### 6. Check status at a glance
+
+```sh
+st log                  # current stack only (zero network, shows trunk lag)
+st log --all            # all tracked stacks in the repo
+st log --pr             # add PR #number, draft, CI checks (✓/✗/⋯), base mismatches
+st status --pr          # current branch details, commits, trunk lag, and PR info
+```
+
+---
+
+## Built for Agents & Scripts
+
+`st` is designed to be driven reliably by AI coding agents and CI/automation scripts — see **[docs/AGENT.md](docs/AGENT.md)** for the full contract (JSON schemas, error envelopes, idempotency).
+
+- **Machine-readable everywhere:** every command except `__complete` and `completion` (plus `help`/`version`) accepts `--json`. Errors emit structured JSON envelopes on `stderr` and keep `stdout` clean.
+- **Stable exit codes:**
+
+  | Exit code | JSON `error.code` | Meaning |
+  | --- | --- | --- |
+  | `0` | — | Success |
+  | `1` | `error` / `paused` | Usage, git, or precondition error |
+  | `2` | `conflict` | Rebase stopped on a merge conflict (`st continue` / `st abort`) |
+  | `3` | `not_initialized` | Repo has not run `st init` |
+  | `4` | `dirty` | Tracked uncommitted changes block the operation |
+  | `5` | `locked` / `locked_guard` | Advisory repo lock is held by another `st` process |
+  | `70` | `internal` | Unexpected internal error |
+
+- **Current-stack scoping by default:** `st log`, `st sync`, `st submit`, `st restack`, and `st doctor` drift warnings scope to your current stack when on a tracked branch so parallel work in sibling stacks or other `git worktree`s is never disturbed. Pass `--all` whenever you want the whole forest.
+- **Safe with external `git worktree`s:** `st` shares `.git/stacked/state.json` across worktrees, rebases clean dependent worktrees in place during cascades, skips dirty or `git worktree lock`ed worktrees with a note, omits your own worktree path from `st log` to keep output noise-free, and never creates or deletes worktrees on disk.
+- **Dry-run & Undo:** preview mutations with `--dry-run` on `create`, `modify`, `restack`, `squash`, `onto`, `rename`, `delete`, `track --all`, `untrack`, `sync`, and `submit`. Roll back the last mutation with `st undo` (preserves your working tree).
+
+---
+
+## How It Works
+
+`st` stores all metadata in `.git/stacked/state.json` (written atomically via temp file + rename, guarded by an advisory lock):
 
 ```json
 {
   "version": 1,
   "trunk": "main",
   "branches": {
-    "feat-a": {
-      "name": "feat-a",
+    "feat-auth": {
+      "name": "feat-auth",
       "parent": "main",
       "parentSHA": "a1b2c3d4..."
     },
-    "feat-b": {
-      "name": "feat-b",
-      "parent": "feat-a",
+    "feat-api": {
+      "name": "feat-api",
+      "parent": "feat-auth",
       "parentSHA": "e5f6a7b8..."
     }
   }
 }
 ```
 
-`parentSHA` is the key to restacking. A branch `B` stacked on parent `P` remembers
-the `P` commit it was based on. When `P` advances (you add or amend a commit),
-`B.parentSHA` no longer matches `P`'s tip, so `B` "needs restack". Restacking runs:
-
-```
-git rebase --onto <current tip of P> <B.parentSHA> <B>
-```
-
-and then updates `B.parentSHA` to `P`'s new tip. Any operation that moves a branch
-tip (`modify`, `delete`, `sync`) automatically restacks that branch's *upstack*
-(all of its descendants), always going parents-before-children and reading live
-tips at each step. Commands that move `HEAD` around restore your original branch
-when they finish.
-
-The file is written atomically (temp file + rename) so an interrupted command
-cannot corrupt your stack metadata.
-
-## Install / build
-
-**One-line install** (no Go toolchain needed):
+Each branch records `parentSHA` — the parent commit it was last rebased onto. When `feat-auth` changes, `feat-api.parentSHA` no longer matches `feat-auth`'s tip, so `st` marks it `(needs restack)` and runs:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/andyrewlee/stacked/main/install.sh | sh
+git rebase --onto <current tip of feat-auth> <feat-api.parentSHA> feat-api
 ```
 
-The installer detects OS/arch (darwin/linux, amd64/arm64), verifies the
-release checksum, and installs `st` to `/usr/local/bin` (override with
-`INSTALL_DIR`). Until release signing is provisioned it requires
-`ST_ALLOW_UNVERIFIED=1` — it refuses unverifiable downloads by default.
+Then it updates `feat-api.parentSHA` and walks upward in topological order. If a rebase hits a conflict, `st` exits `2` leaving the standard Git rebase paused — resolve the files, `git add`, and run `st continue` (or `st abort` to back out).
 
-**Prebuilt binaries**: every release publishes
-darwin/linux tarballs for amd64 and arm64 plus `checksums.txt` on the
-[releases page](https://github.com/andyrewlee/stacked/releases) — download
-`stacked_<version>_<os>_<arch>.tar.gz`, verify the checksum, and put the `st`
-binary on your `PATH`.
+---
 
-Building from source requires **Go 1.26+** and **Git 2.17+** on your `PATH`; **Git 2.31+** is
-recommended for native common-dir path resolution, while older supported Git
-versions use a fallback. On **Git <2.26** the default rebase backend drops
-commits that started empty (`git commit --allow-empty`) during a restack
-cascade; Git 2.26+ preserves them. The full gate (`make ci`) additionally needs
-**golangci-lint v2** — an external binary, never a module dependency:
-`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2`.
+## Command Reference
 
-```sh
-# install the latest release onto your PATH (no clone needed)
-go install github.com/andyrewlee/stacked/cmd/st@latest
-
-# ...or install from a clone
-go install ./cmd/st
-
-# ...or build locally (Makefile stamps the version from git)
-make build          # -> ./st
-go build -o st ./cmd/st
-
-# sanity check
-st version          # version, commit, build time, go version
-st --help
-```
-
-The main package lives at `./cmd/st`, so `go install` produces a binary named
-`st`. The metadata lives under the repository's *common* git dir, so linked
-worktrees of the same repo share one stack.
-
-## For scripts and agents
-
-`st` is built to be driven programmatically: it never prompts, JSON-capable
-subcommands accept `--json`, and failures report stable exit codes (`1`
-usage, `2` conflict, `3` not initialized, `4` dirty tree, `5` lock held,
-`70` internal). See
-**[docs/AGENT.md](docs/AGENT.md)** for the full machine interface (JSON schemas,
-exit codes, idempotency).
-
-## Contributing
-
-The repo closes its own loop — `make ci` is fmt + strict lint + race tests + e2e +
-a coverage gate, and the engine you'll touch most tests in milliseconds. See
-**[CONTRIBUTING.md](CONTRIBUTING.md)** for the add-a-command recipe and
-**[CLAUDE.md](CLAUDE.md)** for the architecture.
-
-## Commands
-
-Run `st help` (or `st <command> -h`) at any time. Flags may be placed
-before or after a positional branch name.
+Flags may appear before or after positional arguments. Run `st help <command>` (or `st <command> -h`) for full flag details.
 
 Every command below except `__complete` and `completion` (plus `help`/`version`) accepts `--json`; see docs/AGENT.md.
+
+### Inspect & Setup
 
 | Command | Aliases | Summary |
 | --- | --- | --- |
 | `st init [--trunk <name>]` | | Initialize stack tracking in this repo. |
-| `st create <name> [-m|--message <msg>] [-a|--all] [--dry-run]` | `c` | Create a new branch stacked on the current branch (`--dry-run` previews). |
-| `st log [--all] [--pr] [--json]` | `ls` | Show the current stack as a tree (`--all` for whole forest, `--pr` for GitHub PR status). |
-| `st status [--pr] [--json]` | `stat` | Show the current branch, its parent/children, commits, trunk lag, and restack state (`--pr` for GitHub PR). |
-| `st checkout [name]` | `co` | Check out a tracked branch, or list branches when no name is given. |
-| `st up [n]` | `u` | Move up the stack to a child branch. |
-| `st down [n]` | `d` | Move down the stack toward trunk. |
-| `st top` | `t` | Jump to the top (leaf) of the current stack. |
-| `st bottom` | `b` | Jump to the bottom branch (just above trunk). |
-| `st track [name] [--parent <branch>] [--all] [--dry-run]` | | Start tracking a git branch (the current one when no name is given), or every untracked branch with `--all` (`--dry-run` previews). |
-| `st untrack [name] [--dry-run]` | | Stop tracking a branch (re-parents its children; `--dry-run` previews). |
-| `st modify [-m|--message <msg>] [-a|--all] [--commit] [--dry-run]` | `amend`, `m` | Amend (or add) a commit from staged changes (`-a` stages modified tracked files), then restack upstack. |
-| `st restack [--all] [--dry-run]` | `r` | Rebase the current branch and everything above it onto their parents (`--all` restacks the whole forest; `--dry-run` previews). |
-| `st continue` | | Resume a restack interrupted by a merge conflict. |
-| `st abort` | | Abort an in-progress restack/rebase. |
-| `st squash [-m|--message <msg>] [--dry-run]` | | Squash all of the current branch's commits into one (`--dry-run` previews). |
-| `st onto <target> [--dry-run]` | `move` | Move the current branch (and its upstack) onto a new parent (`--dry-run` previews). |
-| `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update the stack metadata (`--dry-run` previews). |
-| `st delete <name> [-f|--force] [--dry-run]` | `rm` | Delete a branch (merged or squash-merged, or `-f` to force) and re-parent its children (`--dry-run` previews). |
-| `st sync [-s|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch trunk, fast-forward it, prune merged branches, and restack (`-s`/`--submit` pushes and updates PRs after). |
-| `st submit [--draft] [--no-pr] [--title <t>] [--body <b>] [--upto] [--all] [--remote <name>] [--dry-run]` | `ss` | Push the current stack and create/retarget/update GitHub PRs (`--no-pr` for push-only; `--upto`/`--all` control scope). |
-| `st undo [--force]` | | Undo the last stack-mutating command (`--force` restores refs that moved outside st). |
-| `st doctor [--fix] [--all]` | `validate` | Check the stack state for drift or inconsistencies (`--fix` repairs metadata; `--all` checks drift across all stacks). |
-| `st completion <bash\|zsh\|fish>` | | Print a shell completion script. |
-| `st guide` | | Print the recommended workflow (handy for agents). |
-| `st help` / `st version` | `-h`/`-v` | Show help / print the version. |
+| `st log [--all] [--pr]` | `ls` | Show the current stack tree (`--all` for all stacks, `--pr` for GitHub PR & CI status). |
+| `st status [--pr]` | `stat` | Show current branch, parent/children, commits (`--json`), trunk lag, and restack state. |
+| `st doctor [--fix] [--all]` | `validate` | Check stack metadata for problems and drift (`--fix` repairs metadata, `--all` checks all stacks). |
+| `st guide` | | Print the recommended stacked-diff workflow (handy for agents). |
 
-### Command details and examples
+### Navigate
 
-#### `st init [--trunk <name>]`
-Creates `.git/stacked/state.json`. If `--trunk` is omitted, the trunk is detected
-from `origin/HEAD`, then the current branch, then defaults to `main`.
+| Command | Aliases | Summary |
+| --- | --- | --- |
+| `st checkout [name]` | `co` | Check out a tracked branch (or trunk), or list tracked branches with no arg. |
+| `st up [n]` | `u` | Move `n` levels up toward leaves (stops at branch points). |
+| `st down [n]` | `d` | Move `n` levels down toward trunk. |
+| `st top` | `t` | Jump to the leaf of the current stack. |
+| `st bottom` | `b` | Jump to the lowest branch above trunk. |
 
-```sh
-st init                 # auto-detect trunk
-st init --trunk main
-```
+### Build & Edit Stacks
 
-#### `st create <name> [-m <msg>] [-a|--all] [--dry-run]`
-Creates `<name>` off the current branch, switches to it, and tracks it. `-a`
-stages modified tracked changes first (matching `git commit -a`; untracked files
-must still be staged with `git add`); `-m` commits the staged changes onto the
-new branch (`-a` requires `-m`). `--dry-run` previews without changing anything.
+| Command | Aliases | Summary |
+| --- | --- | --- |
+| `st create <name> [-m\|--message <msg>] [-a\|--all] [--dry-run]` | `c` | Create and track a branch stacked on current (`-a` stages tracked edits; `-m` commits). |
+| `st modify [-m\|--message <msg>] [-a\|--all] [--commit] [--dry-run]` | `amend`, `m` | Amend (or `--commit`) staged changes (`-a` stages tracked edits) and restack upstack. |
+| `st restack [--all] [--dry-run]` | `r` | Rebase current branch and upstack onto their parents (`--all` for whole forest). |
+| `st squash [-m\|--message <msg>] [--dry-run]` | | Collapse all commits on the current branch into one and restack upstack. |
+| `st onto <target> [--dry-run]` | `move` | Re-parent the current branch (and its upstack) onto `target`. |
+| `st rename [old] <new> [--dry-run]` | `mv` | Rename a branch and update stack metadata & child parent pointers. |
+| `st delete <name> [-f\|--force] [--dry-run]` | `rm` | Delete a merged/squash-merged branch (`-f` forces) and re-parent + restack children. |
+| `st track [name] [--parent <branch>] [--all] [--dry-run]` | | Start tracking an existing branch (or all untracked branches with `--all`). |
+| `st untrack [name] [--dry-run]` | | Stop tracking a branch and re-parent its children (keeps the git branch). |
 
-```sh
-git add a.txt && st create feat-a -m "add A"
-```
+### Sync & GitHub PRs
 
-#### `st log [--all] [--pr]` (`ls`)
-Renders the current stack as a tree with the trunk at the bottom and each branch
-above its parent (on trunk, detached HEAD, or with `--all`, shows the whole
-forest). The current branch is marked `◉`, others `○`, drifted branches are tagged
-`(needs restack)`, trunk shows `(N behind origin/<trunk>)` from cached remote refs
-with zero network calls, and each branch shows its top commit subject. With `--pr`,
-open GitHub PRs are annotated with number, draft badge, CI check status
-(`✓`/`✗`/`⋯`), and base mismatch warnings. In a multi-worktree repo, branches
-checked out in *other* linked worktrees are annotated with `(worktree: <path>)`
-(the caller's own worktree path is omitted to keep output clean).
+| Command | Aliases | Summary |
+| --- | --- | --- |
+| `st submit [--draft] [--no-pr] [--title <t>] [--body <b>] [--upto] [--all] [--remote <name>] [--dry-run]` | `ss` | Push stack (`--force-with-lease`) and create/retarget/update GitHub PRs. |
+| `st sync [-s\|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` | `s` | Fetch & fast-forward trunk, prune merged branches, restack (`-s` pushes & updates PRs). |
 
-#### `st status [--pr]` (`stat`)
-Prints the current branch's role (trunk / tracked / untracked), its parent and
-children, whether it needs a restack, whether local trunk is behind `origin/<trunk>`,
-and whether the working tree is clean (ignoring untracked files). `--json` also
-includes `commits` (the branch's `parentSHA..tip` commits) and `trunkBehind`.
-With `--pr`, attaches open GitHub PR metadata.
+### Recover & Shell
 
-#### `st checkout [name]` (`co`)
-Checks out a tracked branch (or the trunk). With no argument, lists the trunk and
-all tracked branches, marking the current one with `*`. If the branch is checked
-out in another git worktree, checkout refuses cleanly naming that worktree path.
+| Command | Aliases | Summary |
+| --- | --- | --- |
+| `st continue` | | Resume a restack/onto/sync paused on a merge conflict. |
+| `st abort` | | Abort an in-progress rebase and restore stack state. |
+| `st undo [--force]` | | Revert the last stack-mutating command without touching your working tree. |
+| `st completion <bash\|zsh\|fish>` | | Print a shell completion script (with live branch completion via `st __complete`). |
+| `st help [<command>]` / `st version` | `-h`/`-v` | Show help / print build & version info. |
 
-#### `st up [n]` (`u`) / `st down [n]` (`d`) / `st top` (`t`) / `st bottom` (`b`)
-Navigate the stack: `up`/`down` step `n` levels; `top` jumps to the leaf; `bottom`
-jumps to the lowest branch above trunk.
+### Good to Know
 
-#### `st track [name] [--parent <branch>] [--all] [--dry-run]` / `st untrack [name] [--dry-run]`
-`track` adopts an existing git branch (inferring its parent from the commit graph
-or using `--parent`; `--all` adopts every untracked local branch in one pass).
-`untrack` stops managing a branch and re-parents its children onto its parent
-without deleting the git branch.
+- **GitHub PR defaults:** `st submit` automatically activates GitHub PR management whenever the remote is GitHub (including GitHub Enterprise) and `gh` is on `PATH`. Single-commit branches default the PR title & body from that commit; multi-commit branches default the title from the oldest commit and bullet-list the subjects. Override the current branch's PR with `--title` / `--body`.
+- **Offline sync:** `st sync --no-fetch` skips all network calls and prunes/restacks purely against your local trunk ref.
+- **Shell completions:** install once for live branch-name tab completion:
+  ```sh
+  st completion zsh  > "${fpath[1]}/_st"   # zsh
+  st completion bash > /etc/bash_completion.d/st   # bash
+  st completion fish > ~/.config/fish/completions/st.fish   # fish
+  ```
+- **Debugging git spawns:** run `ST_DEBUG=1 st <cmd>` to trace every `git` invocation and duration on `stderr` (`stdout` / `--json` stays untouched).
+- **Waiting on locks:** set `ST_LOCK_WAIT=10s` to retry briefly on advisory lock contention instead of failing immediately with exit `5`.
 
-#### `st modify [-m <msg>] [-a|--all] [--commit] [--dry-run]` (`amend`, `m`)
-Amends the current branch's tip (or, with `--commit`, adds a new commit) using
-**staged changes** by default — untracked files are never swept in. Pass `-a` to
-stage modified tracked files (like `git commit -a`). Automatically restacks every
-descendant onto the new tip.
+---
 
-#### `st restack [--all] [--dry-run]` (`r`)
-Rebases the current branch onto its parent's current tip, then restacks its entire
-upstack in topological order. From the trunk — or with `--all` from anywhere —
-restacks every tracked branch in the forest. Untracked files do not block restack;
-only tracked staged/unstaged edits do. When a dependent branch lives in another
-clean linked git worktree, it is rebased inside that worktree; dirty or locked
-(`git worktree lock`) dependent worktrees are skipped with a note rather than
-clobbered. On conflict, resolve, `git add`, and run `st continue` (or `st abort`).
+## Contributing
 
-#### `st delete <name> [-f|--force] [--dry-run]` (`rm`)
-Deletes a tracked branch, re-parents its children onto the deleted branch's parent,
-and restacks them. Without `-f`, branches already merged or squash-merged into
-their stack parent are allowed; `-f` force-deletes an unmerged branch. Never
-deletes another git worktree on disk (refuses if the branch is checked out in
-another worktree).
+The repo closes its own loop locally — `make test-fast` runs the pure fake-git engine suite in ~1s, and `make ci` runs version-pin checks, `gofumpt`, strict `golangci-lint`, `go vet` (+ Windows/Plan 9 cross-vet), `-race` tests, black-box e2e, and a merged coverage gate (≥75% total, ≥50% per function).
 
-#### `st sync [-s|--submit] [--all] [--no-delete] [--no-fetch] [--remote <name>] [--dry-run]` (`s`)
-Fetches the remote, fast-forwards the trunk, deletes branches already merged into
-the trunk (re-parenting their children), restacks surviving branches onto the
-updated trunk, and restores your original branch — or switches to the single
-surviving child when the current branch itself was pruned. Scopes to the current
-stack when on a tracked branch (pass `--all` or run from trunk for the whole
-forest).
-
-A branch counts as merged when:
-- Its commits are ancestors of trunk, OR
-- Its entire diff is already contained in trunk's tree (3-way `git merge-tree --write-tree`
-  on Git 2.38+, with 2-way tree diff fallback on older Git), OR
-- On GitHub remotes with `gh` available, its PR is marked `MERGED` on GitHub.
-
-Pass `-s` / `--submit` to immediately retarget surviving PRs, force-push restacked
-branches, and refresh PR stack blocks right after syncing.
-
-#### `st submit [--draft] [--no-pr] [--title <t>] [--body <b>] [--upto] [--all] [--remote <name>] [--dry-run]` (`ss`)
-Pushes every branch in the current stack (`bottom..top`; `--upto` stops at current;
-`--all` pushes the whole forest) in dependency order using `--force-with-lease`,
-setting upstream (`-u`).
-
-When the remote is GitHub and `gh` is on `PATH` (unless `--no-pr` is passed):
-1. **Retargets open PR bases before pushing** so GitHub never auto-closes child
-   PRs when a parent merges or moves.
-2. **Force-pushes** every branch in the scope.
-3. **Creates missing PRs bottom-up** (defaulting title/body from the branch's
-   top commit; override the current branch with `--title`/`--body`, or open as
-   drafts with `--draft`).
-4. **Updates stack links idempotently** via `<!-- st:stack:start -->`...`<!-- st:stack:end -->`
-   markers while preserving author prose outside the block (omitted on single-PR
-   stacks unless already present).
-
-#### `st squash [-m <msg>] [--dry-run]` / `st onto <target> [--dry-run]` (`move`) / `st rename [old] <new> [--dry-run]` (`mv`)
-- `squash`: collapses all commits on the current branch into one, then restacks descendants.
-- `onto`: re-parents the current branch onto `target` and rebases it and its descendants.
-- `rename`: renames a branch (`git branch -m`) and updates stack metadata and child pointers.
-
-#### `st undo [--force]`
-Reverts the last stack-mutating command: rolls back metadata and resets recorded
-branches to their prior tips without touching your working tree. Refuses if a
-branch moved outside `st` since the command ran unless `--force` is passed.
-
-#### `st doctor [--fix] [--all]` (`validate`)
-Checks the recorded stack against git and reports problems (missing trunk/branches,
-invalid parents, cycles, stale pending reparent/continuation) plus drift warnings
-for the current stack (or all stacks with `--all`). Exits non-zero when any
-problem is found. Pass `--fix` to repair metadata inconsistencies automatically.
-
-#### `st completion <bash|zsh|fish>`
-Prints a shell completion script for `st` subcommands and dynamic branch completion
-via the hidden `st __complete` endpoint.
-
-## A real stacked-diff workflow
-
-```sh
-# 0. one-time setup in your repo
-st init
-
-# 1. build the first change as its own small branch
-echo 'A' > a.txt && git add a.txt
-st create feat-a -m "add A"
-
-# 2. stack a second change on top of the first
-echo 'B' > b.txt && git add b.txt
-st create feat-b -m "add B"
-
-# 3. inspect the stack (with optional GitHub PR & CI status)
-st log --pr
-
-# 4. push the stack and create stacked GitHub PRs with stack navigation links
-st submit
-
-# 5. drop down to revise the first branch; feat-b auto-restacks
-st down
-echo 'A2' >> a.txt && git add a.txt
-st modify -m "add A (revised)"
-st submit
-
-# 6. once PR #1 merges on GitHub: fetch, prune feat-a, restack feat-b onto main,
-#    retarget PR #2 -> main, force-push, and refresh stack links in one shot
-st sync --submit
-```
-
-## Notes & limitations
-
-- `stacked` shells out to your system `git` (and `gh` for GitHub PR operations);
-  it is a sharp layer, not a reimplementation of git or a separate login flow.
-- Stack metadata is local to the repo (under the common git dir, so externally
-  managed `git worktree`s share it). `st` never creates or deletes worktrees on
-  disk.
-- Mutating commands — plus HEAD-moving navigation (`checkout <branch>`,
-  `up`/`down`/`top`/`bottom`) and `init` — take an advisory lock so concurrent
-  `st` invocations don't clobber metadata or move HEAD mid-mutation.
-- On a rebase conflict during a restack, resolve it, `git add` the files, and run
-  `st continue` (or `st abort` to back out).
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the add-a-command recipe and **[CLAUDE.md](CLAUDE.md)** for the architecture.
