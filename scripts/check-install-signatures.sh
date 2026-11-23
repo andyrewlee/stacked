@@ -125,11 +125,11 @@ build_dist() {
 # build_installer <with-key|no-key>: fresh installer copy per case.
 build_installer() {
 	cp install.sh "$FIXT/install.sh"
+	if [ "$(grep -c '^MINISIGN_PUBKEY=' "$FIXT/install.sh")" -ne 1 ]; then
+		echo "FAIL: install.sh no longer has exactly one MINISIGN_PUBKEY assignment" >&2
+		exit 1
+	fi
 	if [ "$1" = "with-key" ]; then
-		if [ "$(grep -c '^MINISIGN_PUBKEY=' "$FIXT/install.sh")" -ne 1 ]; then
-			echo "FAIL: install.sh no longer has exactly one MINISIGN_PUBKEY assignment" >&2
-			exit 1
-		fi
 		# Substitute the ephemeral public key into the COPY only — whatever the
 		# placeholder currently holds (empty before provisioning, the real key
 		# after) — then prove the substitution took effect: a silent no-op is
@@ -139,6 +139,15 @@ build_installer() {
 		rm -f "$FIXT/install.sh.bak"
 		if ! grep -q "^MINISIGN_PUBKEY=\"$pub\"" "$FIXT/install.sh"; then
 			echo "FAIL: ephemeral key substitution did not take effect" >&2
+			exit 1
+		fi
+	else
+		# Explicitly clear MINISIGN_PUBKEY in the copy so the empty-key cases
+		# remain valid once production installs ship an embedded public key.
+		sed -i.bak 's|^MINISIGN_PUBKEY="[^"]*"|MINISIGN_PUBKEY=""|' "$FIXT/install.sh"
+		rm -f "$FIXT/install.sh.bak"
+		if ! grep -q '^MINISIGN_PUBKEY=""' "$FIXT/install.sh"; then
+			echo "FAIL: empty-key substitution did not take effect" >&2
 			exit 1
 		fi
 	fi

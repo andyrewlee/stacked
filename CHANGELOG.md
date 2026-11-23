@@ -6,493 +6,76 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-23
+
 ### Added
 
-- **Paused-elsewhere refusals are machine-routable.** A mutation refused
-  because a tracked branch's rebase is paused in another worktree now emits a
-  JSON error envelope with `code: "paused"` plus structured `branch` and
-  `worktree` fields (still exit 1), so an orchestrator can route
-  `st continue`/`st abort` to the right worktree without parsing messages.
-
-- **`st worktree lock` / `st worktree unlock` — an agent-hold primitive.** A
-  locked worktree (`git worktree lock`, optionally with `--reason`) is a
-  standing hold: the restack cascade skips the branch living there and names
-  the lock in `notes`, every removal path (`st worktree rm`, `rm --all`, the
-  delete/fold release, and undo's created-worktree teardown) refuses or skips
-  it, and `st worktree ls --json` reports `locked` — including locks set with
-  plain git. `rm --all` reports the hold as `skipped[].reason` =
-  `"worktree is locked"`.
-- **`create`, `modify`, `untrack`, and `rename` take `--dry-run`.** Each
-  answers the same result shape as the mutating command plus `"dryRun": true`,
-  computed by a read-only planner — no lock, no undo entry, no mutation.
-  `modify --dry-run` previews the amend (or `--commit`) plus its upstack
-  cascade; `untrack --dry-run` and `rename --dry-run` name each re-parented
-  child in `notes`; `create --worktree --dry-run` predicts the worktree path
-  and `.worktreeinclude` copies against the parent's tree.
-- New `st commits [<branch>] [--json]` lists the commits between a branch's
-  recorded stack base (`parentSHA`) and its live tip — `{branch, parentSHA,
-  commits: [{sha, subject}]}` — so agents can answer "what's in this branch"
-  without hand-building `git log` ranges.
-
-- `st status --json` and `st submit --dry-run --json` now report `published` —
-  each branch's state (`current`/`stale`/`diverged`/`missing`/`unknown`)
-  against its local remote-tracking ref, so an agent can answer "is a submit
-  needed" without a fetch.
-- **`st log --json` and `st status --json` report the live tip SHA.** Each
-  `log` node and the `status` payload carry `tip` (`omitempty`) — the live
-  ref tip from the same batched probe the render already ran, versus the
-  recorded base in `parentSHA`. Absent when the ref is gone, which is itself
-  the drift signal an orchestrator polls for.
-- **`st log` sees through a paused rebase.** A branch whose worktree sits
-  paused mid-rebase lists detached under `git worktree list`, which used to
-  strip its `worktree`/`dirty` annotation exactly when it was blocked. The
-  node now resolves the owner through the rebase head-name, keeps
-  `worktree`/`dirty`, and adds `paused` plus `conflictedFiles` — the unmerged
-  paths the pause is waiting on — so one poll answers "who is stuck and on
-  what". A worktree under `git worktree lock` also surfaces as `locked` on the
-  node. All additive (`omitempty`); text adds `paused`/`locked` to the
-  worktree tag.
-- **`st worktree` add forms take `--dry-run`.** `st worktree <branch>
-  --dry-run` and `st worktree --all --dry-run` preview the worktree paths
-  and the `.worktreeinclude` files a real run would copy — reported under
-  `"dryRun": true` in `--json` — without creating anything; the read-only
-  and remove forms reject the flag. `st worktree --all` also now skips a
-  branch whose worktree sits paused mid-rebase ("a rebase is in progress
-  there", the same reason `rm --all` uses) instead of failing on git's own
-  refusal mid-loop, and `st worktree <branch>` refuses such a branch up
-  front.
-- **`st open` opens a branch's PR compare URL.** Bare `st open` spawns the
-  platform opener (`open`/`xdg-open`/`rundll32`) once per URL for the current
-  branch's compare URL; `--all` opens every tracked branch's. `--remote`
-  picks the remote (default `origin`), `--dry-run` prints `would open`
-  lines, and `--json` returns the URL data without spawning anything
-  (`{ "remote", "repoURL", "prHints": [...] }` — the same compare-URL list
-  `st submit` prints, minus the push). The command is read-only: no lock,
-  no undo entry, no fetch — it never contacts a host.
-- **`st undo --list` previews the journal without reverting.** It prints the
-  undo entries newest-first (index 1 is what a bare `st undo` would revert);
-  `--json` emits `{ "entries": [ { "index", "label", "currentBranch",
-  "createdBranches": [], "createdWorktrees": {}, "refs": {} } ] }` where
-  `refs` maps each recorded branch to the tip undo would restore.
-- **Branch-aware shell completion via a hidden `st __complete` endpoint.**
-  `st completion <bash|zsh|fish>` now emits dynamic hooks for the eight
-  branch-taking commands — `checkout`/`co`, `onto`/`move`, `track`,
-  `worktree`/`wt`, `delete`, `untrack`, `commits`, and `rename` — that call
-  `st __complete <cmd> <index> -- <words>` at
-  completion time. Candidates are read-only and cheap (state file plus at
-  most two flat git probes — `for-each-ref` or `worktree list`, never a
-  fetch or history walk), silent-empty outside a repo or on unreadable
-  state, and passed to the shell as data: a refname-legal name like
-  `$(touch_pwned)` can never be evaluated. `checkout` offers trunk plus
-  tracked branches; `onto` offers everything except the moving subtree;
-  `track` offers untracked locals (`--parent`'s value completes tracked
-  branches); `worktree` offers tracked branches lacking a worktree, and
-  `worktree rm` the branches owning one; `delete`, `untrack`, and `commits`
-  offer the tracked set, and `rename` tracked + trunk on its first positional.
-  `__complete` is hidden from help
-  and word-1 candidates and is exempt from the git-version floor so the
-  per-keystroke cost stays flat; `ST_COMPLETE_BIN` overrides the binary
-  the hooks call.
-- **`st undo --dry-run` previews the next undo.** Unlike `--list` (recorded
-  data only), it diffs the journal against live refs and worktrees:
-  `wouldRestore` carries each ref's live→recorded SHA pair plus a per-ref
-  `commitsLostFromRef` count (`"unknown"` when either object is missing),
-  `wouldDelete` lists branches the op created with their live owning
-  worktrees (even when none was recorded) and dirtiness, and `blockers`
-  names — in the real undo's gate order — everything a real run would
-  refuse on (`rebase_in_progress`, `state_too_new`, `malformed_snapshot`,
-  `malformed_journal`, `ref_moved_since`, `paused_rebase`,
-  `cwd_inside_created_worktree`, then per-branch
-  `recorded_worktree_mismatch`, `worktree_dirty`,
-  `missing_restore_target`). The preview holds the
-  advisory lock but
-  mutates nothing: state, journal, refs, worktrees, and cwd are byte-for-
-  byte unchanged, and a later real undo revalidates everything. `--dry-run`
-  and `--list` are mutually exclusive, and `--force` pairs with neither
-  (a preview or listing never moves refs); blockers are data, exit is
-  still 0.
-- **`st prune` is sync's prune step as a standalone command.** It deletes
-  every tracked branch already merged into the local trunk — or into
-  `refs/remotes/<remote>/<trunk>` with `--remote` (no fetch; a missing
-  tracking ref fails loudly) — and reports them in `deleted`. It never
-  moves HEAD and requires no clean tree: pruning the current branch is
-  refused with "check out another branch or run st sync". `--dry-run`
-  lists the same set under `"dryRun": true`.
-- **`st sync --no-fetch` skips every remote call.** No fetch, no trunk
-  fast-forward; prune and restack run against the local trunk, so a branch
-  landed only on the remote survives until the local trunk advances. The
-  result note reports `trunk: skipped (--no-fetch)`.
-- **`st track --all` adopts an existing branch stack in one command.**
-  Every untracked local branch is adopted with its parent inferred from
-  the full local-branch set — `a→b→c` becomes a real chain, not three
-  trunk-parented orphans. Cyclic proposals are refused naming the members;
-  orphan branches sharing no history with the trunk are skipped with a
-  note. The JSON result adds a `tracked` name→parent map.
-- **`st submit --all` pushes the whole tracked forest.** In dependency
-  order (parents before children), from any branch — including trunk and
-  detached HEAD — with the same confirmed-per-ref partial-failure contract
-  as a single-path submit. `st submit` without the flag is unchanged.
-- **`ST_LOCK_WAIT` waits out lock contention.** Set it to a Go duration
-  (`10s`) or bare seconds (`10`) and lock acquisition retries every 100ms
-  up to the budget; exhaustion still exits 5. Malformed or negative values
-  fail fast naming the variable; the abandoned `lock.reclaim` guard is
-  never retried.
-- **`st absorb` applies multi-target plans.** A staged set whose hunks belong
-  to different stack branches now lands as one amend per owning tip (each
-  with only its own hunks, post-image line numbers corrected for same-file
-  splits) plus a single cascade restack; one `st undo` reverts everything.
-  All-or-nothing: any refusal or dirty target worktree leaves the whole plan
-  unapplied.
-- **`st help --json` reports each command's `subVerbs`.** The command-list
-  payload's per-command object now carries `subVerbs` (`omitempty`) — the
-  literal sub-verbs a command accepts (`worktree`'s `ls`/`rm`, `shell`'s
-  `install`, `completion`'s shells) — so agents read the sub-verb surface as
-  data instead of regexing it out of `usage`.
-
-### Security
-- **Spawned git processes no longer inherit repo-routing environment
-  variables.** `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_CONFIG_*`, and the other
-  `GIT_*` variables git exports inside hooks are stripped from every
-  `st`-spawned git call, so `st` running inside a hook or under an exported
-  `GIT_DIR` cannot be redirected at the wrong repository or fed injected
-  config.
-- **Git output folded into errors is credential-scrubbed.** Captured git
-  stderr/stdout that reaches error text or `--json` envelopes is now
-  stripped of credential-shaped `scheme://userinfo@host` and
-  `user:pass@host:` material first, so a remote URL carrying a token can
-  no longer surface in diagnostics.
+- **Native GitHub stacked PR workflow via `gh` (`internal/gh`).** Zero external
+  Go dependencies; auto-activates on GitHub remotes when `gh` is on `PATH`:
+  - **`st submit [--draft] [--no-pr] [--title <t>] [--body <b>]`** retargets
+    open PR bases *before* pushing (preventing GitHub auto-closes), force-pushes
+    with `--force-with-lease`, creates missing PRs bottom-up, and idempotently
+    maintains `<!-- st:stack:start -->`...`<!-- st:stack:end -->` navigation
+    blocks on multi-PR stacks without touching author prose.
+  - **`st sync [-s|--submit]`** queries merged GitHub PRs alongside 3-way
+    `git merge-tree` detection so squash- and rebase-merged PRs prune accurately;
+    `-s`/`--submit` immediately retargets surviving PRs, force-pushes restacked
+    branches, and refreshes stack blocks in one command.
+  - **`st log --pr` and `st status --pr`** annotate branches with PR number,
+    URL, draft badge, CI check status (`✓`/`✗`/`⋯`), and base-mismatch warnings.
+- **3-way `git merge-tree` squash-merge detection** (Git 2.38+, with 2-way tree
+  diff fallback on older Git) in `st sync` and `st delete`, including concurrent
+  disjoint edits to the same file.
+- **Current-stack scoping & zero-network status richness:**
+  - `st log`, `st sync`, `st submit`, and `st doctor` drift warnings scope to
+    the current stack when on a tracked branch (`--all` for the whole forest).
+  - `st log` and `st status` report `trunkBehind` from cached remote-tracking
+    refs without network calls, live `tip` SHAs, and `published` states.
+  - `st status --json` includes the branch's `commits` (`parentSHA..tip`).
+- **Expanded `--dry-run` parity** on `create`, `modify`, `untrack`, `rename`,
+  and `track --all`.
+- **Branch-aware shell completion (`st __complete`)** for `checkout`, `onto`,
+  `track`, `delete`, `untrack`, and `rename` across bash, zsh, and fish.
+- **Paused-rebase & worktree visibility:** `st log` resolves paused rebases in
+  other worktrees (`paused`, `conflictedFiles`) and `git worktree lock` holds
+  (`locked`); mutations blocked by a pause elsewhere emit structured
+  `code: "paused"` JSON errors with `branch` and `worktree`.
+- **Offline sync (`st sync --no-fetch`)** prunes and restacks purely against the
+  local trunk ref with zero remote contact.
+- **`st doctor [--fix] [--all]`** (alias `validate`) consolidates stack health
+  checks and automatic metadata repair into a single command.
+- **Signed releases with `minisign`:** `checksums.txt.minisig` is published
+  alongside release tarballs and verified fail-closed by `install.sh` using the
+  embedded public key (`stacked.pub`).
+- **Diagnostics & lock controls:** `ST_DEBUG=1` traces every git spawn on
+  `stderr` without touching `stdout`/`--json`, and `ST_LOCK_WAIT` enables
+  bounded retries on advisory lock contention.
 
 ### Changed
-- **The git port drops its superseded methods.** `UpdateRefs` (unconditional
-  batch) and `AmendTipWithPatch` (build+land fused) survived only as dead
-  surface after `UpdateRefsCas` and `BuildAmendedTip`/`LandAmendedTip`
-  replaced them — removing them shrinks the fake/conformance maintenance
-  load. Remote-tracking refs are also built by one `git.RemoteTrackingRef`
-  helper everywhere instead of hand-assembled `refs/remotes/...` strings.
-- **Independent read-only git probes run concurrently.** `st log`'s
-  merge-base checks, `track --all`'s parent inference and trunk-pick
-  merge-base checks, `st absorb`'s per-file blame reads, the
-  merge-containment sweeps in prune/sync, and `st worktree --all
-  --dry-run`'s per-branch tree listings now fan out through a bounded
-  parallel probe helper instead of serial `git` spawns; output ordering
-  and the first reported error are unchanged. `st worktree --all` also
-  resolves the `.worktreeinclude` selection once up front, so a malformed
-  manifest now fails the whole batch before the first worktree exists.
-- **Mutating commands spawn fewer git probes.** The command-layer git port
-  (`cmd/gitenv.go`) memoizes `CurrentBranch` and `RepoRoot` per port
-  instance — `st modify` asks `rev-parse --abbrev-ref HEAD` once instead of
-  four times — and each command builds its own port, so a memoized answer
-  can never leak across commands or an off-port HEAD move; the
-  checkout/rename/rebase/worktree-removal wrappers clear the memos on every
-  mutation, error included. `git remote get-url` is memoized per remote for
-  the process, folding each command's "does the remote exist" and "what is
-  its URL" reads into one probe (sync/submit/open/prune), and the
-  `worktree rm --all` loop shares one port so its per-candidate cwd checks
-  cost a single `rev-parse --show-toplevel`. No output or behavior changes.
-- **Undo apply and `undo --dry-run` now share one computation.** `planUndo`
-  (internal/stack/undo_plan.go) is the single source for gate ordering,
-  created-branch/worktree discovery, dirty and path-mismatch verdicts, and
-  the checkout-target prediction: `Undo` executes the plan, `UndoPreview`
-  renders it, so a new gate or created-resource kind lands once and the
-  preview can no longer drift from the apply it mirrors. The engine also
-  gates on a paused rebase itself (belt under cmd's earlier refusal), and a
-  multi-step `st undo <n> --dry-run` reads the step-invariant probes —
-  rebase flag, live tips, HEAD's branch — once instead of per entry. The
-  emitted `--json` payload is unchanged.
 
-### Fixed
-- **`make hooks`/`check-hooks` surface worktree-shaped gaps.** `make hooks`
-  now confirms what it wrote and warns when `extensions.worktreeConfig`
-  scoped the config to this worktree only; `check-hooks` warns (or fails under
-  `HOOKS_REQUIRED=1`) when `core.hooksPath` resolves to a `.githooks/` that
-  doesn't exist at the worktree's commit — the two ways the only quality gate
-  could silently not run.
-- **`make snapshot` rehearses the real release pipeline.** It ran
-  `goreleaser build` — binaries only — while the docs described building "the
-  release artifacts". It now runs `goreleaser release --snapshot --clean`
-  (signing when `MINISIGN_KEY_FILE` is set, `--skip=sign` otherwise), so the
-  dry run covers the archive, checksum, and sign legs `install.sh` consumes.
-- **The exit-5 lock-contention error names its remedy.** `ErrLocked` now reads
-  "another st command is running in this repository (retry when it finishes,
-  or set ST_LOCK_WAIT to wait)" — matching the other top-failure errors that
-  spell out what to do next. The JSON `"locked"` code is unchanged.
-- **`make check-tools` fails fast when `bash` is absent.** `scripts/cover.sh`,
-  the `check-install` scripts, and both git hooks are `#!/usr/bin/env bash`,
-  so a bash-less environment previously died mid-run instead of at the tool
-  inventory; `gzip` joins the optional list (`tar -z` forks it on GNU tar).
-- **`make release` preflights `GITHUB_TOKEN`.** A missing token used to
-  surface inside goreleaser's publish pipe, after the full gate and the
-  artifact build had already run.
-- **`make check-go-version` fails loudly on a patch-level or `toolchain`
-  go.mod floor** instead of silently truncating `go 1.26.1` to `1.26` — the
-  `Go N.NN+` doc-pin shape cannot express a patch, so the check refuses until
-  it (and the docs) are updated.
-- **`scripts/check-pins.sh` can no longer pass silently.** A malformed spec row
-  (or no rows at all) now exits non-zero instead of printing a vacuous
-  "consistent across", and every matching declaration in each file is compared
-  — previously only the first was checked, so a second stale pin was
-  invisible. The git-floor doc rows' grep now matches the requirement
-  sentence's `**Git N.NN+**` shape specifically, so feature-version mentions
-  (the `2.31+` recommendation, the `2.26+` rebase note) aren't misread as
-  floor declarations.
-- **`install.sh` no longer reports failure after a successful `sudo mv`.** The
-  trailing post-install `chmod +x` ran unprivileged against a now-root-owned
-  file and could only fail — the mode is set `0755` in the temp dir before
-  `mv` and survives it, so the line bought nothing.
-- **`make check-git-version` compares all three version components.** The
-  installed git is now checked as major.minor.patch against the floor (a
-  `git version` with no patch counts as 0), matching the runtime's
-  three-part `MinVersion` — previously the patch digit was silently dropped.
-  A new pin row also requires the runtime floor's patch to stay 0, so a
-  nonzero-patch floor cannot be declared while the documented floor is
-  two-part.
-- **`make snapshot` and `make release` refuse early when goreleaser is
-  absent.** The pin check deliberately tolerates a missing binary for
-  non-release work, so `make snapshot` passed its gate and then died on a
-  bare `goreleaser: command not found` (exit 127); both targets now run a
-  presence check first and report the pinned version to install.
-- **`st worktree rm` reports a dirty worktree instead of leaking git's
-  fatal.** Single-branch removal now runs the same dirty pre-check `rm
-  --all` uses, and all four removal paths share one eligibility verdict —
-  the reason texts stay byte-identical.
-- **A failed cross-worktree restack no longer aborts a foreign rebase.** The
-  rollback after `git rebase` failed in a linked worktree ran unconditionally;
-  an external rebase that started between the pre-flight probe and the spawn
-  could be destroyed. `st` now aborts only when the paused rebase's head-name
-  proves it is the one it started — a foreign or unidentifiable rebase is
-  left untouched and reported.
-- **`st continue` verifies a pending reparent before promoting it.** When the
-  paused rebase's head-name matched the recorded branch, the record's target
-  was stamped unconditionally — a stale record plus a foreign rebase on the
-  same branch could mis-base the branch with `st` reporting clean. The
-  recorded `onto` SHA is now verified on every adoption arm; a mismatch is
-  treated as a foreign rebase (truth stamped, warning issued, record kept
-  for `st repair`).
-- **`st fold` works inside the folded branch's own worktree.** The op asked
-  its worktree-release helper to tear down the caller's own worktree — the
-  one place it can never run — so every fold of a worktree-owned branch
-  refused with an unreachable remedy ("run from the main worktree"). Fold
-  now relies on its own checkout of the parent to free the folded branch;
-  the worktree ends up owning the parent.
-- **A panicking git probe no longer exits as a fake conflict.** `ParallelProbes`
-  workers ran unrecovered, so a panic killed the process with Go's runtime
-  exit 2 — the code the agent contract reserves for a paused rebase. Panics
-  are now captured per probe slot and re-raised on the calling goroutine,
-  where the existing recover renders exit 70.
-- **Interactive rebases inherit the scrubbed git environment.** `st restack`,
-  `st onto`, and the other rebase-driving commands spawn `git rebase`
-  interactively; that one spawn missed the repo-routing environment scrub
-  every other git call applies, so exported `GIT_DIR`-family variables (or
-  git-set `GIT_QUARANTINE_PATH` inside a hook) could redirect the rebase at
-  another repository or inject config into it.
-- **The installer validates the tarball before trusting it.** `install.sh`
-  now lists the archive and refuses any member that would write outside the
-  extract directory (absolute or `..` paths), then verifies `st` itself is a
-  regular file — a link member previously landed as a link at the install
-  path (with `chmod` following it to the target) and archive-recorded mode
-  bits such as setuid survived `mv`. The member is normalized to mode 0755
-  before install. These checks run after checksum/signature verification but
-  also hold under the explicit `ST_ALLOW_UNVERIFIED` waiver — the waiver
-  skips provenance, not archive sanity. `get_latest_version` also anchors to
-  the first `tag_name` line so a stray match cannot emit a multi-line
-  version.
-- **The release gate now proves the signing key actually works.** `make
-  release` and `make snapshot` require the pinned goreleaser (an unpinned
-  tool could publish a release `install.sh` rejects), and `make release`
-  also runs the strict installer checks. `check-release-ready` replaces its
-  key-comment grep — which matched encrypted and unencrypted keys alike —
-  with a bounded, noninteractive rehearsal: `minisign -S -W` signs a probe
-  (an encrypted or malformed key fails fast, as it would mid-release) and
-  `minisign -V` verifies it against the embedded `MINISIGN_PUBKEY`, refusing
-  a mismatched pair before anything is published. `make check-deps` also
-  proves `go mod tidy` is a no-op, `check-shell` is `.PHONY` again (a stray
-  file named `check-shell` no longer disables the shellcheck leg), the
-  signature matrix reports its real case count instead of a stale literal,
-  and comments claiming a CI leg installs release tooling now describe the
-  local-only release flow.
-- **Mutations now refuse upfront when a tracked branch (or the trunk) has a
-  rebase paused in a linked worktree.** A worktree mid-rebase reports
-  `detached` in `git worktree list`, so the owner lookup could not see the
-  branch its `--continue`/`--abort` will rewrite — and while git does refuse
-  `branch -D` or `rebase --onto` on it, that refusal landed mid-operation,
-  after earlier steps had already applied. Every mutating command now sweeps
-  linked worktrees for paused rebases (resolving the branch through the
-  rebase head-name) and refuses before touching anything, naming the branch
-  and the worktree to resolve with `st continue`/`st abort`; pauses on
-  branches `st` does not track never block. `st undo` applies the same
-  protection scoped to the refs its entry would rewrite — a paused branch
-  it does not touch never blocks it, and `--force` bypasses — with
-  `paused_rebase:<branch>` reported by `st undo --dry-run`. `st worktree rm`
-  and `rm --all` also find paused worktrees through the head-name instead of
-  answering "no worktree": `rm` refuses and `rm --all` skips them as
-  "a rebase is in progress there".
-- **`st undo` no longer rewinds refs that moved outside `st`.** Journal
-  entries written by current `st` record where every branch stood *after*
-  the operation (`postRefs`), and undo now verifies live tips against them
-  before touching anything: a branch committed on externally (or deleted by
-  the op and recreated externally) is refused with `ref_moved_since` —
-  `st undo --dry-run` names it — instead of being silently rewound to a
-  reflog-only recovery. The restore itself is a compare-and-swap keyed on
-  the recorded post-operation tips, `st undo --force` restores anyway while
-  naming the overwritten refs, and a ref already back on its recorded tip
-  is skipped so retries stay idempotent. Entries without `postRefs` (older
-  journals, and entries retained for failed operations whose refs
-  `st abort`/`st continue` legitimately move afterwards) restore
-  unconditionally as before, with a note saying so. Journal ref values are
-  also validated as full commit ids at load and again before any update —
-  a crafted `undo.json` can no longer hand `git update-ref` a revision
-  expression or the all-zeros delete value — and `st undo --dry-run` now
-  terminal-sanitizes the journal SHAs it prints.
-- **A failed `st absorb` now keeps the recovery pointers to the commits it
-  already made.** Absorb records each amendment's commit into its undo
-  journal entry as it lands — and refreshes them to the post-cascade tips —
-  so an absorb that fails mid-operation (a cascade conflict, a failed
-  reset) still names the commits holding the staged edits. Previously the
-  map was written only on success, and an abort→undo after a partial absorb
-  orphaned those commits silently; `st undo --dry-run` and `st undo` now
-  point at them with cherry-pick instructions either way.
-- **A `state.json` that tracks the trunk as a branch is now refused at
-  load.** The trunk is the root of the stack, not a tracked record — a file
-  whose `branches` map contains the trunk rooted a cycle in the topology
-  itself and could hang or duplicate `st log`'s recursive renderers. The
-  shared decoder rejects named, unnamed (legacy v0), and null trunk records,
-  so `Load`, undo snapshots (`ValidateUndoState`/`DecodeUndoState`), and
-  every command that reads state refuse the corruption before mutating —
-  while a valid undo snapshot can still repair a corrupt current state.
-  Both `st log` renderers also visit each name at most once as a defensive
-  bound, leaving healthy output byte-identical.
-- **`st undo` restores refs before saving snapshot metadata.** The ref
-  transaction now runs ahead of the state save: a failed transaction leaves
-  live refs and persisted metadata consistent with each other (previously a
-  failed restore could leave snapshot-era `parentSHA`s beside the newer
-  tips). A failed save after a successful restore reports that the refs were
-  already restored, and the retained journal entry makes a plain `st undo`
-  retry complete the operation.
-- **Cross-worktree restacks no longer use a stale owner map.** Rebasing one
-  branch in place moves the caller's worktree HEAD, which invalidates which
-  worktree "owns" the next branch in the cascade — a stale owner routed the
-  conflict through the foreign-worktree path and auto-aborted it instead of
-  leaving it paused for `st continue`. The worktree memo now resets after
-  every rebase attempt (success or failure).
-- **Navigation and `st init` now hold the repository lock.** `st checkout
-  <branch>`, `up`, `down`, `top`, `bottom`, and `init` previously read state
-  and moved HEAD (or wrote initial metadata) unlocked, so a concurrent `st`
-  mutation could land mid-move — an amend hitting the branch HEAD was switched
-  to, or two initializers racing the check-then-create. These commands now
-  hold the lock from the state/current-branch read through the checkout (or
-  the init write), refusing with exit 5 (`"code": "locked"`) under contention.
-  Bare `st checkout` (branch listing), `status`, `log`, `validate`, and the
-  `--dry-run` previews remain lock-free.
-- **`st sync --no-fetch` no longer prunes against the cached remote ref.**
-  Offline sync previously detected merged branches against
-  `refs/remotes/<remote>/<trunk>` but restacked survivors onto the unchanged
-  local trunk — a branch landed only on the remote could be deleted while its
-  child was replayed without that branch's content. The local trunk is now
-  the single basis for offline pruning, restacking, and `--dry-run`;
-  remote-only landed branches survive until the local trunk advances.
-- **Documentation corrections.** The 0.0.1 notes now list all seven shipped
-  exit codes (`5` lock-held and `70` internal existed from the start) and name
-  `shell` alongside `completion` as the `--json` exceptions; `worktree
-  rm --all` is described as tracked-branches-only everywhere; the README's
-  `state.json` example carries the always-written `"version": 1`, and its
-  `st modify` example shows the current `restacked: <names>` rendering.
-- **`st absorb` can no longer drop unaccounted staged changes.** The staged
-  diff is now captured with pinned flags (`--no-color --no-ext-diff
-  --no-textconv --src-prefix=a/ --dst-prefix=b/`) so user diff configuration
-  cannot reshape it; metadata-only sections such as empty added or deleted
-  files produce explicit refusals instead of being silently omitted, and a
-  raw staged-path inventory cross-check refuses anything the parser cannot
-  classify — a zero-refusal plan now provably covers the whole index before
-  any reset runs.
-- **`st absorb` refuses hunks whose coordinates moved since the owning
-  commit.** Blame attribution now keeps each line's original line number and
-  path (`git blame --line-porcelain`), and a hunk is accepted only when every
-  removed line maps to the same line number and path at its owning stack
-  commit. Lines shifted by a descendant's insert/delete and lines whose file
-  was renamed are refused — the apply lands a zero-context patch at HEAD line
-  numbers on the ancestor's tree, where shifted coordinates could hit the
-  wrong occurrence of repeated text.
-- **`st continue` records the rebase target that was actually incorporated.**
-  When a child's rebase was paused on a conflict and the parent ref moved
-  before `st continue`, the child now records the target captured from the
-  paused rebase's own metadata (`rebase-merge/onto`) — not the parent's new
-  tip — so the follow-up restack still recognizes the move and lands the
-  parent's new commits on the child. A missing or unreadable target is an
-  actionable error before the rebase is continued, never a silent guess.
-- **An abandoned `lock.reclaim` is no longer reclaimed automatically.** On
-  platforms without `flock`, `st` used to read/compare/unlink a stale
-  `lock.reclaim` guard — a non-atomic sequence that could admit two
-  contenders into stale `lock.excl` reclamation at once. Acquisition is now
-  exclusive-create only: a live or freshly-written guard stays ordinary
-  contention (exit 5), while a provably abandoned guard is a maintenance
-  error naming its path (exit 5, code `"locked_guard"`). Stop every `st` process, verify no writer
-  is active, then remove the named file — see CONTRIBUTING's troubleshooting
-  section. Stale `lock.excl` reclamation under a freshly owned guard is
-  unchanged.
-- **Manual worktree navigation hints are paste-safe shell commands.** Without
-  the `st shell install` integration, teleport output used to print
-  `run: cd <path>` with the raw path — a path containing spaces pasted wrong,
-  and one containing `;`/`$(...)`/backticks executed as shell syntax. The hint
-  now emits `run: cd -- '<path>'` (POSIX single-quoting, so embedded
-  apostrophes are handled too); when the path contains terminal control bytes
-  no executable command is offered — the output points at the shell
-  integration or the `--json` `worktree` field instead, since an escaped
-  spelling would not name the real directory.
-- **Worktree paths are parsed byte-exactly.** `git worktree list` now uses
-  the NUL-framed `--porcelain -z` grammar on git ≥ 2.36, so a path containing
-  a newline (or text that would look like a record field) can no longer
-  split into a truncated path plus a forged worktree record. Older git keeps
-  the line-based listing, but only after the worktree registration metadata
-  (`worktrees/*/gitdir`) proves no path carries CR/LF bytes — an ambiguous
-  repo gets an actionable error naming git ≥ 2.36 instead of a corrupted
-  ownership map.
-- **`.worktreeinclude` copies can no longer overwrite or merge into occupied
-  destination paths.** Before the first file is copied, every selected entry
-  is preflighted against the destination worktree: a path that is tracked
-  there (`git ls-files` — including tracked-but-missing worktree files),
-  that has a tracked descendant or ancestor, or that already exists on disk
-  in any form (file, symlink, or directory — even an empty one) now fails the
-  whole copy loudly. A later colliding entry prevents even earlier
-  candidates from being copied, a copy failure still removes a worktree that
-  was just materialized for it, and when the native `cp` fails after
-  creating partial output the plain-copy fallback no longer merges into it.
-- **`st submit` reports every confirmed push outcome instead of retrying the
-  batch.** The single `git push --porcelain` invocation's own per-ref
-  statuses now drive the result: when the remote accepts A and C but rejects
-  B in the same push, `--json` reports `pushed` `[A,C]` in stack order and
-  `failed` `B` — the old fallback's per-branch retries stopped at B and hid
-  C's confirmed update. A ref whose outcome the push did not report is
-  counted in neither field; the error describes the uncertainty instead of
-  guessing.
-- **`st undo` refuses state written by a newer `st` before mutating anything.**
-  Both the current `state.json` and the newest undo journal snapshot are
-  schema-checked up front — a file or snapshot with a schema version newer
-  than this binary understands now fails with "state file written by newer
-  st" before any branch deletion, worktree removal, ref restore, checkout,
-  or save, leaving state, journal, refs, index, and cwd untouched. Legacy
-  (version-less) and current snapshots still undo, and the supported
-  malformed-current-state recovery path is unchanged.
-- **Squash-merge detection keeps both sides of a rename.** `st sync`'s
-  containment check now enumerates rename sources as well as destinations, so
-  a branch that renames A to B is no longer pruned when upstream merely copied
-  A to B while keeping A — the branch's deletion of A has not landed.
-- **`st log` no longer materializes the whole reachable history.** The
-  topCommit visibility question — "does this branch's tip hold commits its
-  parent's tip cannot reach" — is now answered by one bounded
-  `merge-base --is-ancestor` probe per distinct tip pair, cached for the
-  render, instead of a `git rev-list --parents` walk plus an in-memory graph
-  over every commit. Go-side memory and subprocess output no longer scale
-  with total commit count (git still walks internally, and a trunk-only log
-  asks no ancestry question at all). Output is unchanged.
-- **`st absorb` only attributes hunks to on-path tips.** A hunk whose owning
-  commit is tipped only by a tracked branch *off* the current stack's path is
-  now refused, naming that branch — previously it could be attributed to the
-  off-path tip, silently landing the staged change in a different stack.
-- **0.0.1 notes clarifications.** The `[0.0.1]` absorb entry describes the
-  initial single-target slice; the multi-target apply is under `Added` above.
-  `st restack --all` (whole-forest restack from anywhere) and `st worktree
-  --all` (materialize every tracked branch's worktree) also shipped in 0.0.1
-  but were omitted from its notes.
+- **Untracked-file safety:** untracked files (plans, notes, scratch files) no
+  longer mark the working tree dirty or block `restack`, `sync`, `modify`,
+  `delete`, `onto`, or `squash`. `st modify` now defaults to **staged changes
+  only** (`-a=false`), and `-a` on `create`/`modify` stages modified *tracked*
+  files only (`git add -u`), matching `git commit -a`.
+- **`st sync` advances `HEAD` to the surviving child** when the current branch
+  is pruned, skips unnecessary `HEAD` parking on no-op syncs, and skips foreign
+  worktree branches with a note rather than deleting worktrees.
+- **`st log` omits the caller's own worktree path** so linked-worktree workflows
+  stay noise-free while other linked worktrees remain annotated.
+- **`st continue` scopes resumption** to the interrupted operation's subtree and
+  restores the original branch without touching unrelated stacks/worktrees.
+- **External `git worktree` safety:** `st` never creates or deletes worktrees on
+  disk (`st delete` refuses branches checked out elsewhere; `st checkout`
+  refuses cleanly naming the owning worktree).
+
+### Removed
+
+- Cut bloated and redundant commands to keep the CLI sharp and focused:
+  `absorb`, `worktree` provisioning + `.worktreeinclude`, `shell` cd-shim /
+  teleportation, multi-step `undo` + `--list`/`--dry-run` simulator, `open`,
+  `prune`, `fold`, standalone `commits` (folded into `st status --json`), and
+  standalone `repair` (folded into `st doctor --fix`).
 
 ## [0.0.1] - 2026-07-12
 

@@ -51,13 +51,13 @@ st sync --submit
 
 ## Install
 
-**One-line installer** (macOS & Linux, amd64/arm64 — verifies release checksums):
+**One-line installer** (macOS & Linux, amd64/arm64 — verifies minisign signature & SHA-256 checksums):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/andyrewlee/stacked/main/install.sh | sh
 ```
 
-Installs `st` to `/usr/local/bin` (override with `INSTALL_DIR`). Until release signing is provisioned, pass `ST_ALLOW_UNVERIFIED=1` (the installer refuses unverifiable downloads by default).
+Installs `st` to `/usr/local/bin` (override with `INSTALL_DIR`). Releases are signed with `minisign` (public key in [stacked.pub](stacked.pub)); if `minisign` isn't installed locally, pass `ST_ALLOW_UNVERIFIED=1` to fall back to checksum-only verification.
 
 **With Go:**
 

@@ -12,14 +12,9 @@ ARCHIVE="stacked"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
 # Minisign public key used to verify the detached signature over checksums.txt
-# before any checksum is trusted.
-# PLACEHOLDER: the operator fills in the real base64 public key (the "RW…" line
-# of the provisioned stacked.pub) when the release signing keypair is created —
-# see the signing runbook in CONTRIBUTING.md's Releasing section. It must match
-# the key file MINISIGN_KEY_FILE points to at release time (`make release`
-# signs locally). While empty,
-# signature verification cannot run and this script fails closed (see below).
-MINISIGN_PUBKEY=""
+# before any checksum is trusted (matches stacked.pub in the repository root).
+# Signature verification fails closed by default; see ST_ALLOW_UNVERIFIED below.
+MINISIGN_PUBKEY="RWQcm95scwyng9WHjZ31jYuA5YMGm8uzoo36ziWEH85ZxDGdBc+MGziz"
 
 # ST_ALLOW_UNVERIFIED=1 lets the install proceed on checksum-only
 # verification when signature verification cannot run (minisign not installed,
